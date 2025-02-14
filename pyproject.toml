@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "pydantic2django"
+version = "0.1.0"
+description = "Convert Pydantic models to Django models dynamically"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "pydantic2django"}]
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+django = ">=3.2"
+pydantic = ">=2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-django = "^4.5.2"
+pytest-cov = "^4.1.0"
+ruff = "^0.1.0"
+black = "^23.0.0"
+mypy = "^1.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.isort]
+known-first-party = ["pydantic2django"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+python_files = ["test_*.py", "*_test.py"]
+addopts = "--cov=pydantic2django --cov-report=term-missing"
+testpaths = ["tests"] 
