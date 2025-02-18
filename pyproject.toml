@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Convert Pydantic models to Django models dynamically"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
-packages = [{include = "pydantic2django"}]
+packages = [{include = "pydantic2django", from = "src"}]
 license = "MIT"
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -18,6 +18,7 @@ python = "^3.11"
 django = ">=4.0"
 pydantic = ">=2.0"
 pre-commit = "^4.1.0"
+email-validator = "^2.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
@@ -41,6 +42,7 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
 ]
+ignore = ['UP007']
 line-length = 120
 target-version = "py311"
 exclude = [

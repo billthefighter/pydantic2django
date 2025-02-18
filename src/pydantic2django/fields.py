@@ -44,20 +44,38 @@ def get_field_kwargs(field_info: FieldInfo, field_type: type[Any]) -> dict[str, 
     Returns:
         Dictionary of kwargs for Django field initialization
     """
+    print(f"Field info for {field_type}: {field_info}")
+    print(f"Metadata: {field_info.metadata}")
+    print(f"JSON Schema Extra: {field_info.json_schema_extra}")
+
+    # Check if the field is optional by looking at the original annotation
+    is_optional = get_origin(field_info.annotation) is Union and type(None) in get_args(field_info.annotation)
+
     kwargs: dict[str, Any] = {
-        "null": not field_info.is_required(),
-        "blank": not field_info.is_required(),
+        "null": is_optional,
+        "blank": is_optional,
     }
 
     # Get field constraints from metadata
+    if field_info.title:
+        kwargs["verbose_name"] = field_info.title
+    if field_info.description:
+        kwargs["help_text"] = field_info.description
+
+    # Get constraints from metadata list
+    for constraint in field_info.metadata:
+        print(f"Constraint: {constraint}")
+        if hasattr(constraint, "max_length"):
+            kwargs["max_length"] = constraint.max_length
+        elif hasattr(constraint, "max_digits") and hasattr(constraint, "decimal_places"):
+            # Handle PydanticGeneralMetadata for Decimal fields
+            kwargs["max_digits"] = constraint.max_digits
+            kwargs["decimal_places"] = constraint.decimal_places
+
+    # Get additional constraints from json_schema_extra
     metadata = field_info.json_schema_extra or {}
     if isinstance(metadata, dict):
-        if "title" in metadata:
-            kwargs["verbose_name"] = metadata["title"]
-        if "description" in metadata:
-            kwargs["help_text"] = metadata["description"]
-        if "max_length" in metadata:
-            kwargs["max_length"] = metadata["max_length"]
+        # Handle relationship fields
         if "on_delete" in metadata:
             kwargs["on_delete"] = metadata["on_delete"]
         if "related_name" in metadata:
@@ -69,15 +87,18 @@ def get_field_kwargs(field_info: FieldInfo, field_type: type[Any]) -> dict[str, 
         if "symmetrical" in metadata:
             kwargs["symmetrical"] = metadata["symmetrical"]
 
-    # Handle specific field types
+    # Handle specific field types with defaults
     if field_type == str and "max_length" not in kwargs:
         kwargs["max_length"] = DEFAULT_MAX_LENGTHS[models.CharField]
 
     elif field_type == Decimal:
-        # Get decimal constraints from metadata or use defaults
-        kwargs["max_digits"] = metadata.get("max_digits", 19)
-        kwargs["decimal_places"] = metadata.get("decimal_places", 4)
+        # Set default decimal constraints if not provided
+        if "max_digits" not in kwargs:
+            kwargs["max_digits"] = 19
+        if "decimal_places" not in kwargs:
+            kwargs["decimal_places"] = 4
 
+    print(f"Final kwargs: {kwargs}")
     return kwargs
 
 

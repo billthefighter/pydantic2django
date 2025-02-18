@@ -3,12 +3,11 @@ Migration state comparison functionality for Pydantic to Django models.
 """
 from typing import Any
 
-from django.apps import apps
 from django.db import connections, models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.questioner import NonInteractiveMigrationQuestioner
-from django.db.migrations.state import ProjectState
+from django.db.migrations.state import ModelState, ProjectState
 
 
 def get_migration_operations(model: type[models.Model]) -> list[str]:
@@ -25,11 +24,16 @@ def get_migration_operations(model: type[models.Model]) -> list[str]:
     executor = MigrationExecutor(connection)
 
     # Get the current migration state
-    project_state = executor.loader.project_state((model._meta.app_label, None))
+    try:
+        project_state = executor.loader.project_state((model._meta.app_label, None))
+    except Exception:
+        # If there are no migrations, use an empty state
+        project_state = ProjectState()
 
     # Create a new state with our model
-    final_state = ProjectState.from_apps(apps)
-    final_state.add_model(model._meta.app_label, model)
+    final_state = ProjectState()
+    model_state = ModelState.from_model(model)
+    final_state.add_model(model_state)
 
     # Compare states
     autodetector = MigrationAutodetector(project_state, final_state, NonInteractiveMigrationQuestioner())

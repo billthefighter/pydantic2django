@@ -112,7 +112,10 @@ def get_methods_and_properties(model: type[BaseModel]) -> dict[str, Any]:
 
 
 def create_django_model_with_methods(
-    name: str, pydantic_model: type[BaseModel], django_attrs: dict[str, Any]
+    name: str,
+    pydantic_model: type[BaseModel],
+    django_attrs: dict[str, Any],
+    base_classes: list[type[models.Model]] | None = None,
 ) -> type[models.Model]:
     """
     Create a Django model class with methods and properties from a Pydantic model.
@@ -121,6 +124,7 @@ def create_django_model_with_methods(
         name: Name for the new model class
         pydantic_model: The source Pydantic model
         django_attrs: Base attributes for the Django model (fields, Meta, etc.)
+        base_classes: List of base classes for the model (defaults to [models.Model])
 
     Returns:
         A new Django model class with copied methods and properties
@@ -131,6 +135,9 @@ def create_django_model_with_methods(
     # Combine with Django attributes, letting Django attrs take precedence
     attrs = {**copied_attrs, **django_attrs}
 
+    # Use provided base classes or default to models.Model
+    bases = base_classes or [models.Model]
+
     # Create the model class
-    model = type(name, (models.Model,), attrs)
+    model = type(name, tuple(bases), attrs)
     return cast(type[models.Model], model)

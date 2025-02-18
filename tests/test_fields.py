@@ -1,71 +1,41 @@
 """
 Tests for field mapping functionality.
 """
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
-from typing import Optional
-from uuid import UUID
-
 from django.db import models
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel
 
 from pydantic2django import make_django_model
+from .fixtures import get_model_fields
 
 
-def test_basic_field_types():
+def test_basic_field_types(basic_pydantic_model):
     """Test mapping of basic field types."""
+    DjangoModel = make_django_model(basic_pydantic_model)
+    fields = get_model_fields(DjangoModel)
 
-    class TestModel(BaseModel):
-        string_field: str
-        int_field: int
-        float_field: float
-        bool_field: bool
-        decimal_field: Decimal
-        email_field: EmailStr
-
-    DjangoModel = make_django_model(TestModel)
-
-    fields = {f.name: type(f) for f in DjangoModel._meta.get_fields()}
-
-    assert fields["string_field"] == models.CharField
-    assert fields["int_field"] == models.IntegerField
-    assert fields["float_field"] == models.FloatField
-    assert fields["bool_field"] == models.BooleanField
-    assert fields["decimal_field"] == models.DecimalField
-    assert fields["email_field"] == models.EmailField
+    assert isinstance(fields["string_field"], models.CharField)
+    assert isinstance(fields["int_field"], models.IntegerField)
+    assert isinstance(fields["float_field"], models.FloatField)
+    assert isinstance(fields["bool_field"], models.BooleanField)
+    assert isinstance(fields["decimal_field"], models.DecimalField)
+    assert isinstance(fields["email_field"], models.EmailField)
 
 
-def test_datetime_field_types():
+def test_datetime_field_types(datetime_pydantic_model):
     """Test mapping of datetime-related field types."""
+    DjangoModel = make_django_model(datetime_pydantic_model)
+    fields = get_model_fields(DjangoModel)
 
-    class TestModel(BaseModel):
-        datetime_field: datetime
-        date_field: date
-        time_field: time
-        duration_field: timedelta
-
-    DjangoModel = make_django_model(TestModel)
-
-    fields = {f.name: type(f) for f in DjangoModel._meta.get_fields()}
-
-    assert fields["datetime_field"] == models.DateTimeField
-    assert fields["date_field"] == models.DateField
-    assert fields["time_field"] == models.TimeField
-    assert fields["duration_field"] == models.DurationField
+    assert isinstance(fields["datetime_field"], models.DateTimeField)
+    assert isinstance(fields["date_field"], models.DateField)
+    assert isinstance(fields["time_field"], models.TimeField)
+    assert isinstance(fields["duration_field"], models.DurationField)
 
 
-def test_optional_fields():
+def test_optional_fields(optional_fields_model):
     """Test mapping of optional fields."""
-
-    class TestModel(BaseModel):
-        required_string: str
-        optional_string: Optional[str]
-        required_int: int
-        optional_int: Optional[int]
-
-    DjangoModel = make_django_model(TestModel)
-
-    fields = {f.name: f for f in DjangoModel._meta.get_fields()}
+    DjangoModel = make_django_model(optional_fields_model)
+    fields = get_model_fields(DjangoModel)
 
     # Required fields should not allow null
     assert not fields["required_string"].null
@@ -76,19 +46,10 @@ def test_optional_fields():
     assert fields["optional_int"].null
 
 
-def test_field_constraints():
+def test_field_constraints(constrained_fields_model):
     """Test that field constraints are properly mapped."""
-
-    class TestModel(BaseModel):
-        name: str = Field(title="Full Name", description="Full name of the user", max_length=100)
-        age: int = Field(title="Age", description="User's age in years")
-        balance: Decimal = Field(
-            title="Account Balance", description="Current account balance", max_digits=10, decimal_places=2
-        )
-
-    DjangoModel = make_django_model(TestModel)
-
-    fields = {f.name: f for f in DjangoModel._meta.get_fields()}
+    DjangoModel = make_django_model(constrained_fields_model)
+    fields = get_model_fields(DjangoModel)
 
     # Check field constraints
     assert fields["name"].max_length == 100
@@ -103,14 +64,14 @@ def test_field_constraints():
 
 def test_special_field_types():
     """Test mapping of special field types."""
+    from uuid import UUID
 
     class TestModel(BaseModel):
         id: UUID
         data: bytes
 
     DjangoModel = make_django_model(TestModel)
+    fields = get_model_fields(DjangoModel)
 
-    fields = {f.name: type(f) for f in DjangoModel._meta.get_fields()}
-
-    assert fields["id"] == models.UUIDField
-    assert fields["data"] == models.BinaryField
+    assert isinstance(fields["id"], models.UUIDField)
+    assert isinstance(fields["data"], models.BinaryField)
