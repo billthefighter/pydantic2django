@@ -1,168 +1,22 @@
 """
 Core functionality for converting Pydantic models to Django models.
-"""
-from typing import Any, Dict, Optional, Set, TypeVar, cast, List, Type
-import inspect
-import re
 
-from django.apps import apps
+This module provides the core functionality for converting individual Pydantic models
+to Django models, handling field conversion and model creation.
+"""
+from typing import Any, Dict, Optional, Type, TypeVar, cast, Tuple
+import inspect
+
 from django.db import models
 from pydantic import BaseModel
 
 from .fields import get_django_field
 from .methods import create_django_model_with_methods
-from .migrations import check_model_migrations
 
 T = TypeVar("T", bound=BaseModel)
 
+# Cache for converted models to prevent duplicate conversions
 _converted_models: Dict[str, type[models.Model]] = {}
-_model_dependencies: Dict[str, Set[str]] = {}
-
-
-def normalize_model_name(name: str) -> str:
-    """
-    Normalize a model name by removing generic type parameters and ensuring proper Django model naming.
-    
-    Args:
-        name: The model name to normalize
-        
-    Returns:
-        Normalized model name
-    """
-    # Remove generic type parameters
-    name = re.sub(r'\[.*?\]', '', name)
-    
-    # Ensure Django prefix
-    if not name.startswith('Django'):
-        name = f'Django{name}'
-        
-    return name
-
-
-def get_model_dependencies_recursive(model: Type[models.Model], app_label: str) -> Set[str]:
-    """Get all dependencies for a model recursively."""
-    deps = set()
-    
-    for field in model._meta.get_fields():
-        if hasattr(field, "remote_field") and field.remote_field:
-            target = field.remote_field.model
-            if isinstance(target, str):
-                if "." not in target:
-                    if not target.startswith("Django"):
-                        target = f"Django{target}"
-                    target = f"{app_label}.{target}"
-                deps.add(target)
-            elif inspect.isclass(target):
-                target_name = target.__name__
-                if not target_name.startswith("Django"):
-                    target_name = f"Django{target_name}"
-                deps.add(f"{app_label}.{target_name}")
-                
-        # Check through relationships for ManyToManyField
-        if isinstance(field, models.ManyToManyField):
-            remote_field = field.remote_field
-            if isinstance(remote_field, models.ManyToManyRel):
-                through = remote_field.through
-                if through and through is not models.ManyToManyRel:
-                    if isinstance(through, str):
-                        if "." not in through:
-                            if not through.startswith("Django"):
-                                through = f"Django{through}"
-                            through = f"{app_label}.{through}"
-                        deps.add(through)
-                    elif inspect.isclass(through):
-                        through_name = through.__name__
-                        if not through_name.startswith("Django"):
-                            through_name = f"Django{through_name}"
-                        deps.add(f"{app_label}.{through_name}")
-    
-    return deps
-
-
-def validate_model_references(models: Dict[str, type], dependencies: Dict[str, Set[str]]) -> List[str]:
-    """
-    Validate that all model references exist.
-    
-    Args:
-        models: Dict mapping normalized model names to their classes
-        dependencies: Dict mapping model names to their dependencies
-        
-    Returns:
-        List of error messages for missing models
-    """
-    errors = []
-    for model_name, deps in dependencies.items():
-        for dep in deps:
-            if dep not in models and dep != 'self':
-                errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
-    return errors
-
-
-def topological_sort(dependencies: Dict[str, Set[str]]) -> List[str]:
-    """
-    Sort models topologically based on their dependencies.
-    
-    Args:
-        dependencies: Dict mapping model names to their dependencies
-        
-    Returns:
-        List of model names in dependency order
-    """
-    # Track visited and sorted nodes
-    visited = set()
-    temp_visited = set()
-    sorted_nodes = []
-    
-    def visit(node: str):
-        if node in temp_visited:
-            # Cyclic dependency detected - break the cycle
-            print(f"Warning: Cyclic dependency detected for {node}")
-            return
-        if node in visited:
-            return
-            
-        temp_visited.add(node)
-        
-        # Visit dependencies
-        for dep in dependencies.get(node, set()):
-            if dep != node and dep != 'self':  # Skip self-references
-                visit(dep)
-            
-        temp_visited.remove(node)
-        visited.add(node)
-        sorted_nodes.append(node)
-    
-    # Visit all nodes
-    for node in dependencies:
-        if node not in visited:
-            visit(node)
-            
-    return sorted_nodes
-
-
-def register_django_model(model: type[models.Model], app_label: str) -> None:
-    """
-    Register a Django model with the app registry.
-
-    Args:
-        model: The Django model to register
-        app_label: The app label to register under
-    """
-    model_name = model._meta.model_name
-    if not model_name:
-        return
-
-    try:
-        # Check if model is already registered
-        existing = apps.get_registered_model(app_label, model_name)
-        if existing is not model:
-            # Unregister existing model if it's different
-            apps.all_models[app_label].pop(model_name, None)
-            # Register the new model
-            apps.register_model(app_label, model)
-    except LookupError:
-        # Model not registered yet
-        apps.register_model(app_label, model)
 
 
 def make_django_model(
@@ -172,7 +26,7 @@ def make_django_model(
     skip_relationships: bool = False,
     existing_model: Optional[type[models.Model]] = None,
     **options: Any,
-) -> tuple[type[models.Model], Optional[dict[str, models.Field]]]:
+) -> Tuple[type[models.Model], Optional[Dict[str, models.Field]]]:
     """
     Convert a Pydantic model to a Django model, with optional base Django model inheritance.
 
@@ -193,9 +47,6 @@ def make_django_model(
     model_key = f"{pydantic_model.__module__}.{pydantic_model.__name__}"
     if model_key in _converted_models and not existing_model:
         return _converted_models[model_key], None
-
-    # Initialize dependencies for this model
-    _model_dependencies[model_key] = set()
 
     # Get all fields from the Pydantic model
     pydantic_fields = pydantic_model.model_fields
@@ -219,11 +70,6 @@ def make_django_model(
                     # Store relationship fields for later
                     relationship_fields[field_name] = django_field
                     continue
-                else:
-                    # Track dependencies for relationship fields
-                    related_model = django_field.remote_field.model
-                    if isinstance(related_model, str):
-                        _model_dependencies[model_key].add(related_model)
 
             django_fields[field_name] = django_field
 
@@ -281,12 +127,6 @@ def make_django_model(
     return django_model, relationship_fields if skip_relationships else None
 
 
-def get_model_dependencies() -> Dict[str, Set[str]]:
-    """Get the current model dependency graph."""
-    return _model_dependencies.copy()
-
-
 def clear_model_registry() -> None:
-    """Clear the model registry and dependencies."""
+    """Clear the model conversion cache."""
     _converted_models.clear()
-    _model_dependencies.clear()
