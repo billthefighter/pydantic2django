@@ -1,14 +1,15 @@
 """
 Support for copying methods and properties from Pydantic to Django models.
 """
-from inspect import getmembers, isdatadescriptor, isroutine, signature, Parameter
-from typing import Any, cast, get_origin, get_args, List, Dict, Set, Type, Union, Callable, Optional
 import functools
 import inspect
+from collections.abc import Callable
+from inspect import Parameter, getmembers, isdatadescriptor, isroutine, signature
+from typing import Any, cast, get_args, get_origin
 
-from django.db import models
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from pydantic import BaseModel
 
 from .registry import normalize_model_name
@@ -64,42 +65,43 @@ def is_staticmethod(obj: Any) -> bool:
 def is_pydantic_model_type(type_hint: Any) -> bool:
     """
     Check if a type hint represents a Pydantic model or collection of Pydantic models.
-    
+
     Args:
         type_hint: The type hint to check
-        
+
     Returns:
         True if the type hint is a Pydantic model or collection containing Pydantic models
     """
     if inspect.isclass(type_hint) and issubclass(type_hint, BaseModel):
         return True
-        
+
     # Check for collections (List, Dict, Set, etc.)
     origin = get_origin(type_hint)
-    if origin in (list, List, set, Set, dict, Dict):
+    if origin in (list, list, set, set, dict, dict):
         args = get_args(type_hint)
         return any(is_pydantic_model_type(arg) for arg in args)
-        
+
     return False
 
 
 class PydanticModelConversionError(Exception):
     """Raised when a Pydantic model cannot be converted to a Django model."""
+
     pass
 
 
 def convert_pydantic_to_django(value: Any, app_label: str = "django_llm", return_pydantic_model: bool = False) -> Any:
     """
     Convert a Pydantic model instance or collection to Django model instance(s).
-    
+
     Args:
         value: The value to convert
         app_label: The Django app label to use for model lookup
         return_pydantic_model: If True, return the original Pydantic model when Django model not found
-        
+
     Returns:
         Converted Django model instance(s) or the original value if not convertible
-        
+
     Raises:
         PydanticModelConversionError: If a Django model is not found and return_pydantic_model is False
     """
@@ -107,7 +109,7 @@ def convert_pydantic_to_django(value: Any, app_label: str = "django_llm", return
         # Get the Django model class
         model_name = normalize_model_name(value.__class__.__name__)
         try:
-            django_model = cast(Type[models.Model], apps.get_model(app_label, model_name.replace("Django", "")))
+            django_model = cast(type[models.Model], apps.get_model(app_label, model_name.replace("Django", "")))
             # Convert to dict and create Django instance
             data = value.model_dump()
             return django_model.objects.create(**data)
@@ -119,7 +121,7 @@ def convert_pydantic_to_django(value: Any, app_label: str = "django_llm", return
                 f"Model {model_name} not found in app {app_label}. "
                 f"Original error: {str(e)}"
             ) from e
-            
+
     # Handle collections
     if isinstance(value, list):
         return [convert_pydantic_to_django(item, app_label, return_pydantic_model) for item in value]
@@ -127,28 +129,30 @@ def convert_pydantic_to_django(value: Any, app_label: str = "django_llm", return
         return {convert_pydantic_to_django(item, app_label, return_pydantic_model) for item in value}
     if isinstance(value, dict):
         return {k: convert_pydantic_to_django(v, app_label, return_pydantic_model) for k, v in value.items()}
-        
+
     return value
 
 
 def wrap_method_for_conversion(method: Callable, return_type: Any, return_pydantic_model: bool = False) -> Callable:
     """
     Wrap a method to convert its Pydantic return value to Django model instance(s).
-    
+
     Args:
         method: The method to wrap
         return_type: The method's return type annotation
         return_pydantic_model: If True, return Pydantic models when Django models not found
-        
+
     Returns:
         Wrapped method that converts return values
     """
+
     @functools.wraps(method)
     def wrapper(*args, **kwargs):
         result = method(*args, **kwargs)
         if is_pydantic_model_type(return_type):
             return convert_pydantic_to_django(result, return_pydantic_model=return_pydantic_model)
         return result
+
     return wrapper
 
 
@@ -171,22 +175,22 @@ def copy_method(method: Any, return_pydantic_model: bool = False) -> Any:
         func = method.__get__(None, object)
     else:
         func = method
-        
+
     # Check return type annotation
     sig = signature(func)
     return_type = sig.return_annotation
-    
+
     if return_type != Parameter.empty and is_pydantic_model_type(return_type):
         # Wrap the function to handle conversion
         wrapped = wrap_method_for_conversion(func, return_type, return_pydantic_model)
-        
+
         # Restore the method type
         if is_classmethod(method):
             return classmethod(wrapped)
         elif is_staticmethod(method):
             return staticmethod(wrapped)
         return wrapped
-        
+
     # No conversion needed
     if is_classmethod(method):
         return classmethod(func)

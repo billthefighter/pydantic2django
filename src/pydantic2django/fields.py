@@ -1,20 +1,20 @@
 """
 Field mapping between Pydantic and Django models.
 """
+import re
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Set, Union, cast, get_args, get_origin, Callable, Type, Protocol, TypeVar, Generic
+from typing import Any, Generic, Protocol, TypeVar, Union, cast, get_args, get_origin
 from uuid import UUID
-import re
 
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from pydantic import BaseModel, EmailStr
-from pydantic.fields import FieldInfo
 from pydantic.config import JsonDict
-from django.apps import apps
+from pydantic.fields import FieldInfo
 
 # Mapping of Python/Pydantic types to Django field classes
 FIELD_TYPE_MAPPING: dict[type[Any], type[models.Field]] = {
@@ -31,16 +31,13 @@ FIELD_TYPE_MAPPING: dict[type[Any], type[models.Field]] = {
     EmailStr: models.EmailField,
     bytes: models.BinaryField,
     dict: models.JSONField,
-    Dict: models.JSONField,
     list: models.JSONField,
-    List: models.JSONField,
     set: models.JSONField,
-    Set: models.JSONField,
     Any: models.JSONField,  # Map Any to JSONField
     Path: models.CharField,  # Map Path to CharField
     Union: models.JSONField,  # Map Union to JSONField
     Enum: models.CharField,  # Map Enum to CharField
-    Type: models.CharField,  # Map Type to CharField
+    type: models.CharField,  # Map Type to CharField
     Protocol: models.JSONField,  # Map Protocol to JSONField
     Callable: models.JSONField,  # Map Callable to JSONField
 }
@@ -83,22 +80,23 @@ DEFAULT_MAX_LENGTHS = {
     "user_prompt": 4000,  # For user prompts
     "notes": 1000,  # For notes fields
     "tax_code": 50,  # For tax codes
-    "google_api_key": 512,  # For Google API keys
-    "api_key": 512,  # For API keys
-    "storage_path": 1000,  # For storage paths
-    "error": 1000,  # For error messages
+    "google_api_key": 512,  # For error messages
 }
+
 
 def safe_str_tuple(value: Any) -> tuple[str, str]:
     """Convert a key-value pair to a string tuple safely."""
-    if isinstance(value, (list, tuple)) and len(value) == 2:
+    if isinstance(value, list | tuple) and len(value) == 2:
         return str(value[0]), str(value[1])
     return str(value), str(value)
 
-def get_field_kwargs(field_name: str, field_info: Any, metadata: Union[Dict[str, Any], JsonDict, Callable[..., Any], None]) -> Dict[str, Any]:
+
+def get_field_kwargs(
+    field_name: str, field_info: Any, metadata: Union[dict[str, Any], JsonDict, Callable[..., Any], None]
+) -> dict[str, Any]:
     """Get kwargs for creating a Django field from a Pydantic field."""
     kwargs = {}
-    
+
     # Convert metadata to dict if it's not None and not a callable
     meta_dict = dict(metadata) if metadata is not None and not callable(metadata) else {}
 
@@ -134,7 +132,7 @@ def get_field_kwargs(field_name: str, field_info: Any, metadata: Union[Dict[str,
         try:
             choices = []
             for choice in meta_dict["choices"]:
-                if isinstance(choice, (list, tuple)) and len(choice) == 2:
+                if isinstance(choice, list | tuple) and len(choice) == 2:
                     choices.append((str(choice[0]), str(choice[1])))
             if choices:
                 kwargs["choices"] = choices
@@ -150,18 +148,24 @@ def get_field_kwargs(field_name: str, field_info: Any, metadata: Union[Dict[str,
     # Handle validation and max_length for string fields
     if meta_dict.get("max_length"):
         kwargs["max_length"] = meta_dict["max_length"]
-    elif (field_info.annotation == str or 
-          (hasattr(field_info, "annotation") and str(field_info.annotation).endswith("str")) or
-          (hasattr(field_info, "annotation") and "Path" in str(field_info.annotation))):
+    elif (
+        field_info.annotation == str
+        or (hasattr(field_info, "annotation") and str(field_info.annotation).endswith("str"))
+        or (hasattr(field_info, "annotation") and "Path" in str(field_info.annotation))
+    ):
         # Use field-specific max_length if available, otherwise use default
         kwargs["max_length"] = DEFAULT_MAX_LENGTHS.get(
             field_name,
             DEFAULT_MAX_LENGTHS.get(
-                "path" if "path" in field_name.lower() else "storage_path" if "storage" in field_name.lower() else models.CharField,
-                DEFAULT_MAX_LENGTHS[models.CharField]
-            )
+                "path"
+                if "path" in field_name.lower()
+                else "storage_path"
+                if "storage" in field_name.lower()
+                else models.CharField,
+                DEFAULT_MAX_LENGTHS[models.CharField],
+            ),
         )
-    
+
     if meta_dict.get("min_value") is not None:
         kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(meta_dict["min_value"])]
     if meta_dict.get("max_value") is not None:
@@ -205,11 +209,11 @@ def resolve_field_type(field_type: Any) -> tuple[type[Any], bool]:
             return Any, False
 
         # Handle List/Set with generic type parameter
-        if origin in (list, List, set, Set):
+        if origin in (list, list, set, set):
             if len(args) == 1:
                 field_type = args[0]
                 is_collection = True
-        elif origin in (dict, Dict):
+        elif origin in (dict, dict):
             return dict, False
         # Handle other generic types (including Generic base classes)
         elif origin is Generic or hasattr(origin, "__parameters__"):
@@ -227,13 +231,13 @@ def resolve_field_type(field_type: Any) -> tuple[type[Any], bool]:
             return Any, False
 
     # Handle basic collection types
-    elif origin in (list, List, set, Set):
+    elif origin in (list, list, set, set):
         args = get_args(field_type)
         if len(args) == 1:
             field_type = args[0]
             is_collection = True
 
-    elif origin in (dict, Dict):
+    elif origin in (dict, dict):
         return dict, False
 
     # Handle Protocol types
@@ -241,7 +245,7 @@ def resolve_field_type(field_type: Any) -> tuple[type[Any], bool]:
         return Protocol, False
 
     # Handle Callable types
-    if origin is Callable or (hasattr(field_type, "__call__") and not isinstance(field_type, type)):
+    if origin is Callable or (callable(field_type) and not isinstance(field_type, type)):
         return Callable, False
 
     # Handle TypeVar
@@ -255,12 +259,12 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
     """
     Convert a string into a valid Python identifier for use as a related_name.
     Ensures uniqueness by incorporating model and field names.
-    
+
     Args:
         name: The string to convert
         model_name: Name of the model containing the field
         field_name: Name of the field
-        
+
     Returns:
         A valid Python identifier
     """
@@ -270,38 +274,39 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
         prefix += f"{model_name.lower()}_"
     if field_name:
         prefix += f"{field_name.lower()}_"
-    
+
     # Handle empty or None name
     if not name:
         name = "related"
-    
+
     # Replace invalid characters with underscores
-    name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
     # Remove consecutive underscores
-    name = re.sub(r'_+', '_', name)
-    
+    name = re.sub(r"_+", "_", name)
+
     # Ensure it starts with a letter or underscore
-    if not name or (not name[0].isalpha() and name[0] != '_'):
-        name = f'_{name}'
-    
+    if not name or (not name[0].isalpha() and name[0] != "_"):
+        name = f"_{name}"
+
     # Combine prefix and name
     result = f"{prefix}{name}".lower()
-    
+
     # Remove any leading or trailing underscores
-    result = result.strip('_')
-    
+    result = result.strip("_")
+
     # If result is empty after all processing, use a default
     if not result:
         result = f"{prefix}related"
-    
+
     # Ensure the name doesn't exceed Django's field name length limit (63 characters)
     if len(result) > 63:
         # If too long, use a hash of the full name to ensure uniqueness
         import hashlib
+
         hash_suffix = hashlib.md5(result.encode()).hexdigest()[:8]
         result = f"{result[:54]}_{hash_suffix}"
-    
+
     return result
 
 
@@ -334,7 +339,7 @@ def get_relationship_field(field_name: str, field_info: FieldInfo, field_type: t
     # Generate a unique related_name if not explicitly provided
     if not kwargs.get("related_name"):
         base_name = "%(class)s"  # Use %(class)s for model inheritance support
-        
+
         # Add type parameters for generic types
         type_params = []
         if hasattr(field_type, "__origin__"):
@@ -349,23 +354,19 @@ def get_relationship_field(field_name: str, field_info: FieldInfo, field_type: t
                         # Handle special cases like TypeVar, Any, etc.
                         arg_str = str(arg).replace("typing.", "")
                         # Remove angle brackets and their contents
-                        arg_str = re.sub(r'\[.*?\]', '', arg_str)
+                        arg_str = re.sub(r"\[.*?\]", "", arg_str)
                         # Remove any remaining special characters
-                        arg_str = re.sub(r'[^a-zA-Z0-9_]', '_', arg_str)
+                        arg_str = re.sub(r"[^a-zA-Z0-9_]", "_", arg_str)
                         type_params.append(arg_str)
                 except (AttributeError, TypeError):
                     continue
-        
+
         # Create a unique suffix based on field type and parameters
         suffix = "_".join(filter(None, type_params)) if type_params else ""
-        
+
         # Generate the related name
-        related_name = sanitize_related_name(
-            name=suffix,
-            model_name=base_name,
-            field_name=field_name
-        )
-        
+        related_name = sanitize_related_name(name=suffix, model_name=base_name, field_name=field_name)
+
         kwargs["related_name"] = related_name
 
     # Check if it's a collection type
@@ -391,15 +392,15 @@ def get_relationship_field(field_name: str, field_info: FieldInfo, field_type: t
 def get_field_type(field_info: Any) -> tuple[type[models.Field], bool]:
     """
     Get the Django field type for a Pydantic field.
-    
+
     Args:
         field_info: Pydantic field information
-        
+
     Returns:
         Tuple of (field_type, is_collection)
     """
     field_type, is_collection = resolve_field_type(field_info.annotation)
-    
+
     # Handle special cases
     if str(field_type).startswith("typing.Any"):
         return models.JSONField, False
@@ -445,11 +446,11 @@ def get_field_type(field_info: Any) -> tuple[type[models.Field], bool]:
         return models.JSONField, False
     elif "Enum" in str(field_type):
         return models.CharField, False
-    
+
     # Use standard mapping
     if field_type in FIELD_TYPE_MAPPING:
         return FIELD_TYPE_MAPPING[field_type], is_collection
-    
+
     # Default to JSONField for complex types
     return models.JSONField, False
 
@@ -473,20 +474,14 @@ def get_django_field(field_name: str, field_info: FieldInfo, skip_relationships:
 
     # Handle special types first
     if field_type in (Protocol, Callable):
-        return models.JSONField(
-            null=True,
-            blank=True,
-            help_text=f"Serialized {field_type.__name__} object"
-        )
+        return models.JSONField(null=True, blank=True, help_text=f"Serialized {field_type.__name__} object")
 
     # Handle Pydantic models (relationships)
     if is_pydantic_model(field_type):
         if skip_relationships:
             # Return a placeholder field for relationships when skipping
             return models.JSONField(
-                null=True,
-                blank=True,
-                help_text=f"Placeholder for {field_type.__name__} relationship"
+                null=True, blank=True, help_text=f"Placeholder for {field_type.__name__} relationship"
             )
         return get_relationship_field(field_name, field_info, field_type)
 
@@ -495,7 +490,7 @@ def get_django_field(field_name: str, field_info: FieldInfo, skip_relationships:
     if not django_field_class:
         # If no direct mapping exists, fall back to JSONField
         django_field_class = models.JSONField
-        
+
     # Get field kwargs
     kwargs = get_field_kwargs(field_name, field_info, field_info.json_schema_extra)
 

@@ -4,19 +4,17 @@ Core functionality for converting Pydantic models to Django models.
 This module provides the core functionality for converting individual Pydantic models
 to Django models, handling field conversion and model creation.
 """
-from typing import Any, Dict, Optional, Type, TypeVar, cast, Tuple
-import inspect
+from typing import Any, Optional, TypeVar
 
 from django.db import models
 from pydantic import BaseModel
 
 from .fields import get_django_field
-from .methods import create_django_model_with_methods
 
 T = TypeVar("T", bound=BaseModel)
 
 # Cache for converted models to prevent duplicate conversions
-_converted_models: Dict[str, type[models.Model]] = {}
+_converted_models: dict[str, type[models.Model]] = {}
 
 
 def make_django_model(
@@ -26,7 +24,7 @@ def make_django_model(
     skip_relationships: bool = False,
     existing_model: Optional[type[models.Model]] = None,
     **options: Any,
-) -> Tuple[type[models.Model], Optional[Dict[str, models.Field]]]:
+) -> tuple[type[models.Model], Optional[dict[str, models.Field]]]:
     """
     Convert a Pydantic model to a Django model, with optional base Django model inheritance.
 
@@ -58,14 +56,14 @@ def make_django_model(
     for field_name, field_info in pydantic_fields.items():
         try:
             # Skip id field if we're updating an existing model
-            if field_name == 'id' and existing_model:
+            if field_name == "id" and existing_model:
                 continue
 
             # Create the Django field
             django_field = get_django_field(field_name, field_info, skip_relationships=skip_relationships)
 
             # Handle relationship fields differently based on skip_relationships
-            if isinstance(django_field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)):
+            if isinstance(django_field, models.ForeignKey | models.ManyToManyField | models.OneToOneField):
                 if skip_relationships:
                     # Store relationship fields for later
                     relationship_fields[field_name] = django_field
@@ -76,6 +74,7 @@ def make_django_model(
         except ValueError as e:
             # Log warning about skipped field
             import warnings
+
             warnings.warn(f"Skipping field {field_name}: {str(e)}", stacklevel=2)
             continue
 
@@ -109,11 +108,7 @@ def make_django_model(
         verbose_name_plural = f"{verbose_name}s"
 
     # Create the model attributes
-    attrs = {
-        "__module__": pydantic_model.__module__,
-        "Meta": Meta,
-        **django_fields
-    }
+    attrs = {"__module__": pydantic_model.__module__, "Meta": Meta, **django_fields}
 
     # Create the Django model
     model_name = f"Django{pydantic_model.__name__}"
