@@ -5,12 +5,14 @@ This module provides a simplified interface for discovering and registering
 Pydantic models as Django models.
 """
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from django.db import models
 from pydantic import BaseModel
 
+from .factory import DjangoModelFactory
 from .registry import ModelRegistryManager
+from .types import DjangoBaseModel, T
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +73,47 @@ def get_discovered_models() -> dict[str, type[BaseModel]]:
 def get_django_models(app_label: str = "django_llm") -> dict[str, type[models.Model]]:
     """Get all registered Django models for the given app label."""
     return get_registry().django_models
+
+
+def get_django_model(
+    pydantic_model: type[T] | type[type[T]], app_label: str = "django_llm"
+) -> type[DjangoBaseModel[T]]:
+    """
+    Get a Django model with proper type hints for a given Pydantic model.
+
+    Args:
+        pydantic_model: The Pydantic model class or a callable that returns the model class
+        app_label: The Django app label to use for model registration
+
+    Example:
+        from your_package.models import UserPydantic
+
+        UserDjango = discovery.get_django_model(UserPydantic)
+        user = UserDjango(name="John")
+        user.get_display_name()  # IDE completion works!
+    """
+    registry = get_registry()
+
+    # Handle both direct type and callable returning type
+    if callable(pydantic_model) and not isinstance(pydantic_model, type):
+        # If it's a fixture function, call it to get the actual model
+        actual_model = cast(type[T], pydantic_model())
+    else:
+        # If it's already a type, use it directly
+        actual_model = cast(type[T], pydantic_model)
+
+    model_name = actual_model.__name__
+
+    # Set up models for the specified app_label if not already done
+    if not registry.django_models:
+        registry.setup_models(app_label=app_label)
+
+    # Look for the model in the registry
+    for model in registry.django_models.values():
+        if getattr(model, "_pydantic_model", None) == actual_model:
+            return cast(type[DjangoBaseModel[T]], model)
+
+    # If not found, try to create it
+    django_model, _ = DjangoModelFactory[T].create_model(actual_model, app_label=app_label)
+
+    return django_model

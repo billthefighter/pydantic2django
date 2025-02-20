@@ -8,7 +8,6 @@ import logging
 
 from django.apps import apps
 from django.contrib import admin
-from django.contrib.admin.exceptions import AlreadyRegistered
 from django.db import models
 
 logger = logging.getLogger(__name__)
@@ -42,7 +41,7 @@ def register_model_admin(model: type[models.Model], model_name: str) -> None:
     try:
         admin.site.register(model, DynamicModelAdmin)
         logger.info(f"Registered {model_name} with admin")
-    except AlreadyRegistered:
+    except admin.sites.AlreadyRegistered:
         logger.debug(f"Admin interface for {model_name} already registered")
 
 
@@ -60,5 +59,5 @@ def register_model_admins(app_label: str) -> None:
         try:
             admin.site.register(model, DynamicModelAdmin)
             logger.info(f"Registered admin interface for {model.__name__}")
-        except AlreadyRegistered:
+        except admin.sites.AlreadyRegistered:
             logger.info(f"Admin interface for {model.__name__} already registered")

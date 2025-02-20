@@ -10,14 +10,14 @@ import logging
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, get_args, get_origin
+from typing import Any, Optional, get_args, get_origin
 
 from django.apps import apps
 from django.db import models
 from pydantic import BaseModel
 
-from .admin import register_model_admin
 from .core import make_django_model
+from .factory import DjangoModelFactory
 
 logger = logging.getLogger(__name__)
 
@@ -254,104 +254,30 @@ class ModelRegistryManager:
         Returns:
             Dict mapping model names to Django model classes
         """
-        if not self.discovered_models:
-            raise RuntimeError("No models discovered. Call discover_models() first.")
+        logger.info(f"Setting up models for app {app_label}")
+        logger.info("Discovered models:")
+        for name, model in self.discovered_models.items():
+            logger.info(f"  - {name}: {model}")
 
-        django_models = {}
-        registered_models = set()
-
-        # Get currently registered models if possible
-        try:
-            app_config = apps.get_app_config(app_label)
-            if app_config:
-                registered_models = {
-                    str(model._meta.model_name).lower()
-                    for model in app_config.get_models()
-                    if model._meta.model_name is not None
-                }
-        except Exception:
-            logger.debug("Could not get registered models, will attempt to create all")
-
-        # First pass: Create all models without relationships
-        logger.info("First pass: Creating models without relationships...")
-        for model_name in self.get_registration_order():
-            model = self.normalized_models[model_name]
+        # Create Django models for each discovered model
+        for model_name, pydantic_model in self.discovered_models.items():
+            logger.info(f"Creating Django model for {model_name}")
             try:
-                if model_name.startswith("Django"):
-                    model_name = model_name[6:]
+                django_model, _ = DjangoModelFactory[Any].create_model(pydantic_model, app_label=app_label)
+                self.django_models[model_name] = django_model
+                logger.info(f"Successfully created Django model: {django_model}")
 
-                # Skip if model is already registered
-                if model_name.lower() in registered_models:
-                    try:
-                        existing = apps.get_model(app_label, model_name)
-                        logger.debug(f"Model {model_name} already registered, skipping creation")
-                        django_models[model_name] = existing
-                        continue
-                    except Exception:
-                        logger.debug(f"Could not get existing model {model_name}, will recreate")
-
-                # Create Django model without relationships
-                logger.debug(f"Creating model {model_name} without relationships")
-                result = make_django_model(
-                    model,
-                    app_label=app_label,
-                    db_table=f"{app_label}_{model_name.lower()}",
-                    skip_relationships=True,
-                )
-                django_model = result[0]
-                django_models[model_name] = django_model
-
-                logger.info(f"Created base model for {model_name}")
-
+                # Register the model with Django's app registry
+                register_django_model(django_model, app_label)
+                logger.info(f"Registered model with Django app registry: {django_model._meta.model_name}")
             except Exception as e:
-                logger.error(f"Error creating base model for {model_name}: {str(e)}")
-                logger.error("Full model creation traceback:", exc_info=True)
-                raise
+                logger.error(f"Error creating Django model for {model_name}: {e}")
 
-        # Second pass: Add relationships
-        logger.info("Second pass: Adding relationships between models...")
-        for model_name in self.get_registration_order():
-            if model_name.startswith("Django"):
-                model_name = model_name[6:]
+        logger.info("Final Django models:")
+        for name, model in self.django_models.items():
+            logger.info(f"  - {name}: {model}")
 
-            try:
-                model = self.normalized_models[f"Django{model_name}"]
-                django_model = django_models[model_name]
-
-                # Add relationships
-                logger.debug(f"Adding relationships to {model_name}")
-                result = make_django_model(
-                    model,
-                    app_label=app_label,
-                    db_table=f"{app_label}_{model_name.lower()}",
-                    skip_relationships=False,
-                    existing_model=django_model,
-                )
-
-                # Apply relationship fields if any were returned
-                field_updates = result[1]
-                if isinstance(field_updates, dict):
-                    for field_name, field in field_updates.items():
-                        if not hasattr(django_model, field_name):
-                            logger.debug(f"Adding field {field_name} to {model_name}")
-                            field.contribute_to_class(django_model, field_name)
-                            logger.info(f"Added relationship field {field_name} to {model_name}")
-                        else:
-                            logger.debug(f"Field {field_name} already exists on {model_name}")
-
-            except Exception as e:
-                logger.error(f"Error adding relationships to {model_name}: {str(e)}")
-                logger.error("Full relationship traceback:", exc_info=True)
-                raise
-
-        # Register with admin if requested
-        if not skip_admin:
-            for model_name, django_model in django_models.items():
-                register_model_admin(django_model, model_name)
-
-        logger.info(f"Successfully registered {len(django_models)} models with Django")
-        self.django_models = django_models
-        return django_models
+        return self.django_models
 
     def analyze_dependencies(self, app_label: str) -> None:
         """

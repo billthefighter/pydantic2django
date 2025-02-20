@@ -45,9 +45,9 @@ def optional_fields_model():
 
     class OptionalModel(BaseModel):
         required_string: str
-        optional_string: Optional[str]
+        optional_string: str | None = None
         required_int: int
-        optional_int: Optional[int]
+        optional_int: int | None = None
 
     return OptionalModel
 
@@ -90,7 +90,7 @@ def relationship_models():
     class User(BaseModel):
         name: str
         address: Address
-        profile: Profile = Field(one_to_one=True)
+        profile: Profile = Field(json_schema_extra={"one_to_one": True})
         tags: list[Tag]
 
     return {"Address": Address, "Profile": Profile, "Tag": Tag, "User": User}
@@ -121,6 +121,92 @@ def method_model():
             return x * 2
 
     return MethodModel
+
+
+@pytest.fixture
+def factory_model():
+    """Fixture providing a Pydantic model that can create instances of another model."""
+
+    class Product(BaseModel):
+        name: str
+        price: Decimal
+        description: str
+
+    class ProductFactory(BaseModel):
+        default_price: Decimal = Decimal("9.99")
+        default_description: str = "A great product"
+
+        def create_product(
+            self,
+            name: str,
+            price: Optional[Decimal] = None,
+            description: Optional[str] = None,
+        ) -> Product:
+            return Product(
+                name=name,
+                price=price or self.default_price,
+                description=description or self.default_description,
+            )
+
+        def create_simple_product(self, name: str) -> Product:
+            """A simpler method that just creates a basic product with a name."""
+            return Product(
+                name=name, price=Decimal("0.99"), description="A basic product"
+            )
+
+    return ProductFactory
+
+
+@pytest.fixture
+def product_django_model():
+    """Fixture providing a Django model for Product."""
+
+    class Product(models.Model):
+        name = models.CharField(max_length=100)
+        price = models.DecimalField(max_digits=10, decimal_places=2)
+        description = models.TextField()
+
+        class Meta:
+            app_label = "tests"
+
+    return Product
+
+
+@pytest.fixture
+def user_django_model():
+    """Fixture providing Django models for User and related models."""
+
+    class Address(models.Model):
+        street = models.CharField(max_length=200)
+        city = models.CharField(max_length=100)
+        country = models.CharField(max_length=100)
+
+        class Meta:
+            app_label = "tests"
+
+    class Profile(models.Model):
+        bio = models.TextField()
+        website = models.URLField()
+
+        class Meta:
+            app_label = "tests"
+
+    class Tag(models.Model):
+        name = models.CharField(max_length=50)
+
+        class Meta:
+            app_label = "tests"
+
+    class User(models.Model):
+        name = models.CharField(max_length=100)
+        address = models.ForeignKey(Address, on_delete=models.CASCADE)
+        profile = models.OneToOneField(Profile, on_delete=models.CASCADE)
+        tags = models.ManyToManyField(Tag)
+
+        class Meta:
+            app_label = "tests"
+
+    return User
 
 
 def get_model_fields(django_model):

@@ -16,6 +16,7 @@ from .discovery import (
     get_django_models,
     setup_dynamic_models,
 )
+from .factory import DjangoModelFactory
 from .registry import (
     ModelRegistryManager,
     get_model_dependencies_recursive,
@@ -24,8 +25,12 @@ from .registry import (
     topological_sort,
     validate_model_references,
 )
+from .types import DjangoBaseModel
 
 __all__ = [
+    # Type-safe model creation
+    "DjangoBaseModel",
+    "DjangoModelFactory",
     # Core model conversion
     "make_django_model",
     "clear_model_registry",
