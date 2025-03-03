@@ -5,13 +5,43 @@ import logging
 from django.db import models, connection
 from django.apps import apps
 from django.db.migrations.executor import MigrationExecutor
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from pydantic2django import DjangoModelFactory, discovery
 from pydantic2django.types import DjangoBaseModel
 from pydantic2django.registry import normalize_model_name
 
 logger = logging.getLogger(__name__)
+
+
+class Configuration:
+    """Example non-Pydantic class for testing."""
+
+    def __init__(self, api_key: str, timeout: int):
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def to_dict(self) -> dict:
+        return {"api_key": self.api_key, "timeout": self.timeout}
+
+    def __str__(self) -> str:
+        return f"Config(api_key={self.api_key}, timeout={self.timeout})"
+
+
+class UserModelWithConfig(BaseModel):
+    """Pydantic model with a non-Pydantic class field."""
+
+    name: str
+    age: int
+    config: Configuration
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def get_display_name(self) -> str:
+        return f"{self.name} ({self.age})"
+
+    def get_config_timeout(self) -> int:
+        return self.config.timeout
 
 
 class UserModel(BaseModel):
@@ -39,6 +69,12 @@ class UserModel(BaseModel):
 def typed_pydantic_model() -> Type[UserModel]:
     """Fixture providing a Pydantic model with type-annotated methods."""
     return UserModel
+
+
+@pytest.fixture
+def typed_model_with_config() -> Type[UserModelWithConfig]:
+    """Fixture providing a Pydantic model with a non-Pydantic class field."""
+    return UserModelWithConfig
 
 
 def test_factory_type_preservation(typed_pydantic_model: Type[UserModel]):
@@ -206,3 +242,34 @@ def test_mypy_compatibility(typed_pydantic_model: Type[UserModel]):
     # The following should raise type errors in mypy:
     # result: int = process_user(user)  # Wrong return type annotation
     # process_user("not a user")  # Wrong argument type
+
+
+def test_non_pydantic_class_type_preservation(
+    typed_model_with_config: Type[UserModelWithConfig],
+):
+    """Test that type information is preserved for non-Pydantic class fields."""
+    # Register the model first
+    registry = discovery.get_registry()
+    registry.discovered_models["UserModelWithConfig"] = typed_model_with_config
+    django_models = discovery.setup_dynamic_models(app_label="tests")
+
+    UserDjango = discovery.get_django_model(typed_model_with_config)
+
+    # Create test data
+    config = Configuration(api_key="test123", timeout=30)
+    user = UserDjango(name="Test", age=30, config=config.to_dict())
+
+    # Verify the config field is stored as JSON
+    assert isinstance(user._meta.get_field("config"), models.JSONField)
+
+    # Verify the stored data matches the original
+    assert user.config == config.to_dict()
+
+    # Type checker should accept these
+    name: str = user.get_display_name()
+    assert isinstance(name, str)
+
+    # The config field should be accessible as a dict
+    assert isinstance(user.config, dict)
+    assert user.config["timeout"] == 30
+    assert user.config["api_key"] == "test123"

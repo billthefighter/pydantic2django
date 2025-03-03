@@ -126,6 +126,21 @@ def id_fields_model():
     return ModelWithIds
 
 
+@pytest.fixture
+def custom_class_model():
+    """Create a Pydantic model with custom class fields."""
+
+    class CustomFieldsModel(BaseModel):
+        with_to_dict: CustomClass
+        with_str: CustomClassWithStr
+        basic: CustomClassBasic
+        optional_custom: Optional[CustomClass] = None
+
+        model_config = {"arbitrary_types_allowed": True}
+
+    return CustomFieldsModel
+
+
 @pytest.mark.parametrize("input_type,expected", FIELD_TYPE_TEST_CASES)
 def test_type_resolver_basic(input_type, expected):
     """Test basic field type resolution using TypeResolver."""
@@ -282,7 +297,10 @@ def test_type_resolver_complex_types(field_type):
     else:
         assert not is_collection
 
-    if field_type in (Optional[str], Union[str, int]):
+    if field_type == Optional[str]:
+        # For Optional[str], TypeResolver resolves to the non-None type (str)
+        assert isinstance(field_class(), models.CharField)
+    elif field_type == Union[str, int]:
         assert isinstance(field_class(), models.JSONField)
     elif get_origin(field_type) in (list, set, dict):
         assert isinstance(field_class(), models.JSONField)
@@ -332,35 +350,40 @@ def test_id_field_handling(id_fields_model):
     id_field = converter.convert_field("id", id_fields_model.model_fields["id"])
     assert isinstance(id_field, models.CharField)
     assert id_field.db_column == "id"
-    assert id_field.verbose_name and "custom_id" in id_field.verbose_name.lower()
+    assert id_field.verbose_name and "custom id" in id_field.verbose_name.lower()
 
     # Test uppercase 'ID' field
     ID_field = converter.convert_field("ID", id_fields_model.model_fields["ID"])
     assert isinstance(ID_field, models.IntegerField)
     assert ID_field.db_column == "ID"
-    assert ID_field.verbose_name and "custom_id" in ID_field.verbose_name.lower()
+    assert ID_field.verbose_name and "custom id" in ID_field.verbose_name.lower()
 
-    # Test field with 'id' as part of name (should not be modified)
+    # Test field with 'id' as part of name (should not be renamed)
     user_id_field = converter.convert_field(
         "user_id", id_fields_model.model_fields["user_id"]
     )
     assert isinstance(user_id_field, models.CharField)
-    assert not hasattr(user_id_field, "db_column")
-    assert not hasattr(user_id_field, "verbose_name") or (
-        user_id_field.verbose_name
-        and "custom_id" not in user_id_field.verbose_name.lower()
-    )
+    # Check that the db_column is either None or not set
+    if hasattr(user_id_field, "db_column"):
+        assert user_id_field.db_column is None
+    # Check that the verbose_name doesn't contain "custom id" if it exists and is not None
+    if (
+        hasattr(user_id_field, "verbose_name")
+        and user_id_field.verbose_name is not None
+    ):
+        assert "custom id" not in user_id_field.verbose_name.lower()
 
     # Test normal field (should not be modified)
     normal_field = converter.convert_field(
         "normal_field", id_fields_model.model_fields["normal_field"]
     )
     assert isinstance(normal_field, models.CharField)
-    assert not hasattr(normal_field, "db_column")
-    assert not hasattr(normal_field, "verbose_name") or (
-        normal_field.verbose_name
-        and "custom_id" not in normal_field.verbose_name.lower()
-    )
+    # Check that the db_column is either None or not set
+    if hasattr(normal_field, "db_column"):
+        assert normal_field.db_column is None
+    # Check that the verbose_name doesn't contain "custom id" if it exists and is not None
+    if hasattr(normal_field, "verbose_name") and normal_field.verbose_name is not None:
+        assert "custom id" not in normal_field.verbose_name.lower()
 
 
 def test_handle_id_field_function():
@@ -383,3 +406,61 @@ def test_handle_id_field_function():
     field_name, kwargs = handle_id_field("name", FieldInfo(annotation=str))
     assert field_name == "name"
     assert not kwargs
+
+
+class CustomClass:
+    """Test class with to_dict method."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"value": self.value}
+
+
+class CustomClassWithStr:
+    """Test class with custom __str__ method."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def __str__(self) -> str:
+        return f"Custom({self.value})"
+
+
+class CustomClassBasic:
+    """Test class without special methods."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+
+def test_custom_class_field_conversion(custom_class_model):
+    """Test conversion of fields with custom class types."""
+    converter = FieldConverter()
+
+    # Test field with to_dict method
+    to_dict_field = converter.convert_field(
+        "with_to_dict", custom_class_model.model_fields["with_to_dict"]
+    )
+    assert isinstance(to_dict_field, models.JSONField)
+
+    # Test field with __str__ method
+    str_field = converter.convert_field(
+        "with_str", custom_class_model.model_fields["with_str"]
+    )
+    assert isinstance(str_field, models.TextField)
+
+    # Test basic class field
+    basic_field = converter.convert_field(
+        "basic", custom_class_model.model_fields["basic"]
+    )
+    assert isinstance(basic_field, models.JSONField)
+
+    # Test optional custom class field
+    optional_field = converter.convert_field(
+        "optional_custom", custom_class_model.model_fields["optional_custom"]
+    )
+    assert isinstance(optional_field, models.JSONField)
+    assert optional_field.null
+    assert optional_field.blank

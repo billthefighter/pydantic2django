@@ -94,7 +94,86 @@ def is_pydantic_model_type(type_hint: Any) -> bool:
     return False
 
 
-def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model: bool = False) -> Any:
+def serialize_class_instance(instance: Any) -> str | dict:
+    """
+    Serialize a class instance to a format suitable for storage in Django.
+
+    Args:
+        instance: The class instance to serialize
+
+    Returns:
+        A string or dict representation of the instance
+    """
+    if hasattr(instance, "to_json"):
+        return instance.to_json()
+    elif hasattr(instance, "to_dict"):
+        return instance.to_dict()
+    elif hasattr(instance, "__str__") and instance.__class__.__str__ is not object.__str__:
+        # Use __str__ if it's been overridden
+        return str(instance)
+    elif hasattr(instance, "__dict__"):
+        # Include class name for reconstruction
+        return {
+            "__class__": instance.__class__.__name__,
+            "__module__": instance.__class__.__module__,
+            "data": instance.__dict__,
+        }
+    else:
+        return str(instance)
+
+
+def deserialize_class_instance(data: str | dict, class_registry: dict[str, type] | None = None) -> Any:
+    """
+    Deserialize data back into a class instance.
+
+    Args:
+        data: The serialized data
+        class_registry: Optional dictionary mapping class names to their types
+
+    Returns:
+        The reconstructed class instance
+    """
+    if isinstance(data, str):
+        return data
+
+    if not isinstance(data, dict):
+        return data
+
+    # If it's a serialized class instance
+    if "__class__" in data and "__module__" in data:
+        class_name = data["__class__"]
+        module_name = data["__module__"]
+
+        # Try to get the class from the registry first
+        if class_registry and class_name in class_registry:
+            cls = class_registry[class_name]
+        else:
+            # Try to import the class
+            try:
+                module = __import__(module_name, fromlist=[class_name])
+                cls = getattr(module, class_name)
+            except (ImportError, AttributeError) as e:
+                logger.warning(f"Could not reconstruct class {class_name} from module {module_name}: {e}")
+                return data
+
+        # Create a new instance and update its dict
+        try:
+            instance = cls.__new__(cls)
+            instance.__dict__.update(data["data"])
+            return instance
+        except Exception as e:
+            logger.warning(f"Failed to reconstruct instance of {class_name}: {e}")
+            return data
+
+    return data
+
+
+def convert_pydantic_to_django(
+    value: Any,
+    app_label: str,
+    return_pydantic_model: bool = False,
+    class_registry: dict[str, type] | None = None,
+) -> Any:
     """
     Convert a Pydantic model instance or collection to Django model instance(s).
 
@@ -102,6 +181,7 @@ def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model
         value: The value to convert
         app_label: The Django app label to use for model lookup
         return_pydantic_model: If True, return the original Pydantic model when Django model not found
+        class_registry: Optional dictionary mapping class names to their types for custom class reconstruction
 
     Returns:
         Converted Django model instance(s) or the original value if not convertible
@@ -129,6 +209,15 @@ def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model
                 try:
                     field = django_model._meta.get_field(field_name)
                     logger.debug(f"Processing field {field_name} of type {type(field)}")
+
+                    # Handle class instances that aren't Pydantic models
+                    if isinstance(field_value, object) and not isinstance(
+                        field_value,
+                        (BaseModel, dict, list, set, str, int, float, bool, type(None)),
+                    ):
+                        converted_data[field_name] = serialize_class_instance(field_value)
+                        continue
+
                     if isinstance(field_value, (BaseModel, dict)):
                         logger.debug(f"Found nested model in field {field_name}")
                         # Get the related model class for foreign key or one-to-one fields
@@ -136,7 +225,10 @@ def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model
                             # Convert nested model data
                             if isinstance(field_value, BaseModel):
                                 nested_instance = convert_pydantic_to_django(
-                                    field_value, app_label, return_pydantic_model
+                                    field_value,
+                                    app_label,
+                                    return_pydantic_model,
+                                    class_registry,
                                 )
                             else:
                                 # Try to create the instance directly
@@ -162,7 +254,10 @@ def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model
                                     logger.debug("Converting M2M item")
                                     if isinstance(item, BaseModel):
                                         nested_instance = convert_pydantic_to_django(
-                                            item, app_label, return_pydantic_model
+                                            item,
+                                            app_label,
+                                            return_pydantic_model,
+                                            class_registry,
                                         )
                                     else:
                                         # Try to create the instance directly
@@ -210,11 +305,13 @@ def convert_pydantic_to_django(value: Any, app_label: str, return_pydantic_model
 
     # Handle collections
     if isinstance(value, list):
-        return [convert_pydantic_to_django(item, app_label, return_pydantic_model) for item in value]
+        return [convert_pydantic_to_django(item, app_label, return_pydantic_model, class_registry) for item in value]
     if isinstance(value, set):
-        return {convert_pydantic_to_django(item, app_label, return_pydantic_model) for item in value}
+        return {convert_pydantic_to_django(item, app_label, return_pydantic_model, class_registry) for item in value}
     if isinstance(value, dict):
-        return {k: convert_pydantic_to_django(v, app_label, return_pydantic_model) for k, v in value.items()}
+        return {
+            k: convert_pydantic_to_django(v, app_label, return_pydantic_model, class_registry) for k, v in value.items()
+        }
 
     return value
 

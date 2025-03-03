@@ -487,8 +487,9 @@ class TypeResolver:
         if origin_type is Union:
             args = get_args(field_type)
             if len(args) == 2 and type(None) in args:
-                # For Optional types, use JSONField
-                return models.JSONField, False
+                # For Optional types, use the non-None type
+                field_type = next(arg for arg in args if arg is not type(None))
+                return self.resolve_type(field_type)
             return models.JSONField, False
 
         # Handle collection types
@@ -513,6 +514,18 @@ class TypeResolver:
         # Handle enums specially
         if "Enum" in field_type_str:
             return models.CharField, is_collection
+
+        # Handle class types (non-Pydantic)
+        if isinstance(field_type, type):
+            # Check if the class has a to_json/to_dict method
+            if hasattr(field_type, "to_json") or hasattr(field_type, "to_dict"):
+                return models.JSONField, is_collection
+            # Check if the class has a __str__ method that's not the default object.__str__
+            elif field_type.__str__ is not object.__str__:
+                return models.TextField, is_collection
+            else:
+                # Default to JSONField for class instances
+                return models.JSONField, is_collection
 
         # Default to JSONField for unknown types
         logger.debug(f"Using default JSONField for unknown type: {field_type}")
