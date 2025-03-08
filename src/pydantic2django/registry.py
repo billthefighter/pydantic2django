@@ -16,10 +16,27 @@ from django.apps import apps
 from django.db import models
 from pydantic import BaseModel
 
-from .core import make_django_model
+# Remove direct import from core to avoid circular import
+# from .core import make_django_model
 from .factory import DjangoModelFactory
 
 logger = logging.getLogger(__name__)
+
+# Forward reference to make_django_model to be imported at runtime
+make_django_model = None
+
+
+def _init_imports():
+    """Initialize imports that might cause circular imports."""
+    global make_django_model
+    # Import at runtime to avoid circular imports
+    from pydantic2django import make_django_model as _make_django_model
+
+    make_django_model = _make_django_model
+
+
+# Initialize imports at module level
+_init_imports()
 
 
 def normalize_model_name(name: str) -> str:

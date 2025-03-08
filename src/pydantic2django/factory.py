@@ -2,8 +2,25 @@ from typing import Any, Generic, Optional, cast
 
 from django.db import models
 
-from .core import make_django_model
+# Remove direct import from core to avoid circular import
+# from .core import make_django_model
 from .types import DjangoBaseModel, T
+
+# Forward reference to make_django_model to be imported at runtime
+make_django_model = None
+
+
+def _init_imports():
+    """Initialize imports that might cause circular imports."""
+    global make_django_model
+    # Import at runtime to avoid circular imports
+    from pydantic2django import make_django_model as _make_django_model
+
+    make_django_model = _make_django_model
+
+
+# Initialize imports at module level
+_init_imports()
 
 
 class DjangoModelFactory(Generic[T]):
@@ -90,8 +107,28 @@ class DjangoModelFactory(Generic[T]):
         pydantic_model: type[T],
         **kwargs: Any,
     ) -> type[DjangoBaseModel[T]]:
-        """Create an abstract Django model class."""
-        kwargs["options"] = kwargs.get("options", {})
-        kwargs["options"]["abstract"] = True
-        model, _ = cls.create_model(pydantic_model, **kwargs)
-        return model
+        """
+        Create an abstract Django model from a Pydantic model.
+
+        Args:
+            pydantic_model: The Pydantic model to convert
+            **kwargs: Additional options for model creation
+
+        Returns:
+            An abstract Django model class with proper type hints
+        """
+        # Set abstract=True in Meta options
+        kwargs["abstract"] = True
+
+        # Create the model
+        django_model, _ = make_django_model(
+            pydantic_model=pydantic_model,
+            base_django_model=DjangoBaseModel,
+            check_migrations=False,
+            **kwargs,
+        )
+
+        # Add type hints
+        django_model._pydantic_model = pydantic_model  # type: ignore
+
+        return cast(type[DjangoBaseModel[T]], django_model)
