@@ -16,8 +16,11 @@ Pydantic2Django is a library that allows you to use Pydantic models as Django mo
 - Automatic conversion of Pydantic models to Django models
 - Field type mapping between Pydantic and Django
 - Migration state validation
-- IDE completion support
-- Preservation of Pydantic model methods
+- Full IDE completion support with type hints
+- Preservation of Pydantic model methods and properties
+- Type-safe conversion between Pydantic and Django instances
+- Automatic model discovery and registration
+- Generic type support for better type checking
 
 ## Installation
 
@@ -29,6 +32,7 @@ poetry add pydantic2django
 
 ## Quick Start
 
+### Basic Usage
 ```python
 from pydantic import BaseModel
 from pydantic2django import make_django_model
@@ -40,6 +44,56 @@ class UserModel(BaseModel):
 
 # Convert to Django model
 DjangoUserModel = make_django_model(UserModel)
+```
+
+### Type-Safe Model Creation
+```python
+from pydantic import BaseModel
+from pydantic2django import DjangoModelFactory
+
+class UserModel(BaseModel):
+    name: str
+    age: int
+
+    def get_display_name(self) -> str:
+        return f"{self.name} ({self.age})"
+
+# Create type-safe Django model
+UserDjango, field_updates = DjangoModelFactory[UserModel].create_model(
+    UserModel,
+    app_label="myapp"
+)
+
+# IDE completion works!
+user = UserDjango(name="John", age=30)
+display_name = user.get_display_name()  # IDE knows this method exists
+```
+
+### Dynamic Model Discovery
+```python
+from pydantic2django import discovery
+from myapp.models import UserPydantic  # Your Pydantic model
+
+# During app initialization
+discovery.discover_models(['myapp'])
+discovery.setup_dynamic_models(app_label='myapp')
+
+# Get type-safe model with IDE support
+UserDjango = discovery.get_django_model(UserPydantic)
+
+# Create instance with full IDE completion
+user = UserDjango.objects.create(name="John")
+display_name = user.get_display_name()  # IDE completion works!
+```
+
+### Converting Between Types
+```python
+# Convert from Pydantic to Django
+pydantic_user = UserPydantic(name="Jane", age=25)
+django_user = UserDjango.from_pydantic(pydantic_user)
+
+# Convert back to Pydantic
+pydantic_user = django_user.to_pydantic()
 ```
 
 ## Migration Detection
@@ -109,8 +163,8 @@ poetry run ruff check .
 - Enhanced validation of relationship cycles
 
 ### Integration Features
-- IDE completion improvements for dynamically generated models
-- Type hint preservation for better code analysis
+- ✅ IDE completion support for dynamically generated models
+- ✅ Type hint preservation for better code analysis
 - Integration with Django's migration framework
 - Automatic migration generation based on Pydantic model changes
 
