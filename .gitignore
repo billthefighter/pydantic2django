@@ -44,3 +44,5 @@ build/
 
 # Poetry
 poetry.lock
+
+test_db.sqlite3
