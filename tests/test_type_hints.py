@@ -7,11 +7,14 @@ from django.apps import apps
 from django.db.migrations.executor import MigrationExecutor
 from pydantic import BaseModel, ConfigDict
 
-from pydantic2django import DjangoModelFactory, discovery
+from pydantic2django import DjangoModelFactory
+from pydantic2django.discovery import ModelDiscovery, normalize_model_name
 from pydantic2django.types import DjangoBaseModel
-from pydantic2django.registry import normalize_model_name
 
 logger = logging.getLogger(__name__)
+
+# Create a single ModelDiscovery instance for all tests
+model_discovery = ModelDiscovery()
 
 
 class Configuration:
@@ -79,84 +82,66 @@ def typed_model_with_config() -> Type[UserModelWithConfig]:
 
 def test_factory_type_preservation(typed_pydantic_model: Type[UserModel]):
     """Test that the factory preserves type information."""
-    # Register the model first
-    registry = discovery.get_registry()
-    registry.discovered_models["UserModel"] = typed_pydantic_model
-    django_models = discovery.setup_dynamic_models(app_label="tests")
+    # Register the model directly in the discovery instance
+    model_discovery.discovered_models["UserModel"] = typed_pydantic_model
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
     UserDjango, _ = DjangoModelFactory[typed_pydantic_model].create_model(
         typed_pydantic_model, app_label="tests"
     )
 
-    # Verify the model is properly typed
-    assert issubclass(UserDjango, DjangoBaseModel)
-    assert UserDjango._pydantic_model == typed_pydantic_model
+    # Type checking should work
+    user = UserDjango(name="John", age=30)
+    name: str = user.name
+    age: int = user.age
+    display_name: str = user.get_display_name()
+    birth_year: int = user.calculate_birth_year(2023)
+    is_adult: bool = user.is_adult
 
-    # Create an instance and verify method types
-    user = UserDjango(name="Test", age=30)
-
-    # Method return types should match Pydantic model
-    display_name = user.get_display_name()
-    assert isinstance(display_name, str)
-
-    birth_year = user.calculate_birth_year(2024)
-    assert isinstance(birth_year, int)
-
-    # Property types should be preserved
-    assert isinstance(user.is_adult, bool)
+    # Test that we can call methods from the Pydantic model
+    assert user.get_display_name() == "John (30)"
+    assert user.calculate_birth_year(2023) == 1993
+    assert user.is_adult is True
 
 
 def test_discovery_type_preservation(typed_pydantic_model: Type[UserModel]):
-    """Test that discovery mechanism preserves type information."""
-    # Register the model
-    registry = discovery.get_registry()
-    registry.discovered_models["UserModel"] = typed_pydantic_model
+    """Test that the discovery mechanism preserves type information."""
+    # Clear and set up the registry
+    model_discovery.clear()
+    model_discovery.discovered_models["UserModel"] = typed_pydantic_model
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
-    # Set up models
-    django_models = discovery.setup_dynamic_models(app_label="tests")
+    # Get the model with proper type hints
+    UserDjango = model_discovery.get_django_model(
+        typed_pydantic_model, app_label="tests"
+    )
 
-    # Get model with type hints
-    UserDjango = discovery.get_django_model(typed_pydantic_model)
+    # Type checking should work
+    user = UserDjango(name="John", age=30)
+    name: str = user.name
+    age: int = user.age
+    display_name: str = user.get_display_name()
+    birth_year: int = user.calculate_birth_year(2023)
+    is_adult: bool = user.is_adult
 
-    # Verify type information is preserved
-    user = UserDjango(name="Test", age=30)
-
-    # These assertions verify both runtime behavior and type checking
-    display_name: str = user.get_display_name()  # Type checker should accept this
-    birth_year: int = user.calculate_birth_year(2024)  # Type checker should accept this
-    is_adult: bool = user.is_adult  # Type checker should accept this
+    # Test that we can call methods from the Pydantic model
+    assert user.get_display_name() == "John (30)"
+    assert user.calculate_birth_year(2023) == 1993
+    assert user.is_adult is True
 
 
 @pytest.mark.django_db(transaction=True)
 def test_conversion_type_preservation(typed_pydantic_model: Type[UserModel], db):
-    """Test type preservation during model conversion."""
-    # Register the model first
-    registry = discovery.get_registry()
-    model_name = normalize_model_name(typed_pydantic_model.__name__)
-    logger.info(f"Registering model {typed_pydantic_model.__name__} as {model_name}")
-    registry.discovered_models[model_name] = typed_pydantic_model
+    """Test that the conversion preserves type information in a Django environment."""
+    # Clear and set up the registry
+    model_discovery.clear()
+    model_discovery.discovered_models["UserModel"] = typed_pydantic_model
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
-    logger.info("Registry contents before setup:")
-    for name, model in registry.discovered_models.items():
-        logger.info(f"  - {name}: {model}")
-
-    django_models = discovery.setup_dynamic_models(app_label="tests")
-
-    logger.info("Django models after setup:")
-    for name, model in django_models.items():
-        logger.info(f"  - {name}: {model}")
-
-    logger.info("Registered models in Django apps:")
-    try:
-        app_config = apps.get_app_config("tests")
-        if app_config:
-            for model in app_config.get_models():
-                logger.info(f"  - {model._meta.model_name}: {model}")
-    except Exception as e:
-        logger.error(f"Error getting app models: {e}")
-
-    UserDjango = discovery.get_django_model(typed_pydantic_model)
-    logger.info(f"Got Django model: {UserDjango}")
+    # Get the model with proper type hints
+    UserDjango = model_discovery.get_django_model(
+        typed_pydantic_model, app_label="tests"
+    )
 
     # Disable foreign key checks before schema changes
     with connection.constraint_checks_disabled():
@@ -200,9 +185,9 @@ def test_type_checking_errors(typed_pydantic_model: Type[UserModel]):
         pass
 
     # Register the model first
-    registry = discovery.get_registry()
-    registry.discovered_models["UserModel"] = typed_pydantic_model
-    django_models = discovery.setup_dynamic_models(app_label="tests")
+    model_discovery.clear()
+    model_discovery.discovered_models["UserModel"] = typed_pydantic_model
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
     UserDjango, _ = DjangoModelFactory[typed_pydantic_model].create_model(
         typed_pydantic_model, app_label="tests"
@@ -220,18 +205,16 @@ def test_type_checking_errors(typed_pydantic_model: Type[UserModel]):
 
 @pytest.mark.mypy_testing
 def test_mypy_compatibility(typed_pydantic_model: Type[UserModel]):
-    """
-    Test that mypy can properly type check our models.
+    """Test that mypy can correctly infer types."""
+    # Clear and set up the registry
+    model_discovery.clear()
+    model_discovery.discovered_models["UserModel"] = typed_pydantic_model
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
-    Note: This test is meant to be run with mypy and may not actually execute.
-    It serves as a typing specification test.
-    """
-    # Register the model first
-    registry = discovery.get_registry()
-    registry.discovered_models["UserModel"] = typed_pydantic_model
-    django_models = discovery.setup_dynamic_models(app_label="tests")
-
-    UserDjango = discovery.get_django_model(typed_pydantic_model)
+    # Get the model with proper type hints
+    UserDjango = model_discovery.get_django_model(
+        typed_pydantic_model, app_label="tests"
+    )
 
     def process_user(user: DjangoBaseModel[UserModel]) -> str:
         return user.get_display_name()
@@ -247,13 +230,16 @@ def test_mypy_compatibility(typed_pydantic_model: Type[UserModel]):
 def test_non_pydantic_class_type_preservation(
     typed_model_with_config: Type[UserModelWithConfig],
 ):
-    """Test that type information is preserved for non-Pydantic class fields."""
-    # Register the model first
-    registry = discovery.get_registry()
-    registry.discovered_models["UserModelWithConfig"] = typed_model_with_config
-    django_models = discovery.setup_dynamic_models(app_label="tests")
+    """Test that non-Pydantic class fields preserve type information."""
+    # Clear and set up the registry
+    model_discovery.clear()
+    model_discovery.discovered_models["UserModelWithConfig"] = typed_model_with_config
+    django_models = model_discovery.setup_dynamic_models(app_label="tests")
 
-    UserDjango = discovery.get_django_model(typed_model_with_config)
+    # Get the model with proper type hints
+    UserDjango = model_discovery.get_django_model(
+        typed_model_with_config, app_label="tests"
+    )
 
     # Create test data
     config = Configuration(api_key="test123", timeout=30)

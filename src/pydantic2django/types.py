@@ -1,7 +1,10 @@
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast, Union
 
 from django.db import models
 from pydantic import BaseModel
+
+# Type alias for Django model fields
+DjangoField = Union[models.Field, type[models.Field]]
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -64,7 +67,9 @@ class DjangoBaseModel(models.Model, Generic[T]):
             return attr
 
         # If attribute not found, raise AttributeError
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+        raise AttributeError(
+            f"'{self.__class__.__name__}' object has no attribute '{name}'"
+        )
 
     @classmethod
     def from_pydantic(cls, pydantic_instance: T) -> "DjangoBaseModel[T]":

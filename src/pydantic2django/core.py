@@ -5,12 +5,13 @@ This module provides the core functionality for converting individual Pydantic m
 to Django models, handling field conversion and model creation.
 """
 import logging
-from typing import Any, Optional, TypeVar
+from typing import Any, Optional, TypeVar, cast
 
 from django.db import models
 from pydantic import BaseModel
 
-from .fields import get_django_field
+from .fields import convert_field
+from .methods import copy_methods_to_django_model
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -75,6 +76,7 @@ def make_django_model(
     # Create Django model fields
     django_fields = {}
     relationship_fields = {}
+    invalid_fields = []
 
     for field_name, field_info in pydantic_fields.items():
         try:
@@ -83,7 +85,12 @@ def make_django_model(
                 continue
 
             # Create the Django field
-            django_field = get_django_field(field_name, field_info, skip_relationships=skip_relationships)
+            django_field = convert_field(
+                field_name,
+                field_info,
+                skip_relationships=skip_relationships,
+                app_label=options["app_label"],
+            )
 
             # Handle relationship fields differently based on skip_relationships
             if isinstance(
@@ -99,24 +106,44 @@ def make_django_model(
 
         except (ValueError, TypeError) as e:
             logger.warning(f"Skipping field {field_name}: {str(e)}")
+            invalid_fields.append((field_name, str(e)))
             continue
+
+    # If we have invalid fields, raise a ValueError
+    if (
+        invalid_fields
+        and not skip_relationships
+        and not options.get("ignore_errors", False)
+    ):
+        error_msg = "Failed to convert the following fields:\n"
+        for field_name, error in invalid_fields:
+            error_msg += f"  - {field_name}: {error}\n"
+        raise ValueError(error_msg)
 
     # If we're updating an existing model, return only the relationship fields
     if existing_model:
-        logger.debug(f"Returning relationship fields for existing model {existing_model.__name__}")
+        logger.debug(
+            f"Returning relationship fields for existing model {existing_model.__name__}"
+        )
         return existing_model, relationship_fields
 
     # Check for field collisions if a base Django model is provided
     if base_django_model:
         base_fields = base_django_model._meta.get_fields()
         base_field_names = {field.name for field in base_fields}
-        logger.debug(f"Checking field collisions with base model {base_django_model.__name__}")
+        logger.debug(
+            f"Checking field collisions with base model {base_django_model.__name__}"
+        )
 
         # Check for collisions
         collision_fields = set(django_fields.keys()) & base_field_names
         if collision_fields:
-            logger.error(f"Field collision detected with base model: {collision_fields}")
-            raise ValueError(f"Field collision detected with base model. Conflicting fields: {collision_fields}")
+            logger.error(
+                f"Field collision detected with base model: {collision_fields}"
+            )
+            raise ValueError(
+                f"Field collision detected with base model. Conflicting fields: {collision_fields}"
+            )
 
     # Determine base classes
     base_classes = [base_django_model] if base_django_model else [models.Model]
@@ -124,7 +151,9 @@ def make_django_model(
 
     # Set up Meta options
     meta_app_label = options["app_label"]
-    meta_db_table = options.get("db_table", f"{meta_app_label}_{pydantic_model.__name__.lower()}")
+    meta_db_table = options.get(
+        "db_table", f"{meta_app_label}_{pydantic_model.__name__.lower()}"
+    )
 
     # Create Meta class
     meta_attrs = {
@@ -160,15 +189,41 @@ def make_django_model(
 
     # Create the model attributes
     attrs = {
-        "__module__": base_django_model.__module__ if base_django_model else pydantic_model.__module__,
+        "__module__": pydantic_model.__module__,  # Use the Pydantic model's module
         "Meta": Meta,
         **django_fields,
     }
 
     # Create the Django model
     model_name = f"Django{pydantic_model.__name__}"
-    django_model = type(model_name, tuple(base_classes), attrs)
+
+    # Use the correct base class
+    bases = tuple(base_classes)
+
+    # Create the model class
+    model = type(model_name, bases, attrs)
+    django_model = cast(type[models.Model], model)
+
+    # Copy methods and properties from the Pydantic model
+    django_model = copy_methods_to_django_model(
+        django_model=django_model,
+        pydantic_model=pydantic_model,
+        return_pydantic_model=False,
+    )
+
     logger.debug(f"Created Django model {model_name}")
+
+    # Register the model with Django if it has a Meta class with app_label
+    if hasattr(django_model, "_meta") and hasattr(django_model._meta, "app_label"):
+        from django.apps import apps
+
+        app_label = django_model._meta.app_label
+
+        try:
+            apps.get_registered_model(app_label, model_name)
+        except LookupError:
+            apps.register_model(app_label, django_model)
+            logger.debug(f"Registered model {model_name} with app {app_label}")
 
     # Cache the model if not updating an existing one
     if not existing_model:

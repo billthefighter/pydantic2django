@@ -8,7 +8,16 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeVar, Union, get_args, get_origin
+from typing import (
+    Any,
+    Generic,
+    Protocol,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    Optional,
+)
 from uuid import UUID
 
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -19,372 +28,40 @@ from pydantic.fields import FieldInfo
 from pydantic.networks import IPvAnyAddress
 from pydantic.types import Json
 
+from .types import DjangoField
+from .field_type_mapping import (
+    TypeMapper,
+    TypeMappingDefinition,
+    TYPE_MAPPINGS,
+)
+
 logger = logging.getLogger(__name__)
-
-# Type-based mappings
-FIELD_TYPE_MAPPING: dict[type[Any], type[models.Field]] = {
-    str: models.CharField,
-    int: models.IntegerField,
-    float: models.FloatField,
-    bool: models.BooleanField,
-    datetime: models.DateTimeField,
-    date: models.DateField,
-    time: models.TimeField,
-    timedelta: models.DurationField,
-    Decimal: models.DecimalField,
-    UUID: models.UUIDField,
-    EmailStr: models.EmailField,
-    bytes: models.BinaryField,
-    dict: models.JSONField,
-    list: models.JSONField,
-    set: models.JSONField,
-    Any: models.JSONField,
-    Path: models.FilePathField,
-    Union: models.JSONField,
-    Enum: models.CharField,
-    type: models.CharField,
-    Protocol: models.JSONField,
-    Callable: models.JSONField,
-    IPvAnyAddress: models.GenericIPAddressField,
-    Json: models.JSONField,
-}
-
-
-class TypeSuffix(Enum):
-    """Common type suffixes and their corresponding Django field types."""
-
-    ANY = "typing.Any"
-    DICT = "typing.Dict"
-    LIST = "typing.List"
-    SET = "typing.Set"
-    UNION = "typing.Union"
-    TYPE = "typing.Type"
-    TYPE_VAR = "typing.TypeVar"
-    GENERIC = "typing.Generic"
-    PATH = "Path"
-    CONFIG = "Config"
-    REGISTRY = "Registry"
-    MANAGER = "Manager"
-    STORAGE = "Storage"
-    LOADER = "Loader"
-    RESPONSE = "Response"
-    METRICS = "Metrics"
-    USAGE = "Usage"
-    FORMAT = "Format"
-    METADATA = "Metadata"
-    INFO = "Info"
-    ATTACHMENT = "Attachment"
-
-    def get_field_class(self) -> type[models.Field]:
-        """Get the Django field class for this type suffix."""
-        return STRING_TYPE_MAPPING[self.value]
-
-
-# String-based type mappings
-STRING_TYPE_MAPPING: dict[str, type[models.Field]] = {
-    TypeSuffix.ANY.value: models.JSONField,
-    TypeSuffix.DICT.value: models.JSONField,
-    TypeSuffix.LIST.value: models.JSONField,
-    TypeSuffix.SET.value: models.JSONField,
-    TypeSuffix.UNION.value: models.JSONField,
-    TypeSuffix.TYPE.value: models.CharField,
-    TypeSuffix.TYPE_VAR.value: models.JSONField,
-    TypeSuffix.GENERIC.value: models.JSONField,
-    TypeSuffix.PATH.value: models.CharField,
-    TypeSuffix.CONFIG.value: models.JSONField,
-    TypeSuffix.REGISTRY.value: models.JSONField,
-    TypeSuffix.MANAGER.value: models.JSONField,
-    TypeSuffix.STORAGE.value: models.JSONField,
-    TypeSuffix.LOADER.value: models.JSONField,
-    TypeSuffix.RESPONSE.value: models.JSONField,
-    TypeSuffix.METRICS.value: models.JSONField,
-    TypeSuffix.USAGE.value: models.JSONField,
-    TypeSuffix.FORMAT.value: models.JSONField,
-    TypeSuffix.METADATA.value: models.JSONField,
-    TypeSuffix.INFO.value: models.JSONField,
-    TypeSuffix.ATTACHMENT.value: models.JSONField,
-}
-
-
-class FieldPattern(Enum):
-    """Field patterns and their default max lengths."""
-
-    ERROR = "error"
-    DESCRIPTION = "description"
-    API_KEY = "api_key"
-    GIT_COMMIT = "git_commit"
-    RESPONSE_SCHEMA = "response_schema"
-    PARENT_TASK_ID = "parent_task_id"
-    NAME = "name"
-    FAMILY = "family"
-    FORMAT = "format"
-    CONTENT_TYPE = "content_type"
-    PATH = "path"
-    FILE_PATH = "file_path"
-    FILE_NAME = "file_name"
-    FUNCTION_NAME = "function_name"
-    MODEL = "model"
-    PROVIDER = "provider"
-    TYPE = "type"
-    STATUS = "status"
-    AUTHOR = "author"
-    CHANGE_TYPE = "change_type"
-    NUMBER = "number"
-    MIN_API_VERSION = "min_api_version"
-    RECOMMENDED_REPLACEMENT = "recommended_replacement"
-    DEFAULT_AGENT_TYPE = "default_agent_type"
-    REMINDER_TEMPLATE = "reminder_template"
-    CAPABILITIES_DETECTOR = "capabilities_detector"
-    API_BASE = "api_base"
-    SESSION_ID = "session_id"
-    STORAGE_PATH = "storage_path"
-    BASE_PATH = "base_path"
-    SYSTEM_PROMPT = "system_prompt"
-    USER_PROMPT = "user_prompt"
-    NOTES = "notes"
-    TAX_CODE = "tax_code"
-    GOOGLE_API_KEY = "google_api_key"
-
-    def get_max_length(self) -> int:
-        """Get the default max length for this field pattern."""
-        return FIELD_PATTERN_LENGTHS[self]
-
-
-# Field pattern max lengths
-FIELD_PATTERN_LENGTHS: dict[FieldPattern, int] = {
-    FieldPattern.ERROR: 1000,
-    FieldPattern.DESCRIPTION: 1000,
-    FieldPattern.API_KEY: 512,
-    FieldPattern.GIT_COMMIT: 40,
-    FieldPattern.RESPONSE_SCHEMA: 2000,
-    FieldPattern.PARENT_TASK_ID: 255,
-    FieldPattern.NAME: 255,
-    FieldPattern.FAMILY: 255,
-    FieldPattern.FORMAT: 100,
-    FieldPattern.CONTENT_TYPE: 100,
-    FieldPattern.PATH: 1000,
-    FieldPattern.FILE_PATH: 1000,
-    FieldPattern.FILE_NAME: 255,
-    FieldPattern.FUNCTION_NAME: 255,
-    FieldPattern.MODEL: 255,
-    FieldPattern.PROVIDER: 255,
-    FieldPattern.TYPE: 100,
-    FieldPattern.STATUS: 50,
-    FieldPattern.AUTHOR: 255,
-    FieldPattern.CHANGE_TYPE: 50,
-    FieldPattern.NUMBER: 50,
-    FieldPattern.MIN_API_VERSION: 50,
-    FieldPattern.RECOMMENDED_REPLACEMENT: 255,
-    FieldPattern.DEFAULT_AGENT_TYPE: 100,
-    FieldPattern.REMINDER_TEMPLATE: 1000,
-    FieldPattern.CAPABILITIES_DETECTOR: 255,
-    FieldPattern.API_BASE: 1000,
-    FieldPattern.SESSION_ID: 255,
-    FieldPattern.STORAGE_PATH: 1000,
-    FieldPattern.BASE_PATH: 1000,
-    FieldPattern.SYSTEM_PROMPT: 4000,
-    FieldPattern.USER_PROMPT: 4000,
-    FieldPattern.NOTES: 1000,
-    FieldPattern.TAX_CODE: 50,
-    FieldPattern.GOOGLE_API_KEY: 512,
-}
-
-# Default max lengths for Django field types
-FIELD_TYPE_MAX_LENGTHS: dict[type[models.Field], int] = {
-    models.CharField: 255,
-    models.EmailField: 254,  # RFC 5321
-}
-
-
-def safe_str_tuple(value: Any) -> tuple[str, str]:
-    """Convert a key-value pair to a string tuple safely."""
-    if isinstance(value, list | tuple) and len(value) == 2:
-        return str(value[0]), str(value[1])
-    return str(value), str(value)
-
-
-def _handle_basic_attributes(field_info: FieldInfo) -> dict[str, Any]:
-    """Handle basic field attributes like title and description."""
-    kwargs: dict[str, Any] = {}
-    if hasattr(field_info, "title") and field_info.title:
-        kwargs["verbose_name"] = field_info.title
-    if hasattr(field_info, "description") and field_info.description:
-        kwargs["help_text"] = field_info.description
-    return kwargs
-
-
-def _handle_string_constraints(constraints: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    """Handle string-related constraints."""
-    if "max_length" in constraints:
-        kwargs["max_length"] = constraints["max_length"]
-    if "min_length" in constraints:
-        kwargs["min_length"] = constraints["min_length"]
-
-
-def _handle_numeric_constraints(constraints: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    """Handle numeric constraints like gt, lt, ge, le."""
-    if "gt" in constraints:
-        kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(constraints["gt"])]
-    if "lt" in constraints:
-        kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(constraints["lt"])]
-    if "ge" in constraints:
-        kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(constraints["ge"])]
-    if "le" in constraints:
-        kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(constraints["le"])]
-
-
-def _handle_field_attributes(extra_dict: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    """Handle Django-specific field attributes."""
-    field_attrs = ["verbose_name", "help_text", "unique", "db_index"]
-    for attr in field_attrs:
-        if attr in extra_dict:
-            kwargs[attr] = extra_dict[attr]
-
-
-def _handle_decimal_fields(field_info: FieldInfo, extra_dict: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    """Handle decimal field specific attributes."""
-    if field_info.annotation == Decimal:
-        kwargs["max_digits"] = extra_dict.get("max_digits", 10)
-        kwargs["decimal_places"] = extra_dict.get("decimal_places", 2)
-
-
-def _handle_default_max_length(field_info: FieldInfo, kwargs: dict[str, Any]) -> None:
-    """Handle default max_length for string fields."""
-    if "max_length" not in kwargs:
-        base_type = field_info.annotation
-        if get_origin(base_type) is Union:
-            args = get_args(base_type)
-            base_type = next((t for t in args if t is not type(None)), str)
-        if base_type == str:
-            kwargs["max_length"] = 255
-
-
-def get_field_kwargs(
-    field_name: str,
-    field_info: FieldInfo,
-    extra: Union[JsonDict, dict[str, Any], Callable[..., Any], None],
-) -> dict[str, Any]:
-    """Get kwargs for creating a Django field."""
-    kwargs = {}
-
-    # Convert extra to dict, handling callable case
-    extra_dict = {} if callable(extra) else (dict(extra) if extra is not None else {})
-
-    # Get constraints from field_info metadata
-    metadata = getattr(field_info, "metadata", [])
-
-    # Process constraints from metadata
-    for constraint in metadata:
-        constraint_type = type(constraint).__name__
-        if constraint_type == "MaxLen":
-            kwargs["max_length"] = constraint.max_length
-        elif constraint_type == "_PydanticGeneralMetadata":
-            if hasattr(constraint, "max_digits"):
-                kwargs["max_digits"] = constraint.max_digits
-            if hasattr(constraint, "decimal_places"):
-                kwargs["decimal_places"] = constraint.decimal_places
-        elif constraint_type == "Gt":
-            kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(constraint.gt)]
-        elif constraint_type == "Lt":
-            kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(constraint.lt)]
-
-    # Process constraints from extra_dict
-    if extra_dict:
-        if "max_length" in extra_dict:
-            kwargs["max_length"] = extra_dict["max_length"]
-        if "max_digits" in extra_dict:
-            kwargs["max_digits"] = extra_dict["max_digits"]
-        if "decimal_places" in extra_dict:
-            kwargs["decimal_places"] = extra_dict["decimal_places"]
-        if "gt" in extra_dict:
-            kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(extra_dict["gt"])]
-        if "lt" in extra_dict:
-            kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(extra_dict["lt"])]
-
-    # Handle field metadata
-    if hasattr(field_info, "title") and field_info.title:
-        kwargs["verbose_name"] = field_info.title
-    if hasattr(field_info, "description") and field_info.description:
-        kwargs["help_text"] = field_info.description
-
-    return kwargs
 
 
 def is_pydantic_model(type_: Any) -> bool:
-    """Check if a type is a Pydantic model."""
-    try:
-        return isinstance(type_, type) and issubclass(type_, BaseModel)
-    except TypeError:
-        return False
-
-
-def resolve_field_type(field_type: Any) -> tuple[type[Any], bool]:
     """
-    Resolve the actual type from Optional/Union/List/Set types.
+    Check if a type is a Pydantic model or collection of Pydantic models.
 
     Args:
-        field_type: The type to resolve
+        type_: The type to check
 
     Returns:
-        Tuple of (resolved_type, is_collection)
+        True if the type is a Pydantic model or collection containing Pydantic models
     """
-    is_collection = False
-    origin = get_origin(field_type)
+    try:
+        # Direct Pydantic model check
+        if isinstance(type_, type) and issubclass(type_, BaseModel):
+            return True
 
-    # Handle Optional types (Union[T, None])
-    if origin is Union:
-        args = get_args(field_type)
-        if len(args) == 2 and type(None) in args:
-            field_type = next(arg for arg in args if arg is not type(None))
-            origin = get_origin(field_type)
-        else:
-            return Any, False
+        # Check for collections (List, Dict, Set, etc.)
+        origin = get_origin(type_)
+        if origin in (list, set, dict):
+            args = get_args(type_)
+            return any(is_pydantic_model(arg) for arg in args)
 
-    # Handle generic types
-    if hasattr(field_type, "__origin__"):
-        origin = field_type.__origin__
-        args = field_type.__args__
-
-        # Handle TypeVar and generic parameters
-        if any(hasattr(arg, "__bound__") or str(arg).startswith("~") for arg in args):
-            return Any, False
-
-        # Handle List/Set with generic type parameter
-        if origin in (list, list, set, set):
-            if len(args) == 1:
-                field_type = args[0]
-                is_collection = True
-        elif origin in (dict, dict):
-            return dict, False
-        elif origin is Generic or hasattr(origin, "__parameters__"):
-            return Any, False
-
-    # Handle basic collection types
-    elif origin in (list, list, set, set):
-        args = get_args(field_type)
-        if len(args) == 1:
-            field_type = args[0]
-            is_collection = True
-    elif origin in (dict, dict):
-        return dict, False
-
-    # Handle Protocol types
-    if hasattr(field_type, "__protocol__") or (origin and hasattr(origin, "__protocol__")):
-        return Protocol, False
-
-    # Handle Callable types
-    if origin is Callable or (callable(field_type) and not isinstance(field_type, type)):
-        return Callable, False
-
-    # Handle TypeVar
-    if isinstance(field_type, TypeVar):
-        return Any, False
-
-    # If field_type is None at this point, return Any
-    if field_type is None:
-        return Any, False
-
-    return field_type, is_collection
+        return False
+    except TypeError:
+        return False
 
 
 def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
@@ -442,162 +119,110 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
     return result
 
 
-def get_relationship_field(field_name: str, field_info: FieldInfo, field_type: type[BaseModel]) -> models.Field:
-    """Create a relationship field based on the field type and metadata."""
-    kwargs = get_field_kwargs(field_name, field_info, field_info.json_schema_extra or {})
-    metadata = field_info.json_schema_extra or {}
+class FieldAttributeHandler:
+    """Handles field attribute processing and constraints."""
 
-    # Convert model name to Django model name
-    model_name = field_type.__name__
-    if not model_name.startswith("Django"):
-        model_name = f"Django{model_name}"
+    @staticmethod
+    def handle_field_attributes(
+        field_info: FieldInfo,
+        extra: Union[JsonDict, dict[str, Any], Callable[..., Any], None] = None,
+    ) -> dict[str, Any]:
+        """
+        Process field attributes and constraints to generate Django field kwargs.
 
-    # Use the model name as a string to avoid circular dependencies
-    # Django expects "app_label.ModelName" format
-    to_model = f"testapp.{model_name}"
+        Args:
+            field_info: The Pydantic field info
+            extra: Additional field attributes from json_schema_extra
 
-    # Handle one-to-one relationships
-    if metadata.get("one_to_one", False):
-        kwargs.pop("one_to_one", None)  # Remove one_to_one from kwargs
-        return models.OneToOneField(to_model, on_delete=models.CASCADE, **kwargs)
+        Returns:
+            Dictionary of kwargs for Django field creation
+        """
+        kwargs = {}
+        # Convert extra to dict, handling callable case
+        extra_dict = {} if extra is None or callable(extra) else dict(extra)
 
-    # Handle many-to-many relationships
-    if isinstance(field_info.annotation, list) or get_origin(field_info.annotation) in (
-        list,
-        set,
-    ):
-        return models.ManyToManyField(to_model, **kwargs)
+        # Basic attributes
+        if hasattr(field_info, "title") and field_info.title:
+            kwargs["verbose_name"] = field_info.title
+        if hasattr(field_info, "description") and field_info.description:
+            kwargs["help_text"] = field_info.description
 
-    # Default to ForeignKey
-    return models.ForeignKey(to_model, on_delete=models.CASCADE, **kwargs)
+        # Process constraints from metadata
+        metadata = getattr(field_info, "metadata", [])
+        for constraint in metadata:
+            constraint_type = type(constraint).__name__
+            if constraint_type == "MaxLen":
+                kwargs["max_length"] = constraint.max_length
+            elif constraint_type == "_PydanticGeneralMetadata":
+                if hasattr(constraint, "max_digits"):
+                    kwargs["max_digits"] = constraint.max_digits
+                if hasattr(constraint, "decimal_places"):
+                    kwargs["decimal_places"] = constraint.decimal_places
+            elif constraint_type == "Gt":
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MinValueValidator(constraint.gt)
+                ]
+            elif constraint_type == "Lt":
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MaxValueValidator(constraint.lt)
+                ]
 
+        # Process constraints from extra_dict
+        if extra_dict:
+            # String constraints
+            if "max_length" in extra_dict:
+                kwargs["max_length"] = extra_dict["max_length"]
+            if "min_length" in extra_dict:
+                kwargs["min_length"] = extra_dict["min_length"]
 
-class TypeResolver:
-    """Handles type resolution and field type mapping."""
+            # Numeric constraints
+            if "max_digits" in extra_dict:
+                kwargs["max_digits"] = extra_dict["max_digits"]
+            if "decimal_places" in extra_dict:
+                kwargs["decimal_places"] = extra_dict["decimal_places"]
+            if "gt" in extra_dict:
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MinValueValidator(extra_dict["gt"])
+                ]
+            if "lt" in extra_dict:
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MaxValueValidator(extra_dict["lt"])
+                ]
+            if "ge" in extra_dict:
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MinValueValidator(extra_dict["ge"])
+                ]
+            if "le" in extra_dict:
+                kwargs["validators"] = kwargs.get("validators", []) + [
+                    MaxValueValidator(extra_dict["le"])
+                ]
 
-    def __init__(self):
-        self._field_type_mapping = FIELD_TYPE_MAPPING.copy()
+            # Django-specific field attributes
+            field_attrs = ["verbose_name", "help_text", "unique", "db_index"]
+            for attr in field_attrs:
+                if attr in extra_dict:
+                    kwargs[attr] = extra_dict[attr]
 
-    def resolve_type(self, field_type: Any) -> tuple[type[models.Field], bool]:
-        """Resolve a Python/Pydantic type to a Django field type."""
-        origin_type = get_origin(field_type)
-        is_collection = False
+        # Handle decimal fields
+        if field_info.annotation == Decimal and "max_digits" not in kwargs:
+            kwargs["max_digits"] = extra_dict.get("max_digits", 10)
+            kwargs["decimal_places"] = extra_dict.get("decimal_places", 2)
 
-        # Handle Optional/Union types
-        if origin_type is Union:
-            args = get_args(field_type)
-            if len(args) == 2 and type(None) in args:
-                # For Optional types, use the non-None type
-                field_type = next(arg for arg in args if arg is not type(None))
-                return self.resolve_type(field_type)
-            return models.JSONField, False
+        # Handle default max_length for string fields
+        if "max_length" not in kwargs:
+            base_type = field_info.annotation
+            if get_origin(base_type) is Union:
+                args = get_args(base_type)
+                base_type = next((t for t in args if t is not type(None)), str)
+            if base_type == str:
+                kwargs["max_length"] = 255
 
-        # Handle collection types
-        if origin_type in (list, set, dict):
-            is_collection = True
-            return models.JSONField, is_collection
-
-        # Handle basic types
-        if field_type in self._field_type_mapping:
-            return self._field_type_mapping[field_type], is_collection
-
-        # Try string representation for typing types and suffixes
-        field_type_str = str(field_type)
-        if field_type_str in STRING_TYPE_MAPPING:
-            return STRING_TYPE_MAPPING[field_type_str], is_collection
-
-        # Check for suffix matches using TypeSuffix enum
-        for suffix in TypeSuffix:
-            if field_type_str.endswith(suffix.value):
-                return suffix.get_field_class(), is_collection
-
-        # Handle enums specially
-        if "Enum" in field_type_str:
-            return models.CharField, is_collection
-
-        # Handle class types (non-Pydantic)
-        if isinstance(field_type, type):
-            # Check if the class has a to_json/to_dict method
-            if hasattr(field_type, "to_json") or hasattr(field_type, "to_dict"):
-                return models.JSONField, is_collection
-            # Check if the class has a __str__ method that's not the default object.__str__
-            elif field_type.__str__ is not object.__str__:
-                return models.TextField, is_collection
-            else:
-                # Default to JSONField for class instances
-                return models.JSONField, is_collection
-
-        # Default to JSONField for unknown types
-        logger.debug(f"Using default JSONField for unknown type: {field_type}")
-        return models.JSONField, is_collection
-
-    def register_field_type(self, python_type: type, django_field: type[models.Field]) -> None:
-        """Register a new field type mapping."""
-        self._field_type_mapping[python_type] = django_field
-
-
-class FieldTypeManager:
-    """Manages field type mappings and their configurations."""
-
-    def __init__(self):
-        self._type_resolver = TypeResolver()
-        self._field_type_max_lengths = FIELD_TYPE_MAX_LENGTHS.copy()
-        self._pattern_lengths = FIELD_PATTERN_LENGTHS.copy()
-
-    def get_field_type(self, field_type: Any) -> type[models.Field]:
-        """Get the Django field type for a given Python/Pydantic type."""
-        field_class, _ = self._type_resolver.resolve_type(field_type)
-        return field_class
-
-    def get_default_max_length(self, field_name: str, field_type: type[models.Field]) -> int:
-        """Get the default max_length for a field type."""
-        if field_type == models.CharField:
-            # Check for specific field name patterns
-            field_name_lower = field_name.lower()
-            for pattern in FieldPattern:
-                if pattern.value in field_name_lower:
-                    return self._pattern_lengths[pattern]
-            # If no pattern matched, return default CharField length
-            return self._field_type_max_lengths.get(models.CharField, 255)
-        elif field_type == models.EmailField:
-            return self._field_type_max_lengths.get(models.EmailField, 254)
-        return 255  # Default fallback
-
-    def register_field_type(self, python_type: type, django_field: type[models.Field]) -> None:
-        """Register a new field type mapping."""
-        self._type_resolver.register_field_type(python_type, django_field)
-
-    def register_max_length(self, pattern: FieldPattern, length: int) -> None:
-        """Register a new max_length for a field pattern."""
-        self._pattern_lengths[pattern] = length
+        return kwargs
 
 
-def _handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:
-    """
-    Handle enum field by creating a CharField with choices.
-
-    Args:
-        field_type: The enum class
-        kwargs: Additional field arguments
-
-    Returns:
-        A CharField with choices set from the enum
-    """
-    # Create choices from enum members
-    choices = [(member.value, member.name) for member in field_type]
-
-    # Set max_length based on the longest value if not already set
-    if "max_length" not in kwargs:
-        max_length = max(len(str(choice[0])) for choice in choices)
-        kwargs["max_length"] = max(max_length, 1)  # Ensure at least length 1
-
-    # Add choices to kwargs
-    kwargs["choices"] = choices
-
-    return models.CharField(**kwargs)
-
-
-def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[str, Any]]:
+def handle_id_field(
+    field_name: str, field_info: FieldInfo
+) -> tuple[str, dict[str, Any]]:
     """
     Handle potential ID field naming conflicts with Django's automatic primary key.
 
@@ -625,96 +250,329 @@ def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[s
     return new_field_name, field_kwargs
 
 
+def _handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:
+    """
+    Handle enum field by creating a CharField with choices.
+
+    Args:
+        field_type: The enum class
+        kwargs: Additional field arguments
+
+    Returns:
+        A CharField with choices set from the enum
+    """
+    # Create choices from enum members
+    choices = [(member.value, member.name) for member in field_type]
+
+    # Set max_length based on the longest value if not already set
+    if "max_length" not in kwargs:
+        max_length = max(len(str(choice[0])) for choice in choices)
+        kwargs["max_length"] = max(max_length, 1)  # Ensure at least length 1
+
+    # Add choices to kwargs
+    kwargs["choices"] = choices
+
+    # Create and return the CharField
+    return models.CharField(**kwargs)
+
+
 class FieldConverter:
     """Converts Pydantic fields to Django model fields."""
 
-    def __init__(self):
-        self._type_manager = FieldTypeManager()
+    def __init__(self, app_label: str = "django_llm"):
+        """
+        Initialize the field converter.
 
-    def convert_field(self, field_name: str, field_info: FieldInfo) -> models.Field:
-        """Convert a Pydantic field to a Django field."""
+        Args:
+            app_label: The Django app label to use for model references
+        """
+        self.app_label = app_label
+        self._attribute_handler = FieldAttributeHandler()
+        # Direct reference to TypeMapper for type resolution
+        self._type_mapper = TypeMapper
+
+    def _resolve_field_type(self, field_type: Any) -> tuple[type[models.Field], bool]:
+        """
+        Resolve a Python/Pydantic type to a Django field type.
+
+        Args:
+            field_type: The type to resolve
+
+        Returns:
+            Tuple of (django_field_class, is_collection)
+        """
+        is_collection = False
+        origin_type = get_origin(field_type)
+
+        # Handle Optional types (Union[T, None])
+        if origin_type is Union or str(origin_type) == "types.UnionType":
+            args = get_args(field_type)
+            if len(args) == 2 and type(None) in args:
+                # For Optional types, use the non-None type
+                non_none_type = next(arg for arg in args if arg is not type(None))
+                field_class, is_collection = self._resolve_field_type(non_none_type)
+                return field_class, is_collection
+            return models.JSONField, False
+
+        # Handle collection types
+        if origin_type in (list, set):
+            is_collection = True
+            args = get_args(field_type)
+            if args and len(args) == 1:
+                # Check if the collection contains Pydantic models
+                if is_pydantic_model(args[0]):
+                    # This will be handled by relationship field logic
+                    return models.ManyToManyField, True
+                # Otherwise, use JSONField for collections
+                return models.JSONField, True
+        elif origin_type is dict:
+            return models.JSONField, False
+
+        # Handle generic types with __origin__ attribute
+        if hasattr(field_type, "__origin__"):
+            origin = field_type.__origin__
+            args = field_type.__args__
+
+            # Handle TypeVar and generic parameters
+            if any(
+                hasattr(arg, "__bound__") or str(arg).startswith("~") for arg in args
+            ):
+                return models.JSONField, False
+
+            # Handle List/Set with generic type parameter
+            if origin in (list, set):
+                if len(args) == 1:
+                    if is_pydantic_model(args[0]):
+                        return models.ManyToManyField, True
+                    field_type = args[0]
+                    is_collection = True
+            elif origin in (dict,):
+                return models.JSONField, False
+            elif origin is Generic or hasattr(origin, "__parameters__"):
+                return models.JSONField, False
+
+        # Handle Protocol types
+        if hasattr(field_type, "__protocol__") or (
+            origin_type and hasattr(origin_type, "__protocol__")
+        ):
+            return models.JSONField, False
+
+        # Handle Callable types
+        if origin_type is Callable or (
+            callable(field_type) and not isinstance(field_type, type)
+        ):
+            return models.JSONField, False
+
+        # Handle TypeVar
+        if isinstance(field_type, TypeVar):
+            return models.JSONField, False
+
+        # Handle Pydantic models (direct relationship)
+        if is_pydantic_model(field_type):
+            return models.ForeignKey, False
+
+        # Handle Enum types
+        if isinstance(field_type, type) and issubclass(field_type, Enum):
+            return models.CharField, False
+
+        # Use TypeMapper to find the field type
+        django_field = self._type_mapper.python_to_django_field(field_type)
+        return django_field, is_collection
+
+    def _get_default_max_length(
+        self, field_name: str, field_type: type[models.Field]
+    ) -> int:
+        """
+        Get the default max_length for a field.
+
+        Args:
+            field_name: The name of the field
+            field_type: The Django field type
+
+        Returns:
+            The default max_length value
+        """
+        return self._type_mapper.get_max_length(field_name, field_type) or 255
+
+    def _create_relationship_field(
+        self,
+        field_name: str,
+        field_info: FieldInfo,
+        field_type: Any,
+    ) -> models.Field:
+        """
+        Create a relationship field based on the field type and metadata.
+
+        Args:
+            field_name: The name of the field
+            field_info: The Pydantic field info
+            field_type: The Pydantic model type for the relationship
+
+        Returns:
+            A Django relationship field (ForeignKey, ManyToManyField, or OneToOneField)
+        """
+        # Get field kwargs
+        kwargs = self._attribute_handler.handle_field_attributes(
+            field_info, field_info.json_schema_extra
+        )
+        metadata = field_info.json_schema_extra or {}
+
+        # Convert model name to Django model name
+        from .utils import normalize_model_name
+
+        model_name = normalize_model_name(field_type.__name__)
+
+        # Use the model name as a string to avoid circular dependencies
+        # Django expects "app_label.ModelName" format
+        to_model = f"{self.app_label}.{model_name}"
+
+        # Handle one-to-one relationships
+        if metadata.get("one_to_one", False):
+            kwargs.pop("one_to_one", None)  # Remove one_to_one from kwargs
+            return models.OneToOneField(to_model, on_delete=models.CASCADE, **kwargs)
+
+        # Handle many-to-many relationships
+        origin_type = get_origin(field_info.annotation)
+        if origin_type in (list, set) or isinstance(field_info.annotation, (list, set)):
+            return models.ManyToManyField(to_model, **kwargs)
+
+        # Default to ForeignKey
+        return models.ForeignKey(to_model, on_delete=models.CASCADE, **kwargs)
+
+    def convert_field(
+        self,
+        field_name: str,
+        field_info: FieldInfo,
+        skip_relationships: bool = False,
+    ) -> models.Field:
+        """
+        Convert a Pydantic field to a Django field.
+
+        Args:
+            field_name: The name of the field
+            field_info: The Pydantic field info
+            skip_relationships: Whether to skip relationship fields
+
+        Returns:
+            A Django model field
+        """
         # Handle potential ID field conflicts
         field_name, id_field_kwargs = handle_id_field(field_name, field_info)
 
+        # Get the field type and whether it's a collection
         field_type = field_info.annotation
-        origin_type = get_origin(field_type)
+        django_field_class, is_collection = self._resolve_field_type(field_type)
 
         # Get field kwargs and merge with any ID field kwargs
-        kwargs = get_field_kwargs(field_name, field_info, field_info.json_schema_extra)
+        kwargs = self._attribute_handler.handle_field_attributes(
+            field_info, field_info.json_schema_extra
+        )
         kwargs.update(id_field_kwargs)
 
         # Handle nullable fields
+        origin_type = get_origin(field_type)
         if origin_type is Union:
             args = get_args(field_type)
             if len(args) == 2 and type(None) in args:
                 kwargs["null"] = True
                 kwargs["blank"] = True
                 field_type = next(arg for arg in args if arg is not type(None))
+                django_field_class, is_collection = self._resolve_field_type(field_type)
 
-        # Handle collection relationships
-        if origin_type in (list, set):
-            args = get_args(field_type)
-            if args and is_pydantic_model(args[0]):
-                return self._handle_relationship_field(field_name, args[0], field_info)
+        # Handle optional fields with default=None
+        if field_info.default is None and not field_info.is_required():
+            kwargs["null"] = True
+            kwargs["blank"] = True
 
-        # Handle direct relationships
-        if field_type is not None and is_pydantic_model(field_type):
-            return self._handle_relationship_field(field_name, field_type, field_info)
+        # Handle relationship fields
+        if django_field_class in (
+            models.ForeignKey,
+            models.ManyToManyField,
+            models.OneToOneField,
+        ):
+            if skip_relationships:
+                # If skipping relationships, return a JSONField instead
+                return models.JSONField(**kwargs)
+
+            # Get the related model type
+            if origin_type in (list, set):
+                args = get_args(field_type)
+                if args and is_pydantic_model(args[0]):
+                    return self._create_relationship_field(
+                        field_name, field_info, args[0]
+                    )
+            elif is_pydantic_model(field_type):
+                return self._create_relationship_field(
+                    field_name, field_info, field_type
+                )
 
         # Handle enums
         if isinstance(field_type, type) and issubclass(field_type, Enum):
             return _handle_enum_field(field_type, kwargs)
 
-        # Get Django field class for other types
-        django_field_class = self._type_manager.get_field_type(field_type)
-
         # Handle max_length for CharField if not already set
-        if issubclass(django_field_class, models.CharField) and "max_length" not in kwargs:
-            kwargs["max_length"] = self._type_manager.get_default_max_length(field_name, django_field_class)
+        if (
+            issubclass(django_field_class, models.CharField)
+            and "max_length" not in kwargs
+        ):
+            kwargs["max_length"] = self._get_default_max_length(
+                field_name, django_field_class
+            )
 
         # Create and return the Django field
         return django_field_class(**kwargs)
 
-    def _handle_relationship_field(
-        self, field_name: str, field_type: type[BaseModel], field_info: FieldInfo
-    ) -> models.Field:
-        """Handle relationship fields (OneToOne, ForeignKey, ManyToMany)."""
-        extra = field_info.json_schema_extra or {}
-        kwargs = get_field_kwargs(field_name, field_info, extra)
 
-        # Convert model name to Django model name
-        model_name = field_type.__name__
-        if not model_name.startswith("Django"):
-            model_name = f"Django{model_name}"
+def convert_field(
+    field_name: str,
+    field_info: FieldInfo,
+    skip_relationships: bool = False,
+    app_label: str = "django_llm",
+    model_name: Optional[str] = None,
+) -> Optional[models.Field]:
+    """
+    Convert a Pydantic field to a Django field.
+    This is the main entry point for field conversion.
 
+    Args:
+        field_name: The name of the field
+        field_info: The Pydantic field info
+        skip_relationships: Whether to skip relationship fields
+        app_label: The app label to use for model registration
+        model_name: The name of the model to reference (for relationships)
+
+    Returns:
+        A Django field instance or None if the field should be skipped
+    """
+    # Use the FieldConverter for all field conversion
+    converter = FieldConverter(app_label)
+
+    # Handle special case for direct model relationships when model_name is provided
+    if model_name is not None and is_pydantic_model(field_info.annotation):
         # Use the model name as a string to avoid circular dependencies
         # Django expects "app_label.ModelName" format
-        to_model = f"testapp.{model_name}"
+        to_model = f"{app_label}.{model_name}"
 
-        # Handle OneToOne relationships
-        if extra.get("one_to_one", False):
-            return models.OneToOneField(to_model, on_delete=models.CASCADE, **kwargs)
+        # Handle one-to-one relationships
+        if field_info.annotation is BaseModel:
+            if skip_relationships:
+                return None
+            return models.OneToOneField(
+                to_model,
+                on_delete=models.CASCADE,
+                related_name=f"{field_name}_set",
+            )
 
-        # Handle ManyToMany relationships
-        origin_type = get_origin(field_info.annotation)
-        if origin_type in (list, set):
-            args = get_args(field_info.annotation)
-            if args and is_pydantic_model(args[0]):
-                inner_model_name = args[0].__name__
-                if not inner_model_name.startswith("Django"):
-                    inner_model_name = f"Django{inner_model_name}"
-                to_model = f"testapp.{inner_model_name}"
-                return models.ManyToManyField(to_model, **kwargs)
-            return models.JSONField(**kwargs)
-        elif isinstance(field_info.annotation, (list, set)):
-            return models.JSONField(**kwargs)
+        # Handle lists of models (many-to-many)
+        if get_origin(field_info.annotation) is list and issubclass(
+            get_args(field_info.annotation)[0], BaseModel
+        ):
+            if skip_relationships:
+                return None
+            return models.ManyToManyField(
+                to_model,
+                related_name=f"{field_name}_set",
+            )
 
-        # Default to ForeignKey
-        return models.ForeignKey(to_model, on_delete=models.CASCADE, **kwargs)
-
-
-# Update the get_django_field function to use the converter
-def get_django_field(field_name: str, field_info: FieldInfo, skip_relationships: bool = False) -> models.Field:
-    """Convert a Pydantic field to a Django field."""
-    converter = FieldConverter()
-    return converter.convert_field(field_name, field_info)
+    # Use the converter for standard field conversion
+    return converter.convert_field(field_name, field_info, skip_relationships)

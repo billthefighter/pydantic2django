@@ -6,12 +6,11 @@ from pydantic import BaseModel, ConfigDict
 from pydantic2django.methods import (
     PydanticModelConversionError,
     convert_pydantic_to_django,
-    create_django_model_with_methods,
+    copy_methods_to_django_model,
     get_methods_and_properties,
     is_pydantic_model_type,
     serialize_class_instance,
     deserialize_class_instance,
-    create_django_model_with_methods,
 )
 
 
@@ -42,17 +41,20 @@ def test_get_methods_and_properties(method_model):
 
 
 @pytest.mark.django_db
-def test_create_django_model_with_methods(method_model):
-    """Test creating a Django model with methods and properties from a Pydantic model."""
-    # Create the Django model class
-    django_attrs = {
-        "name": models.CharField(max_length=100),
-        "value": models.IntegerField(),
-    }
+def test_copy_methods_to_django_model(method_model):
+    """Test copying methods and properties from a Pydantic model to a Django model."""
 
-    DjangoModel = create_django_model_with_methods(
-        "TestModel", method_model, django_attrs
-    )
+    # Create a basic Django model class
+    class TestModel(models.Model):
+        name = models.CharField(max_length=100)
+        value = models.IntegerField()
+
+        class Meta:
+            app_label = "tests"
+            db_table = "tests_testmodel"
+
+    # Copy methods and properties from the Pydantic model
+    DjangoModel = copy_methods_to_django_model(TestModel, method_model)
 
     # Ensure the model has the expected methods and properties
     assert hasattr(DjangoModel, "class_method")

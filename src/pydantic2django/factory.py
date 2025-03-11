@@ -1,4 +1,4 @@
-from typing import Any, Generic, Optional, cast
+from typing import Any, Generic, Optional, cast, Callable
 
 from django.db import models
 
@@ -7,7 +7,7 @@ from django.db import models
 from .types import DjangoBaseModel, T
 
 # Forward reference to make_django_model to be imported at runtime
-make_django_model = None
+make_django_model: Optional[Callable] = None
 
 
 def _init_imports():
@@ -54,6 +54,12 @@ class DjangoModelFactory(Generic[T]):
         Returns:
             A tuple of (django_model, field_updates) where django_model has proper type hints
         """
+        # Ensure imports are initialized
+        if make_django_model is None:
+            _init_imports()
+            if make_django_model is None:
+                raise ImportError("Failed to import make_django_model")
+
         # Ensure DjangoBaseModel is in the inheritance chain
         if base_django_model:
             if not issubclass(base_django_model, DjangoBaseModel):
@@ -85,7 +91,8 @@ class DjangoModelFactory(Generic[T]):
         )
 
         # Store reference to the Pydantic model
-        django_model._pydantic_model = pydantic_model
+        # Use setattr to avoid linter errors
+        setattr(django_model, "_pydantic_model", pydantic_model)
 
         # Ensure the model is not abstract by setting Meta attributes
         meta_attrs = {
@@ -96,7 +103,9 @@ class DjangoModelFactory(Generic[T]):
 
         # Create a new Meta class with our attributes
         meta = type("Meta", (), meta_attrs)
-        django_model.Meta = meta
+
+        # Use setattr to avoid linter errors
+        setattr(django_model, "Meta", meta)
 
         # Cast to proper type for IDE support
         return cast(type[DjangoBaseModel[T]], django_model), field_updates
@@ -117,6 +126,12 @@ class DjangoModelFactory(Generic[T]):
         Returns:
             An abstract Django model class with proper type hints
         """
+        # Ensure imports are initialized
+        if make_django_model is None:
+            _init_imports()
+            if make_django_model is None:
+                raise ImportError("Failed to import make_django_model")
+
         # Set abstract=True in Meta options
         kwargs["abstract"] = True
 
@@ -129,6 +144,7 @@ class DjangoModelFactory(Generic[T]):
         )
 
         # Add type hints
-        django_model._pydantic_model = pydantic_model  # type: ignore
+        # Use setattr to avoid linter errors
+        setattr(django_model, "_pydantic_model", pydantic_model)
 
         return cast(type[DjangoBaseModel[T]], django_model)
