@@ -68,22 +68,31 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
     Returns:
         A valid Python identifier
     """
-    # Start with model name and field name to ensure uniqueness
-    prefix = ""
-    if model_name:
-        prefix += f"{model_name.lower()}_"
-    if field_name:
-        prefix += f"{field_name.lower()}_"
-
     # Handle empty or None name
     if not name:
         name = "related"
+
+    # Convert camelCase and PascalCase to snake_case
+    # Insert underscore between lowercase and uppercase letters
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
     # Replace invalid characters with underscores
     name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
     # Remove consecutive underscores
     name = re.sub(r"_+", "_", name)
+
+    # Start with model name and field name to ensure uniqueness
+    prefix = ""
+    if model_name and field_name:
+        expected_prefix = f"{model_name.lower()}_{field_name.lower()}"
+        # Only add prefix if the name doesn't already contain it
+        if expected_prefix != name and not name.startswith(f"{expected_prefix}_"):
+            prefix = f"{expected_prefix}_"
+    elif model_name:
+        prefix += f"{model_name.lower()}_"
+    elif field_name:
+        prefix += f"{field_name.lower()}_"
 
     # Preserve leading underscore if it exists
     has_leading_underscore = name.startswith("_")
@@ -132,6 +141,9 @@ class FieldAttributeHandler:
         # Convert extra to dict, handling callable case
         extra_dict = {} if extra is None or callable(extra) else dict(extra)
 
+        # Check if field type is Decimal for proper constraint handling
+        is_decimal_field = field_info.annotation == Decimal
+
         # Basic attributes
         if hasattr(field_info, "title") and field_info.title:
             kwargs["verbose_name"] = field_info.title
@@ -150,9 +162,13 @@ class FieldAttributeHandler:
                 if hasattr(constraint, "decimal_places"):
                     kwargs["decimal_places"] = constraint.decimal_places
             elif constraint_type == "Gt":
-                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(constraint.gt)]
+                # Convert to Decimal if field is Decimal type
+                gt_value = Decimal(str(constraint.gt)) if is_decimal_field else constraint.gt
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(gt_value)]
             elif constraint_type == "Lt":
-                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(constraint.lt)]
+                # Convert to Decimal if field is Decimal type
+                lt_value = Decimal(str(constraint.lt)) if is_decimal_field else constraint.lt
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(lt_value)]
 
         # Process constraints from extra_dict
         if extra_dict:
@@ -168,13 +184,21 @@ class FieldAttributeHandler:
             if "decimal_places" in extra_dict:
                 kwargs["decimal_places"] = extra_dict["decimal_places"]
             if "gt" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(extra_dict["gt"])]
+                # Convert to Decimal if field is Decimal type
+                gt_value = Decimal(str(extra_dict["gt"])) if is_decimal_field else extra_dict["gt"]
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(gt_value)]
             if "lt" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(extra_dict["lt"])]
+                # Convert to Decimal if field is Decimal type
+                lt_value = Decimal(str(extra_dict["lt"])) if is_decimal_field else extra_dict["lt"]
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(lt_value)]
             if "ge" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(extra_dict["ge"])]
+                # Convert to Decimal if field is Decimal type
+                ge_value = Decimal(str(extra_dict["ge"])) if is_decimal_field else extra_dict["ge"]
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(ge_value)]
             if "le" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(extra_dict["le"])]
+                # Convert to Decimal if field is Decimal type
+                le_value = Decimal(str(extra_dict["le"])) if is_decimal_field else extra_dict["le"]
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(le_value)]
 
             # Django-specific field attributes
             field_attrs = ["verbose_name", "help_text", "unique", "db_index"]
@@ -215,14 +239,10 @@ def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[s
 
     # Check if this is an ID field (case insensitive)
     if field_name.lower() == "id":
-        # Rename the field to custom_id or similar
-        new_field_name = "custom_id"
-        # Add db_column to maintain the original column name in database
-        field_kwargs["db_column"] = field_name
+        # Set as primary key
+        field_kwargs["primary_key"] = True
         # Add a helpful comment in verbose_name
-        field_kwargs[
-            "verbose_name"
-        ] = f"Custom {field_name} (renamed from '{field_name}' to avoid conflict with Django's primary key)"
+        field_kwargs["verbose_name"] = f"Custom {field_name} (used as primary key)"
 
     return new_field_name, field_kwargs
 

@@ -94,6 +94,15 @@ def test_factory_with_discovery():
         # Add the temp directory to sys.path
         sys.path.insert(0, str(temp_dir))
 
+        # Force reload of the test_package module to ensure our changes are picked up
+        if "test_package" in sys.modules:
+            del sys.modules["test_package"]
+        if "test_package.models" in sys.modules:
+            del sys.modules["test_package.models"]
+
+        # Import the module to ensure it's properly loaded
+        import test_package.models  # type: ignore # noqa
+
         # Use discovery to find models
         discovery_instance = discovery.ModelDiscovery()
         discovery_instance.discover_models(["test_package"])
@@ -151,6 +160,15 @@ def test_factory_with_discovery_relationships():
     try:
         # Add the temp directory to sys.path
         sys.path.insert(0, str(temp_dir))
+
+        # Force reload of the test_package module to ensure our changes are picked up
+        if "test_package" in sys.modules:
+            del sys.modules["test_package"]
+        if "test_package.models" in sys.modules:
+            del sys.modules["test_package.models"]
+
+        # Import the module to ensure it's properly loaded
+        import test_package.models  # type: ignore # noqa
 
         # Use discovery to find models
         discovery_instance = discovery.ModelDiscovery()
