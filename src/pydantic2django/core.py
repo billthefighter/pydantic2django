@@ -110,11 +110,7 @@ def make_django_model(
             continue
 
     # If we have invalid fields, raise a ValueError
-    if (
-        invalid_fields
-        and not skip_relationships
-        and not options.get("ignore_errors", False)
-    ):
+    if invalid_fields and not skip_relationships and not options.get("ignore_errors", False):
         error_msg = "Failed to convert the following fields:\n"
         for field_name, error in invalid_fields:
             error_msg += f"  - {field_name}: {error}\n"
@@ -122,28 +118,20 @@ def make_django_model(
 
     # If we're updating an existing model, return only the relationship fields
     if existing_model:
-        logger.debug(
-            f"Returning relationship fields for existing model {existing_model.__name__}"
-        )
+        logger.debug(f"Returning relationship fields for existing model {existing_model.__name__}")
         return existing_model, relationship_fields
 
     # Check for field collisions if a base Django model is provided
     if base_django_model:
         base_fields = base_django_model._meta.get_fields()
         base_field_names = {field.name for field in base_fields}
-        logger.debug(
-            f"Checking field collisions with base model {base_django_model.__name__}"
-        )
+        logger.debug(f"Checking field collisions with base model {base_django_model.__name__}")
 
         # Check for collisions
         collision_fields = set(django_fields.keys()) & base_field_names
         if collision_fields:
-            logger.error(
-                f"Field collision detected with base model: {collision_fields}"
-            )
-            raise ValueError(
-                f"Field collision detected with base model. Conflicting fields: {collision_fields}"
-            )
+            logger.error(f"Field collision detected with base model: {collision_fields}")
+            raise ValueError(f"Field collision detected with base model. Conflicting fields: {collision_fields}")
 
     # Determine base classes
     base_classes = [base_django_model] if base_django_model else [models.Model]
@@ -151,9 +139,7 @@ def make_django_model(
 
     # Set up Meta options
     meta_app_label = options["app_label"]
-    meta_db_table = options.get(
-        "db_table", f"{meta_app_label}_{pydantic_model.__name__.lower()}"
-    )
+    meta_db_table = options.get("db_table", f"{meta_app_label}_{pydantic_model.__name__.lower()}")
 
     # Create Meta class
     meta_attrs = {

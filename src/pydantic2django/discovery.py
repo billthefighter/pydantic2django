@@ -7,10 +7,10 @@ Pydantic models as Django models.
 import importlib
 import inspect
 import logging
-import re
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional, cast, get_args, get_origin, Callable, TypeVar
+from typing import Any, Optional, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.db import models
@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
-def get_model_dependencies_recursive(
-    model: type[models.Model], app_label: str
-) -> set[str]:
+def get_model_dependencies_recursive(model: type[models.Model], app_label: str) -> set[str]:
     """
     Get all dependencies for a model recursively.
 
@@ -79,9 +77,7 @@ def get_model_dependencies_recursive(
     return deps
 
 
-def validate_model_references(
-    models: dict[str, type], dependencies: dict[str, set[str]]
-) -> list[str]:
+def validate_model_references(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
     """
     Validate that all model references exist.
 
@@ -96,9 +92,7 @@ def validate_model_references(
     for model_name, deps in dependencies.items():
         for dep in deps:
             if dep not in models and dep != "self":
-                errors.append(
-                    f"Model '{model_name}' references non-existent model '{dep}'"
-                )
+                errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
     return errors
 
 
@@ -304,15 +298,11 @@ class ModelDiscovery:
             discover_models(['my_package'], filter_function=custom_filter)
             ```
         """
-        logger.info(
-            f"Discovering models from packages {package_names} for {app_label}..."
-        )
+        logger.info(f"Discovering models from packages {package_names} for {app_label}...")
 
         # Discover models from all packages
         for package_name in package_names:
-            discovered_models = self._discover_models_from_package(
-                package_name, app_label=app_label
-            )
+            discovered_models = self._discover_models_from_package(package_name, app_label=app_label)
 
             # Apply filter function if provided
             if filter_function:
@@ -334,9 +324,7 @@ class ModelDiscovery:
                             del self.dependencies[model_name]
 
                 if filtered_out:
-                    logger.info(
-                        f"Filtered out {len(filtered_out)} models: {', '.join(filtered_out)}"
-                    )
+                    logger.info(f"Filtered out {len(filtered_out)} models: {', '.join(filtered_out)}")
 
         logger.info(f"Discovered {len(self.discovered_models)} models")
 
@@ -362,9 +350,7 @@ class ModelDiscovery:
             # Handle modules without __file__ attribute (e.g., dynamically created modules in tests)
             if not hasattr(package, "__file__") or not package.__file__:
                 # For modules without __file__, directly inspect the module's attributes
-                logger.info(
-                    f"Module {package_name} has no __file__ attribute, inspecting directly"
-                )
+                logger.info(f"Module {package_name} has no __file__ attribute, inspecting directly")
                 for name, obj in inspect.getmembers(package):
                     logger.info(f"Inspecting {name}: {obj}")
                     if is_pydantic_model(obj):
@@ -373,9 +359,7 @@ class ModelDiscovery:
                         discovered_models[model_name] = obj
                     else:
                         if inspect.isclass(obj):
-                            logger.info(
-                                f"Not a Pydantic model: {name}, bases: {obj.__bases__}"
-                            )
+                            logger.info(f"Not a Pydantic model: {name}, bases: {obj.__bases__}")
 
                 # Update registry state before returning
                 self.discovered_models.update(discovered_models)
@@ -383,9 +367,7 @@ class ModelDiscovery:
                 # Update normalized models (but defer dependency analysis)
                 for model_name, model_cls in discovered_models.items():
                     self.normalized_models[model_name] = model_cls
-                    self.dependencies[
-                        model_name
-                    ] = set()  # Initialize empty dependencies
+                    self.dependencies[model_name] = set()  # Initialize empty dependencies
 
                 return discovered_models
 
@@ -398,9 +380,7 @@ class ModelDiscovery:
 
                 # Convert file path to module path
                 relative_path = py_file.relative_to(package_path)
-                module_path = (
-                    f"{package_name}.{'.'.join(relative_path.with_suffix('').parts)}"
-                )
+                module_path = f"{package_name}.{'.'.join(relative_path.with_suffix('').parts)}"
 
                 try:
                     # Import the module
@@ -447,9 +427,7 @@ class ModelDiscovery:
         """
         return self.setup_models(app_label, skip_admin)
 
-    def setup_models(
-        self, app_label: str = "django_llm", skip_admin: bool = False
-    ) -> dict[str, type[models.Model]]:
+    def setup_models(self, app_label: str = "django_llm", skip_admin: bool = False) -> dict[str, type[models.Model]]:
         """
         Set up all discovered models with proper relationships.
 
@@ -469,17 +447,13 @@ class ModelDiscovery:
         for model_name, pydantic_model in self.discovered_models.items():
             logger.info(f"Creating Django model for {model_name}")
             try:
-                django_model, _ = DjangoModelFactory[Any].create_model(
-                    pydantic_model, app_label=app_label
-                )
+                django_model, _ = DjangoModelFactory[Any].create_model(pydantic_model, app_label=app_label)
                 self.django_models[model_name] = django_model
                 logger.info(f"Successfully created Django model: {django_model}")
 
                 # Register the model with Django's app registry
                 register_django_model(django_model, app_label)
-                logger.info(
-                    f"Registered model with Django app registry: {django_model._meta.model_name}"
-                )
+                logger.info(f"Registered model with Django app registry: {django_model._meta.model_name}")
             except Exception as e:
                 logger.error(f"Error creating Django model for {model_name}: {e}")
 
@@ -527,15 +501,11 @@ class ModelDiscovery:
         if self._registration_order is None:
             errors = self.validate_dependencies()
             if errors:
-                raise ValueError(
-                    f"Cannot determine registration order due to dependency errors: {errors}"
-                )
+                raise ValueError(f"Cannot determine registration order due to dependency errors: {errors}")
             self._registration_order = topological_sort(self.dependencies)
         return self._registration_order
 
-    def register_models(
-        self, app_label: str = "django_llm"
-    ) -> dict[str, type[models.Model]]:
+    def register_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
         """
         Register all discovered models in dependency order.
 
@@ -626,9 +596,7 @@ class ModelDiscovery:
         """Get all discovered Pydantic models."""
         return self.discovered_models
 
-    def get_django_models(
-        self, app_label: str = "django_llm"
-    ) -> dict[str, type[models.Model]]:
+    def get_django_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
         """Get all registered Django models for the given app label."""
         return self.django_models
 
@@ -667,9 +635,7 @@ class ModelDiscovery:
                 return cast(type[DjangoBaseModel[T]], model)
 
         # If not found, try to create it
-        django_model, _ = DjangoModelFactory[T].create_model(
-            actual_model, app_label=app_label
-        )
+        django_model, _ = DjangoModelFactory[T].create_model(actual_model, app_label=app_label)
 
         return django_model
 
@@ -738,9 +704,7 @@ def discover_models(
     discovery.discover_models(package_names, app_label, filter_function)
 
 
-def setup_dynamic_models(
-    app_label: str = "django_llm", skip_admin: bool = False
-) -> dict[str, type[models.Model]]:
+def setup_dynamic_models(app_label: str = "django_llm", skip_admin: bool = False) -> dict[str, type[models.Model]]:
     """
     Set up dynamic models from discovered Pydantic models.
 
@@ -783,9 +747,7 @@ def get_django_models(app_label: str = "django_llm") -> dict[str, type[models.Mo
     return discovery.get_django_models(app_label)
 
 
-def get_django_model(
-    pydantic_model: type[T], app_label: str = "django_llm"
-) -> type[DjangoBaseModel[T]]:
+def get_django_model(pydantic_model: type[T], app_label: str = "django_llm") -> type[DjangoBaseModel[T]]:
     """
     Get a Django model with proper type hints for a given Pydantic model.
 

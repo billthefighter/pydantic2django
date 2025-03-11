@@ -2,11 +2,10 @@
 Support for copying methods and properties from Pydantic to Django models.
 """
 import functools
-import inspect
 import logging
 from collections.abc import Callable
 from inspect import Parameter, getmembers, isdatadescriptor, isroutine, signature
-from typing import Any, cast, get_args, get_origin
+from typing import Any, cast
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -100,10 +99,7 @@ def serialize_class_instance(instance: Any) -> str | dict:
         return instance.to_json()
     elif hasattr(instance, "to_dict"):
         return instance.to_dict()
-    elif (
-        hasattr(instance, "__str__")
-        and instance.__class__.__str__ is not object.__str__
-    ):
+    elif hasattr(instance, "__str__") and instance.__class__.__str__ is not object.__str__:
         # Use __str__ if it's been overridden
         return str(instance)
     elif hasattr(instance, "__dict__"):
@@ -117,9 +113,7 @@ def serialize_class_instance(instance: Any) -> str | dict:
         return str(instance)
 
 
-def deserialize_class_instance(
-    data: str | dict, class_registry: dict[str, type] | None = None
-) -> Any:
+def deserialize_class_instance(data: str | dict, class_registry: dict[str, type] | None = None) -> Any:
     """
     Deserialize data back into a class instance.
 
@@ -150,9 +144,7 @@ def deserialize_class_instance(
                 module = __import__(module_name, fromlist=[class_name])
                 cls = getattr(module, class_name)
             except (ImportError, AttributeError) as e:
-                logger.warning(
-                    f"Could not reconstruct class {class_name} from module {module_name}: {e}"
-                )
+                logger.warning(f"Could not reconstruct class {class_name} from module {module_name}: {e}")
                 return data
 
         # Create a new instance and update its dict
@@ -197,9 +189,7 @@ def convert_pydantic_to_django(
     if isinstance(value, BaseModel):
         # Get the Django model class - normalize_model_name already adds the Django prefix
         model_name = normalize_model_name(value.__class__.__name__)
-        logger.debug(
-            f"Converting Pydantic model {value.__class__.__name__} to Django model {model_name}"
-        )
+        logger.debug(f"Converting Pydantic model {value.__class__.__name__} to Django model {model_name}")
         try:
             django_model = cast(
                 type[models.Model],
@@ -222,9 +212,7 @@ def convert_pydantic_to_django(
                         field_value,
                         (BaseModel, dict, list, set, str, int, float, bool, type(None)),
                     ):
-                        converted_data[field_name] = serialize_class_instance(
-                            field_value
-                        )
+                        converted_data[field_name] = serialize_class_instance(field_value)
                         continue
 
                     if isinstance(field_value, (BaseModel, dict)):
@@ -241,56 +229,35 @@ def convert_pydantic_to_django(
                                 )
                             else:
                                 # Try to create the instance directly
-                                if (
-                                    hasattr(field, "related_model")
-                                    and field.related_model
-                                ):
+                                if hasattr(field, "related_model") and field.related_model:
                                     # Get the model name safely
                                     related_model = field.related_model
                                     # Use getattr with a default to safely access __name__
-                                    related_model_name = getattr(
-                                        related_model, "__name__", str(related_model)
-                                    )
-                                    nested_model_name = normalize_model_name(
-                                        related_model_name
-                                    )
-                                    logger.debug(
-                                        f"Looking up Django model for nested model {nested_model_name}"
-                                    )
+                                    related_model_name = getattr(related_model, "__name__", str(related_model))
+                                    nested_model_name = normalize_model_name(related_model_name)
+                                    logger.debug(f"Looking up Django model for nested model {nested_model_name}")
                                     try:
                                         nested_django_model = apps.get_model(
                                             app_label,
                                             nested_model_name.replace("Django", ""),
                                         )
-                                        logger.debug(
-                                            f"Creating nested instance with data: {field_value}"
-                                        )
+                                        logger.debug(f"Creating nested instance with data: {field_value}")
                                         # Create the instance
-                                        nested_instance = nested_django_model(
-                                            **field_value
-                                        )
+                                        nested_instance = nested_django_model(**field_value)
                                         nested_instance.save()
                                     except Exception as e:
-                                        logger.warning(
-                                            f"Error creating nested instance: {str(e)}"
-                                        )
+                                        logger.warning(f"Error creating nested instance: {str(e)}")
                                         continue
                                 else:
-                                    logger.warning(
-                                        f"Could not determine related model for field {field_name}"
-                                    )
+                                    logger.warning(f"Could not determine related model for field {field_name}")
                                     continue
-                            logger.debug(
-                                f"Created nested instance with ID {nested_instance.pk}"
-                            )
+                            logger.debug(f"Created nested instance with ID {nested_instance.pk}")
                             converted_data[field_name] = nested_instance
                         else:
                             if return_pydantic_model:
                                 converted_data[field_name] = field_value
                             else:
-                                raise PydanticModelConversionError(
-                                    f"Field {field_name} is not a relation field"
-                                )
+                                raise PydanticModelConversionError(f"Field {field_name} is not a relation field")
                     elif isinstance(field_value, (list, set)):
                         if isinstance(field, models.ManyToManyField):
                             logger.debug(f"Processing many-to-many field {field_name}")
@@ -308,10 +275,7 @@ def convert_pydantic_to_django(
                                         )
                                     else:
                                         # Try to create the instance directly
-                                        if (
-                                            hasattr(field, "related_model")
-                                            and field.related_model
-                                        ):
+                                        if hasattr(field, "related_model") and field.related_model:
                                             # Get the model name safely
                                             related_model = field.related_model
                                             # Use getattr with a default to safely access __name__
@@ -320,37 +284,25 @@ def convert_pydantic_to_django(
                                                 "__name__",
                                                 str(related_model),
                                             )
-                                            nested_model_name = normalize_model_name(
-                                                related_model_name
-                                            )
+                                            nested_model_name = normalize_model_name(related_model_name)
                                             try:
                                                 nested_django_model = apps.get_model(
                                                     app_label,
-                                                    nested_model_name.replace(
-                                                        "Django", ""
-                                                    ),
+                                                    nested_model_name.replace("Django", ""),
                                                 )
-                                                logger.debug(
-                                                    f"Creating M2M instance with data: {item}"
-                                                )
+                                                logger.debug(f"Creating M2M instance with data: {item}")
                                                 # Create the instance
-                                                nested_instance = nested_django_model(
-                                                    **item
-                                                )
+                                                nested_instance = nested_django_model(**item)
                                                 nested_instance.save()
                                             except Exception as e:
-                                                logger.warning(
-                                                    f"Error creating M2M instance: {str(e)}"
-                                                )
+                                                logger.warning(f"Error creating M2M instance: {str(e)}")
                                                 continue
                                         else:
                                             logger.warning(
                                                 f"Could not determine related model for M2M field {field_name}"
                                             )
                                             continue
-                                    logger.debug(
-                                        f"Created M2M instance with ID {nested_instance.pk}"
-                                    )
+                                    logger.debug(f"Created M2M instance with ID {nested_instance.pk}")
                                     converted_list.append(nested_instance)
                                 else:
                                     converted_list.append(item)
@@ -370,9 +322,7 @@ def convert_pydantic_to_django(
 
             # Set many-to-many relationships
             for field_name, field_value in m2m_data.items():
-                logger.debug(
-                    f"Setting M2M relationship {field_name} with values: {field_value}"
-                )
+                logger.debug(f"Setting M2M relationship {field_name} with values: {field_value}")
                 getattr(instance, field_name).set(field_value)
 
             logger.debug(f"Successfully created instance with ID {instance.pk}")
@@ -390,33 +340,18 @@ def convert_pydantic_to_django(
 
     # Handle collections
     if isinstance(value, list):
-        return [
-            convert_pydantic_to_django(
-                item, app_label, return_pydantic_model, class_registry
-            )
-            for item in value
-        ]
+        return [convert_pydantic_to_django(item, app_label, return_pydantic_model, class_registry) for item in value]
     if isinstance(value, set):
-        return {
-            convert_pydantic_to_django(
-                item, app_label, return_pydantic_model, class_registry
-            )
-            for item in value
-        }
+        return {convert_pydantic_to_django(item, app_label, return_pydantic_model, class_registry) for item in value}
     if isinstance(value, dict):
         return {
-            k: convert_pydantic_to_django(
-                v, app_label, return_pydantic_model, class_registry
-            )
-            for k, v in value.items()
+            k: convert_pydantic_to_django(v, app_label, return_pydantic_model, class_registry) for k, v in value.items()
         }
 
     return value
 
 
-def wrap_method_for_conversion(
-    method: Callable, return_type: Any, return_pydantic_model: bool = False
-) -> Callable:
+def wrap_method_for_conversion(method: Callable, return_type: Any, return_pydantic_model: bool = False) -> Callable:
     """
     Wrap a method to convert its Pydantic return value to Django model instance(s).
 
@@ -445,9 +380,7 @@ def wrap_method_for_conversion(
                 app_label = instance.__class__._meta.app_label
 
             # For test cases, use return_pydantic_model=True to avoid app_label issues
-            return convert_pydantic_to_django(
-                result, app_label=app_label, return_pydantic_model=True
-            )
+            return convert_pydantic_to_django(result, app_label=app_label, return_pydantic_model=True)
         return result
 
     return wrapper
@@ -496,9 +429,7 @@ def copy_method(method: Any, return_pydantic_model: bool = False) -> Any:
     return func
 
 
-def get_methods_and_properties(
-    model: type[BaseModel], return_pydantic_model: bool = False
-) -> dict[str, Any]:
+def get_methods_and_properties(model: type[BaseModel], return_pydantic_model: bool = False) -> dict[str, Any]:
     """
     Extract methods and properties from a Pydantic model.
 

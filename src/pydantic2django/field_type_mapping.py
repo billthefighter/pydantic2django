@@ -1,30 +1,24 @@
-from django.db import models
-from typing import (
-    Any,
-    Union,
-    Protocol,
-    Callable,
-    Dict,
-    Type,
-    Optional,
-    Tuple,
-    get_origin,
-    get_args,
-    List,
-    ClassVar,
-)
 import datetime
+from collections.abc import Callable
 from datetime import date, time, timedelta
 from decimal import Decimal
-from uuid import UUID
-from pathlib import Path
 from enum import Enum
-from pydantic import BaseModel
+from logging import getLogger
+from pathlib import Path
+from typing import (
+    Any,
+    Optional,
+    Protocol,
+    Union,
+    get_args,
+    get_origin,
+)
+from uuid import UUID
+
+from django.db import models
 
 # EmailStr and IPvAnyAddress are likely from pydantic
-from pydantic import EmailStr, IPvAnyAddress, Json
-
-from logging import getLogger
+from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 
 logger = getLogger(__name__)
 
@@ -37,15 +31,13 @@ class TypeMappingDefinition(BaseModel):
     with optional additional attributes like max_length.
     """
 
-    python_type: Type
-    django_field: Type[models.Field]
+    python_type: type
+    django_field: type[models.Field]
     max_length: Optional[int] = None
 
     # Class methods for creating common field types
     @classmethod
-    def char_field(
-        cls, python_type: Type, max_length: int = 255
-    ) -> "TypeMappingDefinition":
+    def char_field(cls, python_type: type, max_length: int = 255) -> "TypeMappingDefinition":
         """Create a CharField mapping with the specified max_length."""
         return cls(
             python_type=python_type,
@@ -54,19 +46,17 @@ class TypeMappingDefinition(BaseModel):
         )
 
     @classmethod
-    def text_field(cls, python_type: Type) -> "TypeMappingDefinition":
+    def text_field(cls, python_type: type) -> "TypeMappingDefinition":
         """Create a TextField mapping."""
         return cls(python_type=python_type, django_field=models.TextField)
 
     @classmethod
-    def json_field(cls, python_type: Type) -> "TypeMappingDefinition":
+    def json_field(cls, python_type: type) -> "TypeMappingDefinition":
         """Create a JSONField mapping."""
         return cls(python_type=python_type, django_field=models.JSONField)
 
     @classmethod
-    def email_field(
-        cls, python_type: Type = EmailStr, max_length: int = 254
-    ) -> "TypeMappingDefinition":
+    def email_field(cls, python_type: type = EmailStr, max_length: int = 254) -> "TypeMappingDefinition":
         """Create an EmailField mapping with the specified max_length."""
         return cls(
             python_type=python_type,
@@ -108,31 +98,23 @@ class TypeMappingDefinition(BaseModel):
 
     def matches_type_str(self, type_str: str) -> bool:
         """Check if this definition matches the string representation of a type."""
-        return str(self.python_type) == type_str or type_str.endswith(
-            str(self.python_type)
-        )
+        return str(self.python_type) == type_str or type_str.endswith(str(self.python_type))
 
 
 # Define all type mappings as TypeMappingDefinition instances
-TYPE_MAPPINGS: List[TypeMappingDefinition] = [
+TYPE_MAPPINGS: list[TypeMappingDefinition] = [
     # Basic Python types
-    TypeMappingDefinition(
-        python_type=str, django_field=models.CharField, max_length=255
-    ),
+    TypeMappingDefinition(python_type=str, django_field=models.CharField, max_length=255),
     TypeMappingDefinition(python_type=int, django_field=models.IntegerField),
     TypeMappingDefinition(python_type=float, django_field=models.FloatField),
     TypeMappingDefinition(python_type=bool, django_field=models.BooleanField),
-    TypeMappingDefinition(
-        python_type=datetime.datetime, django_field=models.DateTimeField
-    ),
+    TypeMappingDefinition(python_type=datetime.datetime, django_field=models.DateTimeField),
     TypeMappingDefinition(python_type=date, django_field=models.DateField),
     TypeMappingDefinition(python_type=time, django_field=models.TimeField),
     TypeMappingDefinition(python_type=timedelta, django_field=models.DurationField),
     TypeMappingDefinition(python_type=Decimal, django_field=models.DecimalField),
     TypeMappingDefinition(python_type=UUID, django_field=models.UUIDField),
-    TypeMappingDefinition(
-        python_type=EmailStr, django_field=models.EmailField, max_length=254
-    ),
+    TypeMappingDefinition(python_type=EmailStr, django_field=models.EmailField, max_length=254),
     TypeMappingDefinition(python_type=bytes, django_field=models.BinaryField),
     # Collection types
     TypeMappingDefinition.json_field(dict),
@@ -142,9 +124,7 @@ TYPE_MAPPINGS: List[TypeMappingDefinition] = [
     TypeMappingDefinition(python_type=Path, django_field=models.FilePathField),
     TypeMappingDefinition.char_field(Enum),
     TypeMappingDefinition.char_field(type),
-    TypeMappingDefinition(
-        python_type=IPvAnyAddress, django_field=models.GenericIPAddressField
-    ),
+    TypeMappingDefinition(python_type=IPvAnyAddress, django_field=models.GenericIPAddressField),
     TypeMappingDefinition.json_field(Json),
 ]
 
@@ -174,16 +154,9 @@ class TypeMapper:
             TypeMappingDefinition if found, None otherwise
         """
         # Handle special typing forms that aren't concrete types
-        if (
-            python_type is Any
-            or python_type is Union
-            or python_type is Protocol
-            or python_type is Callable
-        ):
+        if python_type is Any or python_type is Union or python_type is Protocol or python_type is Callable:
             # Default to JSONField for these special forms
-            return TypeMappingDefinition(
-                python_type=dict, django_field=models.JSONField
-            )
+            return TypeMappingDefinition(python_type=dict, django_field=models.JSONField)
 
         for mapping in TYPE_MAPPINGS:
             if mapping.matches_type(python_type):
@@ -208,9 +181,7 @@ class TypeMapper:
         return None
 
     @classmethod
-    def filter_by_django_field(
-        cls, django_field: Type[models.Field]
-    ) -> List[TypeMappingDefinition]:
+    def filter_by_django_field(cls, django_field: type[models.Field]) -> list[TypeMappingDefinition]:
         """
         Filter mappings by Django field type.
 
@@ -220,9 +191,7 @@ class TypeMapper:
         Returns:
             List of TypeMappingDefinition instances with the specified Django field
         """
-        return [
-            mapping for mapping in TYPE_MAPPINGS if mapping.django_field == django_field
-        ]
+        return [mapping for mapping in TYPE_MAPPINGS if mapping.django_field == django_field]
 
     @classmethod
     def is_type_supported(cls, python_type: Any) -> bool:
@@ -251,7 +220,7 @@ class TypeMapper:
         return cls.get_mapping_for_type_str(type_str) is not None
 
     @classmethod
-    def get_all_mappings(cls) -> List[TypeMappingDefinition]:
+    def get_all_mappings(cls) -> list[TypeMappingDefinition]:
         """
         Get all available type mappings.
 
@@ -261,9 +230,7 @@ class TypeMapper:
         return TYPE_MAPPINGS
 
     @classmethod
-    def get_django_field_for_type(
-        cls, python_type: Any, strict: bool = True
-    ) -> Type[models.Field]:
+    def get_django_field_for_type(cls, python_type: Any, strict: bool = True) -> type[models.Field]:
         """
         Get the Django field type for a Python type.
 
@@ -282,18 +249,14 @@ class TypeMapper:
             return mapping.django_field
 
         if strict:
-            raise cls.UnsupportedTypeError(
-                f"No Django field mapping found for Python type: {python_type}"
-            )
+            raise cls.UnsupportedTypeError(f"No Django field mapping found for Python type: {python_type}")
 
         # Default to JSONField as a fallback if not strict
         logger.warning(f"No mapping found for {python_type}, defaulting to JSONField")
         return models.JSONField
 
     @classmethod
-    def get_django_field_for_type_str(
-        cls, type_str: str, strict: bool = True
-    ) -> Type[models.Field]:
+    def get_django_field_for_type_str(cls, type_str: str, strict: bool = True) -> type[models.Field]:
         """
         Get the Django field type for a type string.
 
@@ -312,16 +275,14 @@ class TypeMapper:
             return mapping.django_field
 
         if strict:
-            raise cls.UnsupportedTypeError(
-                f"No Django field mapping found for type string: {type_str}"
-            )
+            raise cls.UnsupportedTypeError(f"No Django field mapping found for type string: {type_str}")
 
         # Default to JSONField as a fallback if not strict
         logger.warning(f"No mapping found for {type_str}, defaulting to JSONField")
         return models.JSONField
 
     @classmethod
-    def get_field_attributes(cls, python_type: Any) -> Dict[str, Any]:
+    def get_field_attributes(cls, python_type: Any) -> dict[str, Any]:
         """
         Get the field attributes (like max_length) for a Python type.
 
@@ -360,7 +321,7 @@ class TypeMapper:
         TYPE_MAPPINGS.append(mapping)
 
     @classmethod
-    def python_to_django_field(cls, python_type: Any) -> Type[models.Field]:
+    def python_to_django_field(cls, python_type: Any) -> type[models.Field]:
         """
         Get the Django field type for a Python type.
         Alias for get_django_field_for_type with strict=False.
@@ -374,9 +335,7 @@ class TypeMapper:
         return cls.get_django_field_for_type(python_type, strict=False)
 
     @classmethod
-    def get_max_length(
-        cls, field_name: str, field_type: Type[models.Field]
-    ) -> Optional[int]:
+    def get_max_length(cls, field_name: str, field_type: type[models.Field]) -> Optional[int]:
         """
         Get the default max_length for a field based on field name and type.
 

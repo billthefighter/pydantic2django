@@ -4,35 +4,26 @@ Field mapping between Pydantic and Django models.
 import logging
 import re
 from collections.abc import Callable
-from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from pathlib import Path
 from typing import (
     Any,
     Generic,
-    Protocol,
+    Optional,
     TypeVar,
     Union,
     get_args,
     get_origin,
-    Optional,
 )
-from uuid import UUID
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pydantic.config import JsonDict
 from pydantic.fields import FieldInfo
-from pydantic.networks import IPvAnyAddress
-from pydantic.types import Json
 
-from .types import DjangoField
 from .field_type_mapping import (
     TypeMapper,
-    TypeMappingDefinition,
-    TYPE_MAPPINGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,13 +150,9 @@ class FieldAttributeHandler:
                 if hasattr(constraint, "decimal_places"):
                     kwargs["decimal_places"] = constraint.decimal_places
             elif constraint_type == "Gt":
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MinValueValidator(constraint.gt)
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(constraint.gt)]
             elif constraint_type == "Lt":
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MaxValueValidator(constraint.lt)
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(constraint.lt)]
 
         # Process constraints from extra_dict
         if extra_dict:
@@ -181,21 +168,13 @@ class FieldAttributeHandler:
             if "decimal_places" in extra_dict:
                 kwargs["decimal_places"] = extra_dict["decimal_places"]
             if "gt" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MinValueValidator(extra_dict["gt"])
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(extra_dict["gt"])]
             if "lt" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MaxValueValidator(extra_dict["lt"])
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(extra_dict["lt"])]
             if "ge" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MinValueValidator(extra_dict["ge"])
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MinValueValidator(extra_dict["ge"])]
             if "le" in extra_dict:
-                kwargs["validators"] = kwargs.get("validators", []) + [
-                    MaxValueValidator(extra_dict["le"])
-                ]
+                kwargs["validators"] = kwargs.get("validators", []) + [MaxValueValidator(extra_dict["le"])]
 
             # Django-specific field attributes
             field_attrs = ["verbose_name", "help_text", "unique", "db_index"]
@@ -220,9 +199,7 @@ class FieldAttributeHandler:
         return kwargs
 
 
-def handle_id_field(
-    field_name: str, field_info: FieldInfo
-) -> tuple[str, dict[str, Any]]:
+def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[str, Any]]:
     """
     Handle potential ID field naming conflicts with Django's automatic primary key.
 
@@ -334,9 +311,7 @@ class FieldConverter:
             args = field_type.__args__
 
             # Handle TypeVar and generic parameters
-            if any(
-                hasattr(arg, "__bound__") or str(arg).startswith("~") for arg in args
-            ):
+            if any(hasattr(arg, "__bound__") or str(arg).startswith("~") for arg in args):
                 return models.JSONField, False
 
             # Handle List/Set with generic type parameter
@@ -352,15 +327,11 @@ class FieldConverter:
                 return models.JSONField, False
 
         # Handle Protocol types
-        if hasattr(field_type, "__protocol__") or (
-            origin_type and hasattr(origin_type, "__protocol__")
-        ):
+        if hasattr(field_type, "__protocol__") or (origin_type and hasattr(origin_type, "__protocol__")):
             return models.JSONField, False
 
         # Handle Callable types
-        if origin_type is Callable or (
-            callable(field_type) and not isinstance(field_type, type)
-        ):
+        if origin_type is Callable or (callable(field_type) and not isinstance(field_type, type)):
             return models.JSONField, False
 
         # Handle TypeVar
@@ -379,9 +350,7 @@ class FieldConverter:
         django_field = self._type_mapper.python_to_django_field(field_type)
         return django_field, is_collection
 
-    def _get_default_max_length(
-        self, field_name: str, field_type: type[models.Field]
-    ) -> int:
+    def _get_default_max_length(self, field_name: str, field_type: type[models.Field]) -> int:
         """
         Get the default max_length for a field.
 
@@ -412,9 +381,7 @@ class FieldConverter:
             A Django relationship field (ForeignKey, ManyToManyField, or OneToOneField)
         """
         # Get field kwargs
-        kwargs = self._attribute_handler.handle_field_attributes(
-            field_info, field_info.json_schema_extra
-        )
+        kwargs = self._attribute_handler.handle_field_attributes(field_info, field_info.json_schema_extra)
         metadata = field_info.json_schema_extra or {}
 
         # Convert model name to Django model name
@@ -464,9 +431,7 @@ class FieldConverter:
         django_field_class, is_collection = self._resolve_field_type(field_type)
 
         # Get field kwargs and merge with any ID field kwargs
-        kwargs = self._attribute_handler.handle_field_attributes(
-            field_info, field_info.json_schema_extra
-        )
+        kwargs = self._attribute_handler.handle_field_attributes(field_info, field_info.json_schema_extra)
         kwargs.update(id_field_kwargs)
 
         # Handle nullable fields
@@ -498,26 +463,17 @@ class FieldConverter:
             if origin_type in (list, set):
                 args = get_args(field_type)
                 if args and is_pydantic_model(args[0]):
-                    return self._create_relationship_field(
-                        field_name, field_info, args[0]
-                    )
+                    return self._create_relationship_field(field_name, field_info, args[0])
             elif is_pydantic_model(field_type):
-                return self._create_relationship_field(
-                    field_name, field_info, field_type
-                )
+                return self._create_relationship_field(field_name, field_info, field_type)
 
         # Handle enums
         if isinstance(field_type, type) and issubclass(field_type, Enum):
             return _handle_enum_field(field_type, kwargs)
 
         # Handle max_length for CharField if not already set
-        if (
-            issubclass(django_field_class, models.CharField)
-            and "max_length" not in kwargs
-        ):
-            kwargs["max_length"] = self._get_default_max_length(
-                field_name, django_field_class
-            )
+        if issubclass(django_field_class, models.CharField) and "max_length" not in kwargs:
+            kwargs["max_length"] = self._get_default_max_length(field_name, django_field_class)
 
         # Create and return the Django field
         return django_field_class(**kwargs)
@@ -564,9 +520,7 @@ def convert_field(
             )
 
         # Handle lists of models (many-to-many)
-        if get_origin(field_info.annotation) is list and issubclass(
-            get_args(field_info.annotation)[0], BaseModel
-        ):
+        if get_origin(field_info.annotation) is list and issubclass(get_args(field_info.annotation)[0], BaseModel):
             if skip_relationships:
                 return None
             return models.ManyToManyField(

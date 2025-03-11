@@ -14,20 +14,20 @@ from .discovery import (
     ModelDiscovery,
     discover_models,
     get_discovered_models,
-    get_django_models,
     get_django_model,
-    setup_dynamic_models,
-    normalize_model_name,
+    get_django_models,
     get_model_dependencies_recursive,
-    validate_model_references,
-    topological_sort,
+    normalize_model_name,
     register_django_model,
+    setup_dynamic_models,
+    topological_sort,
+    validate_model_references,
 )
 from .factory import DjangoModelFactory
 from .field_type_mapping import (
+    TYPE_MAPPINGS,
     TypeMapper,
     TypeMappingDefinition,
-    TYPE_MAPPINGS,
 )
 from .types import DjangoBaseModel
 

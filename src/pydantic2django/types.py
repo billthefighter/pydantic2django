@@ -1,4 +1,4 @@
-from typing import Any, Generic, TypeVar, cast, Union
+from typing import Any, Generic, TypeVar, Union, cast
 
 from django.db import models
 from pydantic import BaseModel
@@ -67,9 +67,7 @@ class DjangoBaseModel(models.Model, Generic[T]):
             return attr
 
         # If attribute not found, raise AttributeError
-        raise AttributeError(
-            f"'{self.__class__.__name__}' object has no attribute '{name}'"
-        )
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     @classmethod
     def from_pydantic(cls, pydantic_instance: T) -> "DjangoBaseModel[T]":

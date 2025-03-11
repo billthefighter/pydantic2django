@@ -1,4 +1,5 @@
-from typing import Any, Generic, Optional, cast, Callable
+from collections.abc import Callable
+from typing import Any, Generic, Optional, cast
 
 from django.db import models
 
@@ -92,7 +93,7 @@ class DjangoModelFactory(Generic[T]):
 
         # Store reference to the Pydantic model
         # Use setattr to avoid linter errors
-        setattr(django_model, "_pydantic_model", pydantic_model)
+        django_model._pydantic_model = pydantic_model
 
         # Ensure the model is not abstract by setting Meta attributes
         meta_attrs = {
@@ -105,7 +106,7 @@ class DjangoModelFactory(Generic[T]):
         meta = type("Meta", (), meta_attrs)
 
         # Use setattr to avoid linter errors
-        setattr(django_model, "Meta", meta)
+        django_model.Meta = meta
 
         # Cast to proper type for IDE support
         return cast(type[DjangoBaseModel[T]], django_model), field_updates
@@ -145,6 +146,6 @@ class DjangoModelFactory(Generic[T]):
 
         # Add type hints
         # Use setattr to avoid linter errors
-        setattr(django_model, "_pydantic_model", pydantic_model)
+        django_model._pydantic_model = pydantic_model
 
         return cast(type[DjangoBaseModel[T]], django_model)
