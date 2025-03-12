@@ -17,15 +17,6 @@ PydanticUndefined = None
 {% endfor %}
 {% endif %}
 
-def get_module_path(object_type: str) -> str:
-    # Map object types to their module paths
-    module_mappings = {
-        {% for model_name, module_path in module_mappings.items() %}
-        "{{ model_name }}": "{{ module_path }}",
-        {% endfor %}
-    }
-    return module_mappings.get(object_type, "")
-
 {% for model_definition in model_definitions %}
 {{ model_definition }}
 

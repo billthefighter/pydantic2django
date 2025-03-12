@@ -219,8 +219,8 @@ class StaticDjangoModelGenerator:
         """
         from datetime import datetime
 
-        # Generate module mappings
-        module_mappings = self._generate_module_mappings(pydantic_models)
+        # Generate module mappings and store as instance attribute
+        self._module_mappings = self._generate_module_mappings(pydantic_models)
 
         # Generate model definitions
         model_definitions = []
@@ -258,11 +258,17 @@ class StaticDjangoModelGenerator:
             else:
                 logger.warning("Continuing with partial model generation despite errors")
 
+        # Custom imports for the template
+        custom_imports = [
+            "from pydantic import BaseModel",
+            "from typing import Any, Optional, Dict, List, Union",
+        ]
+
         # Prepare template context
         template_context = {
             "generation_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "imports": [],  # Add any additional imports here if needed
-            "module_mappings": module_mappings,
+            "imports": custom_imports,
+            "module_mappings": self._module_mappings,
             "model_definitions": model_definitions,
             "all_models": ", ".join(model_names),
         }
@@ -270,7 +276,23 @@ class StaticDjangoModelGenerator:
         # Render the template
         try:
             template = self.jinja_env.get_template("models_file.py.j2")
-            return template.render(**template_context)
+            rendered = template.render(**template_context)
+
+            # Replace PydanticUndefined with a proper implementation
+            rendered = rendered.replace(
+                "PydanticUndefined = None",
+                """# Define a proper undefined type that won't cause issues with Django
+class UndefinedType:
+    def __repr__(self):
+        return "Undefined"
+
+    def __bool__(self):
+        return False
+
+PydanticUndefined = UndefinedType()""",
+            )
+
+            return rendered
         except Exception as e:
             logger.error(f"Error rendering template for models_file.py.j2: {str(e)}")
             raise ValueError(f"Failed to render models file template: {str(e)}") from e
@@ -300,9 +322,11 @@ class StaticDjangoModelGenerator:
             # Try to get fields from _meta
             if hasattr(meta, "fields"):
                 for field in meta.fields:
-                    if field.name != "id" or getattr(field, "primary_key", False):
-                        field_str = self.field_to_string(field)
-                        fields.append((field.name, field_str))
+                    # Skip the ID field since Pydantic2DjangoBaseClass already provides it
+                    if field.name == "id" and not getattr(field, "primary_key", False):
+                        continue
+                    field_str = self.field_to_string(field)
+                    fields.append((field.name, field_str))
 
                 # Also get many-to-many fields
                 if hasattr(meta, "many_to_many"):
@@ -314,6 +338,9 @@ class StaticDjangoModelGenerator:
             if not fields and hasattr(django_model, "__dict__"):
                 for name, attr in django_model.__dict__.items():
                     if isinstance(attr, models.Field):
+                        # Skip the ID field since Pydantic2DjangoBaseClass already provides it
+                        if name == "id":
+                            continue
                         field_str = self.field_to_string(attr)
                         fields.append((name, field_str))
         except Exception as e:
@@ -329,8 +356,8 @@ class StaticDjangoModelGenerator:
                 # Get fields from Pydantic model
                 pydantic_fields = get_model_fields(pydantic_model)
                 for name, field_info in pydantic_fields.items():
-                    # Skip special fields
-                    if name.startswith("_"):
+                    # Skip special fields and id field
+                    if name.startswith("_") or name == "id":
                         continue
 
                     # Convert field
@@ -358,13 +385,44 @@ class StaticDjangoModelGenerator:
         # Get original name (without Django prefix)
         original_name = model_name[6:] if model_name.startswith("Django") else model_name
 
+        # Get verbose name and verbose name plural
+        verbose_name = getattr(meta, "verbose_name", original_name)
+
+        # For verbose_name_plural, don't just append 's' if it's already a sentence
+        verbose_name_plural = getattr(meta, "verbose_name_plural", None)
+        if verbose_name_plural is None:
+            # If verbose_name contains spaces or punctuation, it's likely a sentence
+            if any(c in verbose_name for c in " .,;:!?"):
+                verbose_name_plural = verbose_name  # Don't append 's' to sentences
+            else:
+                verbose_name_plural = f"{verbose_name}s"  # Append 's' to simple names
+
         # Prepare meta data for the template
         meta_data = {
             "db_table": getattr(meta, "db_table", f"{original_name.lower()}"),
             "app_label": self.app_label,
-            "verbose_name": getattr(meta, "verbose_name", original_name),
-            "verbose_name_plural": getattr(meta, "verbose_name_plural", f"{original_name}s"),
+            "verbose_name": verbose_name,
+            "verbose_name_plural": verbose_name_plural,
         }
+
+        # Get the module path for the Pydantic class
+        module_path = ""
+        if pydantic_model is not None:
+            module_path = pydantic_model.__module__
+        else:
+            # Try to find the module path from the module mappings in the class
+            module_mappings = getattr(self, "_module_mappings", {})
+            if original_name in module_mappings:
+                module_path = module_mappings.get(original_name, "")
+            else:
+                # As a fallback, check if there's a module path in the Meta class
+                # First check PydanticConfig
+                pydantic_config = getattr(django_model, "PydanticConfig", None)
+                if pydantic_config and hasattr(pydantic_config, "module_path"):
+                    module_path = pydantic_config.module_path
+                # For backward compatibility, also check Meta
+                elif hasattr(meta, "pydantic_module_path"):
+                    module_path = meta.pydantic_module_path
 
         # Prepare template context
         template_context = {
@@ -372,6 +430,7 @@ class StaticDjangoModelGenerator:
             "original_name": original_name,
             "fields": fields,
             "meta": meta_data,
+            "module_path": module_path,
         }
 
         # Render the template
@@ -401,16 +460,22 @@ class StaticDjangoModelGenerator:
         else:
             kwargs["blank"] = False
 
+        # Handle default values - avoid using PydanticUndefined
         if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
+            # Skip defaults that would be PydanticUndefined
             if field.default is None:
                 kwargs["default"] = None
-            elif isinstance(field.default, int | float | bool):
-                kwargs["default"] = field.default
-            elif isinstance(field.default, str):
-                kwargs["default"] = f'"{field.default}"'
-            else:
-                # For complex defaults, use repr
-                kwargs["default"] = repr(field.default)
+            elif (
+                isinstance(field.default, (int, float, bool, str))
+                or field.default.__class__.__name__ != "UndefinedType"
+            ):
+                if isinstance(field.default, int | float | bool):
+                    kwargs["default"] = field.default
+                elif isinstance(field.default, str):
+                    kwargs["default"] = f'"{field.default}"'
+                else:
+                    # For complex defaults, use repr
+                    kwargs["default"] = repr(field.default)
 
         # Handle field-specific attributes
         if field_class == "CharField" or field_class == "TextField":
