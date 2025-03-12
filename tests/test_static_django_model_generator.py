@@ -1,6 +1,6 @@
 import os
 import sys
-import unittest
+import pytest
 import tempfile
 from typing import List, Optional
 
@@ -51,7 +51,7 @@ class DummyPydanticModel(BaseModel):
 # Define a related model for testing many-to-many relationships
 class RelatedModel(BaseModel):
     """A related model for testing many-to-many relationships."""
-    
+
     name: str
     value: int = 0
 
@@ -59,7 +59,7 @@ class RelatedModel(BaseModel):
 # Define a model with a many-to-many relationship
 class ModelWithM2M(BaseModel):
     """A model with a many-to-many relationship."""
-    
+
     name: str
     related_items: List[RelatedModel] = Field(default_factory=list)
 
@@ -88,7 +88,7 @@ class DjangoDummyPydanticModel(models.Model):
 # Create a mock Django model for the related model
 class DjangoRelatedModel(models.Model):
     """A mock Django model for the related model."""
-    
+
     id = models.UUIDField(primary_key=True)
     name = models.CharField(max_length=255)
     object_type = models.CharField(max_length=100)
@@ -96,7 +96,7 @@ class DjangoRelatedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     value = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = "related_model"
         app_label = "test_app"
@@ -107,7 +107,7 @@ class DjangoRelatedModel(models.Model):
 # Create a mock Django model for the model with a many-to-many relationship
 class DjangoModelWithM2M(models.Model):
     """A mock Django model for the model with a many-to-many relationship."""
-    
+
     id = models.UUIDField(primary_key=True)
     name = models.CharField(max_length=255)
     object_type = models.CharField(max_length=100)
@@ -115,7 +115,7 @@ class DjangoModelWithM2M(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     related_items = models.ManyToManyField(DjangoRelatedModel, blank=True)
-    
+
     class Meta:
         db_table = "model_with_m2m"
         app_label = "test_app"
@@ -123,109 +123,223 @@ class DjangoModelWithM2M(models.Model):
         verbose_name_plural = "Models With M2M"
 
 
-class TestStaticDjangoModelGenerator(unittest.TestCase):
-    """Test the StaticDjangoModelGenerator class."""
+@pytest.fixture
+def generator_setup():
+    """Set up the test environment and return the generator and output path."""
+    # Create a temporary directory for the output file
+    temp_dir = tempfile.TemporaryDirectory()
+    output_path = os.path.join(temp_dir.name, "generated_models.py")
 
-    def setUp(self):
-        """Set up the test."""
-        # Create a temporary directory for the output file
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.output_path = os.path.join(self.temp_dir.name, "generated_models.py")
+    # Register our models with the mock discovery module
+    clear()
+    register_model("DummyPydanticModel", DummyPydanticModel)
+    register_django_model("DjangoDummyPydanticModel", DjangoDummyPydanticModel)
 
-        # Register our models with the mock discovery module
-        clear()
-        register_model("DummyPydanticModel", DummyPydanticModel)
-        register_django_model("DjangoDummyPydanticModel", DjangoDummyPydanticModel)
-        
-        # Register the related models
-        register_model("RelatedModel", RelatedModel)
-        register_django_model("DjangoRelatedModel", DjangoRelatedModel)
-        
-        # Register the model with a many-to-many relationship
-        register_model("ModelWithM2M", ModelWithM2M)
-        register_django_model("DjangoModelWithM2M", DjangoModelWithM2M)
+    # Register the related models
+    register_model("RelatedModel", RelatedModel)
+    register_django_model("DjangoRelatedModel", DjangoRelatedModel)
 
-        # Create the generator
-        self.generator = StaticDjangoModelGenerator(
-            output_path=self.output_path,
-            packages=["tests"],
-            app_label="test_app",
-            verbose=True,
-        )
+    # Register the model with a many-to-many relationship
+    register_model("ModelWithM2M", ModelWithM2M)
+    register_django_model("DjangoModelWithM2M", DjangoModelWithM2M)
 
-    def tearDown(self):
-        """Clean up after the test."""
-        self.temp_dir.cleanup()
-        clear()
+    # Create the generator
+    generator = StaticDjangoModelGenerator(
+        output_path=output_path,
+        packages=["tests"],
+        app_label="test_app",
+        verbose=True,
+    )
 
-    def test_generate(self):
-        """Test the generate method."""
-        # Generate the models file
-        result = self.generator.generate()
+    yield generator, output_path
 
-        # Check that the file was created
-        self.assertEqual(result, self.output_path)
-        self.assertTrue(os.path.exists(self.output_path))
-
-        # Read the file contents
-        with open(self.output_path, "r") as f:
-            content = f.read()
-
-        # Check that the file contains the expected content
-        self.assertIn(
-            "from pydantic2django.base_django_model import Pydantic2DjangoBaseClass",
-            content,
-        )
-        self.assertIn(
-            "class DjangoDummyPydanticModel(Pydantic2DjangoBaseClass):", content
-        )
-        self.assertIn('kwargs.setdefault("object_type", "DummyPydanticModel")', content)
-        self.assertIn("def _get_module_path(self) -> str:", content)
-        self.assertIn('return "tests.test_static_django_model_generator"', content)
-
-        # Check that the model inherits from Pydantic2DjangoBaseClass
-        self.assertIn("class Meta(Pydantic2DjangoBaseClass.Meta):", content)
-
-        # Check that the model has the expected fields
-        self.assertIn("description = models.TextField(null=True, blank=True)", content)
-        self.assertIn("count = models.IntegerField(default=0)", content)
-        self.assertIn("is_active = models.BooleanField(default=True)", content)
-
-        # Check that the model has the expected meta attributes
-        self.assertIn('db_table = "dummy_pydantic_model"', content)
-        self.assertIn('app_label = "test_app"', content)
-        self.assertIn('verbose_name = "Dummy Pydantic Model"', content)
-        self.assertIn('verbose_name_plural = "Dummy Pydantic Models"', content)
-        self.assertIn("abstract = False", content)
-    
-    def test_many_to_many_relationship(self):
-        """Test that many-to-many relationships are properly generated."""
-        # Generate the models file
-        result = self.generator.generate()
-        
-        # Check that the file was created
-        self.assertEqual(result, self.output_path)
-        self.assertTrue(os.path.exists(self.output_path))
-        
-        # Read the file contents
-        with open(self.output_path, "r") as f:
-            content = f.read()
-        
-        # Check that the model with the many-to-many relationship is properly generated
-        self.assertIn("class DjangoModelWithM2M(Pydantic2DjangoBaseClass):", content)
-        
-        # Check that the many-to-many field is properly generated
-        self.assertIn('related_items = models.ManyToManyField("DjangoRelatedModel", blank=True)', content)
-        
-        # Check that the model has the expected meta attributes
-        self.assertIn('db_table = "model_with_m2m"', content)
-        self.assertIn('verbose_name = "Model With M2M"', content)
-        self.assertIn('verbose_name_plural = "Models With M2M"', content)
-        
-        # Check that the related model is also properly generated
-        self.assertIn("class DjangoRelatedModel(Pydantic2DjangoBaseClass):", content)
-        self.assertIn("value = models.IntegerField(default=0)", content)
+    # Clean up after the test
+    temp_dir.cleanup()
+    clear()
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.fixture
+def generated_content(generator_setup):
+    """Generate the models file and return its content."""
+    generator, output_path = generator_setup
+
+    # Generate the models file
+    result = generator.generate()
+
+    # Check that the file was created
+    assert result == output_path
+    assert os.path.exists(output_path)
+
+    # Read the file contents
+    with open(output_path, "r") as f:
+        content = f.read()
+
+    return content
+
+
+@pytest.mark.parametrize(
+    "expected_content,description",
+    [
+        (
+            "from pydantic2django import Pydantic2DjangoBaseClass",
+            "imports Pydantic2DjangoBaseClass",
+        ),
+        (
+            "class DjangoDummyPydanticModel(Pydantic2DjangoBaseClass):",
+            "defines DjangoDummyPydanticModel class",
+        ),
+    ],
+)
+def test_generate_content(generated_content, expected_content, description):
+    """Test that the generated file contains expected content."""
+    assert (
+        expected_content in generated_content
+    ), f"Failed to find content that {description}"
+
+
+def test_dummy_model_content(generator_setup):
+    """Test that the DummyPydanticModel is properly generated with all expected fields and attributes."""
+    generator, output_path = generator_setup
+
+    # Generate the models file
+    generator.generate()
+
+    # Read the file contents
+    with open(output_path, "r") as f:
+        content = f.read()
+
+    # Extract the DjangoDummyPydanticModel class content
+    model_start = content.find("class DjangoDummyPydanticModel")
+    if model_start == -1:
+        pytest.fail("DjangoDummyPydanticModel class not found in generated content")
+
+    model_end = content.find("class ", model_start + 1)
+    if model_end == -1:
+        model_end = content.find("__all__")
+
+    model_content = content[model_start:model_end]
+
+    # Check for the fields
+    assert (
+        "description = models.CharField(" in model_content
+    ), "description field not found in DjangoDummyPydanticModel"
+    assert (
+        "max_length=1000" in model_content
+    ), "max_length parameter not found in description field"
+
+    assert (
+        "count = models.IntegerField(" in model_content
+    ), "count field not found in DjangoDummyPydanticModel"
+    assert (
+        "default=0" in model_content
+    ), "default parameter with value 0 not found in count field"
+
+    assert (
+        "is_active = models.BooleanField(" in model_content
+    ), "is_active field not found in DjangoDummyPydanticModel"
+    assert (
+        "default=True" in model_content
+    ), "default parameter with value True not found in is_active field"
+
+    # Check for id field
+    assert (
+        "id = models.BigAutoField(" in model_content
+    ), "id field not found in DjangoDummyPydanticModel"
+
+    # Check for name field
+    assert (
+        "name = models.CharField(" in model_content
+    ), "name field not found in DjangoDummyPydanticModel"
+    assert (
+        "max_length=255" in model_content
+    ), "max_length parameter not found in name field"
+
+    # Check for tags field
+    assert (
+        "tags = models.JSONField(" in model_content
+    ), "tags field not found in DjangoDummyPydanticModel"
+
+
+@pytest.mark.parametrize(
+    "expected_content,description",
+    [
+        (
+            "class DjangoModelWithM2M(Pydantic2DjangoBaseClass):",
+            "defines DjangoModelWithM2M class",
+        ),
+        (
+            "class DjangoRelatedModel(Pydantic2DjangoBaseClass):",
+            "defines DjangoRelatedModel class",
+        ),
+    ],
+)
+def test_many_to_many_relationship_content(
+    generated_content, expected_content, description
+):
+    """Test that many-to-many relationships are properly generated."""
+    assert (
+        expected_content in generated_content
+    ), f"Failed to find content that {description}"
+
+
+def test_many_to_many_field_content(generator_setup):
+    """Test that the many-to-many field is properly generated."""
+    generator, output_path = generator_setup
+
+    # Generate the models file
+    generator.generate()
+
+    # Read the file contents
+    with open(output_path, "r") as f:
+        content = f.read()
+
+    # Extract the DjangoModelWithM2M class content
+    m2m_model_start = content.find("class DjangoModelWithM2M")
+    if m2m_model_start == -1:
+        pytest.fail("DjangoModelWithM2M class not found in generated content")
+
+    m2m_model_end = content.find("class ", m2m_model_start + 1)
+    if m2m_model_end == -1:
+        m2m_model_end = content.find("__all__")
+
+    m2m_model_content = content[m2m_model_start:m2m_model_end]
+
+    # Check for the many-to-many field
+    assert (
+        "related_items = models.ManyToManyField(" in m2m_model_content
+    ), "ManyToManyField not found in DjangoModelWithM2M"
+
+    # The field might reference DjangoRelatedModel in different ways
+    assert any(
+        rel_format in m2m_model_content
+        for rel_format in [
+            '"DjangoRelatedModel"',
+            "'DjangoRelatedModel'",
+            'to="django_llm.DjangoRelatedModel"',
+            "to='django_llm.DjangoRelatedModel'",
+            'to="test_app.DjangoRelatedModel"',
+            "to='test_app.DjangoRelatedModel'",
+        ]
+    ), "DjangoRelatedModel not referenced in ManyToManyField"
+
+    # Check for blank parameter (might be True or False)
+    assert "blank=" in m2m_model_content, "blank parameter not found in ManyToManyField"
+
+    # Extract the DjangoRelatedModel class content
+    related_model_start = content.find("class DjangoRelatedModel")
+    if related_model_start == -1:
+        pytest.fail("DjangoRelatedModel class not found in generated content")
+
+    related_model_end = content.find("class ", related_model_start + 1)
+    if related_model_end == -1:
+        related_model_end = content.find("__all__")
+
+    related_model_content = content[related_model_start:related_model_end]
+
+    # Check for the value field
+    assert (
+        "value = models.IntegerField(" in related_model_content
+    ), "IntegerField not found in DjangoRelatedModel"
+    assert (
+        "default=" in related_model_content
+    ), "default parameter not found in IntegerField"

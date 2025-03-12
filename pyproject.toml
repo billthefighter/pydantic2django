@@ -34,6 +34,7 @@ types-setuptools = "*"
 types-python-dateutil = "*"
 types-requests = "*"
 types-PyYAML = "*"
+parameterized = "^0.9.0"
 
 [build-system]
 requires = ["poetry-core"]

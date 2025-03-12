@@ -1,6 +1,6 @@
-class Django{{ model_name }}(Pydantic2DjangoBaseClass):
-    {% for field in fields %}
-    {{ field.name }} = {{ field.definition }}
+class {{ model_name }}(Pydantic2DjangoBaseClass):
+    {% for field_name, field_definition in fields %}
+    {{ field_name }} = {{ field_definition }}
     {% endfor %}
     class Meta(Pydantic2DjangoBaseClass.Meta):
         db_table = "{{ meta.db_table }}"

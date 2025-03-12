@@ -126,7 +126,7 @@ class Pydantic2DjangoBaseClass(models.Model):
         }
 
         # Check each Django field to see if it matches a Pydantic field
-        for field_name, field in django_fields.items():
+        for field_name, _ in django_fields.items():
             if field_name in exclude_fields:
                 continue
 
@@ -172,7 +172,8 @@ class Pydantic2DjangoBaseClass(models.Model):
         }
 
         # Check each Django field to see if it matches a field in the JSON data
-        for field_name, field in django_fields.items():
+        updated_fields = []
+        for field_name, _ in django_fields.items():
             if field_name in exclude_fields:
                 continue
 
@@ -183,6 +184,8 @@ class Pydantic2DjangoBaseClass(models.Model):
 
                 # Set the Django field value
                 setattr(self, field_name, value)
+                updated_fields.append(field_name)
 
         # Save the changes
-        self.save(update_fields=[f.name for f in django_fields.values() if f.name not in exclude_fields])
+        if updated_fields:
+            self.save(update_fields=updated_fields)
