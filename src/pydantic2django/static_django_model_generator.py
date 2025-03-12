@@ -293,48 +293,80 @@ PydanticUndefined = UndefinedType()""",
         # Get fields from Django model
         fields = []
         
-        for field in django_model._meta.fields:
-            if field.name not in ["id", "name", "object_type", "created_at", "updated_at"]:
-                field_str = self.field_to_string(field)
-                fields.append((field.name, field_str))
+        # Use a try-except block to safely access Django model fields
+        try:
+            for field in django_model._meta.fields:
+                if field.name not in ["id", "name", "object_type", "created_at", "updated_at"]:
+                    field_str = self.field_to_string(field)
+                    fields.append((field.name, field_str))
+        except (AttributeError, TypeError):
+            logger.warning(f"Could not access fields from Django model {model_name}")
 
         # If no fields were found in the Django model, try to get them from the Pydantic model
         if pydantic_model is not None and not fields:
             try:
-                from pydantic2django.fields import convert_field, get_model_fields
+                from pydantic2django.fields import convert_field
 
                 # Get fields from Pydantic model
-                pydantic_fields = get_model_fields(pydantic_model)
+                pydantic_fields = pydantic_model.model_fields
                 for field_name, field_info in pydantic_fields.items():
                     django_field = convert_field(field_name, field_info)
-                    fields.append((field_name, self.field_to_string(django_field)))
+                    if django_field is not None:  # Add null check to handle potential None returns
+                        fields.append((field_name, self.field_to_string(django_field)))
             except ImportError:
-                self._log(f"Could not import pydantic2django.fields, skipping field conversion for {model_name}")
+                logger.warning(f"Could not import pydantic2django.fields, skipping field conversion for {model_name}")
             except Exception as e:
-                self._log(f"Error converting fields for {model_name}: {e}")
+                logger.error(f"Error converting fields for {model_name}: {e}")
 
-        # Get meta information
-        meta = {
-            "db_table": django_model._meta.db_table,
-            "app_label": django_model._meta.app_label,
-            "verbose_name": self._clean_docstring(getattr(django_model._meta, "verbose_name", model_name)),
-            "verbose_name_plural": self._clean_docstring(getattr(django_model._meta, "verbose_name_plural", f"{model_name}s")),
-        }
+        # Get meta information with safe access
+        meta = {}
+        try:
+            meta["db_table"] = django_model._meta.db_table
+        except (AttributeError, TypeError):
+            meta["db_table"] = f"{model_name.lower()}"
+            
+        try:
+            meta["app_label"] = django_model._meta.app_label
+        except (AttributeError, TypeError):
+            meta["app_label"] = self.app_label
+            
+        try:
+            meta["verbose_name"] = self._clean_docstring(django_model._meta.verbose_name)
+        except (AttributeError, TypeError):
+            meta["verbose_name"] = model_name
+            
+        try:
+            meta["verbose_name_plural"] = self._clean_docstring(django_model._meta.verbose_name_plural)
+        except (AttributeError, TypeError):
+            pass #Let Django handle the verbose name plural
 
-        # Get module path from PydanticConfig or from the pydantic_model
+        # Get module path - ONLY from the Pydantic model or module mappings
         module_path = ""
-        if hasattr(django_model, "PydanticConfig") and hasattr(django_model.PydanticConfig, "module_path"):
-            module_path = django_model.PydanticConfig.module_path
-        elif pydantic_model is not None:
-            # Use the module path from the Pydantic model
+        
+        # First priority: Get from the actual Pydantic model if available
+        if pydantic_model is not None:
             module_path = pydantic_model.__module__
+            logger.info(f"Using module path from Pydantic model for {model_name}: {module_path}")
+        
+        # Second priority: Check our module mappings
+        elif hasattr(self, '_module_mappings'):
+            # Try with the current model name
+            if model_name in self._module_mappings:
+                module_path = self._module_mappings[model_name]
+                logger.info(f"Using module path from mappings for {model_name}: {module_path}")
+            
+            # Try with the original name (without Django prefix)
+            else:
+                original_name = model_name[6:] if model_name.startswith("Django") else model_name
+                if original_name in self._module_mappings:
+                    module_path = self._module_mappings[original_name]
+                    logger.info(f"Using module path from mappings for original name {original_name}: {module_path}")
             
         # Validate module path - it should not be empty
         if not module_path:
-            # If we can't determine the module path, use a placeholder that will raise an error
-            # This ensures the issue is visible rather than silently passing through
+            # If we can't determine the module path, use a placeholder
             module_path = "UNKNOWN_MODULE_PATH"
-            self._log(f"Warning: Could not determine module_path for {model_name}. Using placeholder that will raise an error.")
+            logger.warning(f"Warning: Could not determine module_path for {model_name}. Using placeholder.")
 
         # Get original name (without Django prefix)
         original_name = model_name
@@ -416,13 +448,13 @@ PydanticUndefined = UndefinedType()""",
         # Handle on_delete for ForeignKey and OneToOneField
         if field_type in ["ForeignKey", "OneToOneField"]:
             kwargs["on_delete"] = "models.CASCADE"  # Default to CASCADE
-            if hasattr(field, "remote_field") and hasattr(field.remote_field, "on_delete"):
+            if hasattr(field, "remote_field") and field.remote_field and hasattr(field.remote_field, "on_delete"):
                 on_delete_name = field.remote_field.on_delete.__name__
                 kwargs["on_delete"] = f"models.{on_delete_name}"
 
         # Handle to for ForeignKey, OneToOneField, and ManyToManyField
         if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]:
-            if hasattr(field, "remote_field") and hasattr(field.remote_field, "model"):
+            if hasattr(field, "remote_field") and field.remote_field and hasattr(field.remote_field, "model"):
                 to_model = field.remote_field.model
                 if isinstance(to_model, str):
                     kwargs["to"] = f'"{to_model}"'
