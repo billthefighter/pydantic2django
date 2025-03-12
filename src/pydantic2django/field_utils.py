@@ -274,20 +274,95 @@ class RelationshipFieldHandler:
         origin = get_origin(field_type)
         args = get_args(field_type)
 
+        # Enhanced detection for collections of models
+        
         # Handle List[Model] as ManyToManyField
-        if origin is list and args and is_pydantic_model(args[0]):
-            related_model = args[0]
-            related_name = sanitize_related_name(
-                getattr(field_info, "related_name", ""),
-                model_name or "",
-                field_name,
-            )
+        if origin is list and args:
+            # Check if the list contains Pydantic models
+            item_type = args[0]
+            if is_pydantic_model(item_type):
+                related_model = item_type
+                related_name = sanitize_related_name(
+                    getattr(field_info, "related_name", ""),
+                    model_name or "",
+                    field_name,
+                )
 
-            return models.ManyToManyField(
-                to=f"{app_label}.{related_model.__name__}",
-                related_name=related_name,
-                **kwargs,
-            )
+                return models.ManyToManyField(
+                    to=f"{app_label}.{related_model.__name__}",
+                    related_name=related_name,
+                    **kwargs,
+                )
+            
+            # Handle nested types like List[List[Model]] or List[Dict[str, Model]]
+            nested_origin = get_origin(item_type)
+            nested_args = get_args(item_type)
+            
+            if nested_origin is list and nested_args and is_pydantic_model(nested_args[0]):
+                # List[List[Model]] -> ManyToManyField
+                related_model = nested_args[0]
+                related_name = sanitize_related_name(
+                    getattr(field_info, "related_name", ""),
+                    model_name or "",
+                    field_name,
+                )
+                
+                return models.ManyToManyField(
+                    to=f"{app_label}.{related_model.__name__}",
+                    related_name=related_name,
+                    **kwargs,
+                )
+            
+            if nested_origin is dict and len(nested_args) == 2 and is_pydantic_model(nested_args[1]):
+                # List[Dict[str, Model]] -> ManyToManyField
+                related_model = nested_args[1]
+                related_name = sanitize_related_name(
+                    getattr(field_info, "related_name", ""),
+                    model_name or "",
+                    field_name,
+                )
+                
+                return models.ManyToManyField(
+                    to=f"{app_label}.{related_model.__name__}",
+                    related_name=related_name,
+                    **kwargs,
+                )
+        
+        # Handle Dict[str, Model] or Dict[Any, Model] as ManyToManyField with through model
+        if origin is dict and len(args) == 2:
+            value_type = args[1]
+            if is_pydantic_model(value_type):
+                related_model = value_type
+                related_name = sanitize_related_name(
+                    getattr(field_info, "related_name", ""),
+                    model_name or "",
+                    field_name,
+                )
+
+                return models.ManyToManyField(
+                    to=f"{app_label}.{related_model.__name__}",
+                    related_name=related_name,
+                    **kwargs,
+                )
+            
+            # Handle nested types like Dict[str, List[Model]]
+            nested_origin = get_origin(value_type)
+            nested_args = get_args(value_type)
+            
+            if nested_origin is list and nested_args and is_pydantic_model(nested_args[0]):
+                # Dict[str, List[Model]] -> ManyToManyField
+                related_model = nested_args[0]
+                related_name = sanitize_related_name(
+                    getattr(field_info, "related_name", ""),
+                    model_name or "",
+                    field_name,
+                )
+                
+                return models.ManyToManyField(
+                    to=f"{app_label}.{related_model.__name__}",
+                    related_name=related_name,
+                    **kwargs,
+                )
 
         # Handle direct model reference as ForeignKey
         if is_pydantic_model(field_type):
@@ -325,6 +400,50 @@ class RelationshipFieldHandler:
                     related_name=related_name,
                     **kwargs,
                 )
+                
+        # Handle Optional[List[Model]] as ManyToManyField with blank=True
+        if origin is Union and type(None) in args:
+            # Find any List type in the Union
+            list_type = next((arg for arg in args if get_origin(arg) is list), None)
+            if list_type:
+                list_args = get_args(list_type)
+                if list_args and is_pydantic_model(list_args[0]):
+                    related_model = list_args[0]
+                    related_name = sanitize_related_name(
+                        getattr(field_info, "related_name", ""),
+                        model_name or "",
+                        field_name,
+                    )
+                    
+                    # Ensure blank is True for optional M2M
+                    kwargs["blank"] = True
+                    
+                    return models.ManyToManyField(
+                        to=f"{app_label}.{related_model.__name__}",
+                        related_name=related_name,
+                        **kwargs,
+                    )
+            
+            # Find any Dict type in the Union
+            dict_type = next((arg for arg in args if get_origin(arg) is dict), None)
+            if dict_type:
+                dict_args = get_args(dict_type)
+                if len(dict_args) == 2 and is_pydantic_model(dict_args[1]):
+                    related_model = dict_args[1]
+                    related_name = sanitize_related_name(
+                        getattr(field_info, "related_name", ""),
+                        model_name or "",
+                        field_name,
+                    )
+                    
+                    # Ensure blank is True for optional M2M
+                    kwargs["blank"] = True
+                    
+                    return models.ManyToManyField(
+                        to=f"{app_label}.{related_model.__name__}",
+                        related_name=related_name,
+                        **kwargs,
+                    )
 
         # Not a relationship field
         return None

@@ -8,7 +8,15 @@ from pydantic2django import Pydantic2DjangoBaseClass
 # Constants for default values
 true = True
 false = False
-PydanticUndefined = None
+# Define a proper undefined type that won't cause issues with Django
+class UndefinedType:
+    def __repr__(self):
+        return "Undefined"
+
+    def __bool__(self):
+        return False
+
+PydanticUndefined = UndefinedType()
 
 {% if imports %}
 # Additional imports

@@ -1,12 +1,14 @@
 class {{ model_name }}(Pydantic2DjangoBaseClass):
     {% for field_name, field_definition in fields %}
+    {% if field_name != 'id' or not field_definition.startswith('models.BigAutoField') and not field_definition.startswith('models.UUIDField') %}
     {{ field_name }} = {{ field_definition }}
+    {% endif %}
     {% endfor %}
     class Meta(Pydantic2DjangoBaseClass.Meta):
         db_table = "{{ meta.db_table }}"
         app_label = "{{ meta.app_label }}"
-        verbose_name = "{{ meta.verbose_name }}"
-        verbose_name_plural = "{{ meta.verbose_name_plural }}"
+        verbose_name = """{{ meta.verbose_name.split('\n')[0] }}"""
+        verbose_name_plural = """{{ meta.verbose_name_plural.split('\n')[0] }}"""
         abstract = False
 
     class PydanticConfig:
@@ -15,3 +17,22 @@ class {{ model_name }}(Pydantic2DjangoBaseClass):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("object_type", "{{ original_name }}")
         super().__init__(*args, **kwargs)
+        
+    def _get_module_path(self) -> str:
+        """
+        Get the module path for the Pydantic class.
+        
+        Returns:
+            The module path as a string
+        
+        Raises:
+            ValueError: If the module path is not set or is invalid
+        """
+        module_path = self.PydanticConfig.module_path
+        
+        if not module_path or module_path == "UNKNOWN_MODULE_PATH":
+            raise ValueError(
+                f"No valid module path found for {self.object_type}. "
+                "Make sure the module_path attribute is set in the PydanticConfig class."
+            )
+        return module_path

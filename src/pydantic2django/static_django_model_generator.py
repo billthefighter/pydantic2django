@@ -289,258 +289,150 @@ PydanticUndefined = UndefinedType()""",
         django_model: type[models.Model],
         pydantic_model: Optional[type[BaseModel]] = None,
     ) -> str:
-        """
-        Generate a Django model definition from a Django model class.
-        Uses Jinja2 templating for cleaner code generation.
-        """
-        logger.info(f"Generating model definition for {model_name}")
-
-        # Access _meta safely using getattr
-        meta = getattr(django_model, "_meta", None)
-        if meta is None:
-            error_msg = f"Could not access _meta for {model_name}. This is required for model generation."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Get fields
+        """Generate a Django model definition from a Pydantic model."""
+        # Get fields from Django model
         fields = []
-        try:
-            # Try to get fields from _meta
-            if hasattr(meta, "fields"):
-                for field in meta.fields:
-                    # Skip the ID field since Pydantic2DjangoBaseClass already provides it
-                    if field.name == "id" and not getattr(field, "primary_key", False):
-                        continue
-                    field_str = self.field_to_string(field)
-                    fields.append((field.name, field_str))
+        
+        for field in django_model._meta.fields:
+            if field.name not in ["id", "name", "object_type", "created_at", "updated_at"]:
+                field_str = self.field_to_string(field)
+                fields.append((field.name, field_str))
 
-                # Also get many-to-many fields
-                if hasattr(meta, "many_to_many"):
-                    for field in meta.many_to_many:
-                        field_str = self.field_to_string(field)
-                        fields.append((field.name, field_str))
-
-            # If no fields were found, try to get them from the model's __dict__
-            if not fields and hasattr(django_model, "__dict__"):
-                for name, attr in django_model.__dict__.items():
-                    if isinstance(attr, models.Field):
-                        # Skip the ID field since Pydantic2DjangoBaseClass already provides it
-                        if name == "id":
-                            continue
-                        field_str = self.field_to_string(attr)
-                        fields.append((name, field_str))
-        except Exception as e:
-            error_msg = f"Error getting fields for {model_name}: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg) from e
-
-        # If we have a Pydantic model, try to get fields from it
+        # If no fields were found in the Django model, try to get them from the Pydantic model
         if pydantic_model is not None and not fields:
             try:
                 from pydantic2django.fields import convert_field, get_model_fields
 
                 # Get fields from Pydantic model
                 pydantic_fields = get_model_fields(pydantic_model)
-                for name, field_info in pydantic_fields.items():
-                    # Skip special fields and id field
-                    if name.startswith("_") or name == "id":
-                        continue
-
-                    # Convert field
-                    django_field = convert_field(
-                        name,
-                        field_info,
-                        app_label=self.app_label,
-                        model_name=model_name,
-                    )
-
-                    if django_field is not None:
-                        field_str = self.field_to_string(django_field)
-                        fields.append((name, field_str))
+                for field_name, field_info in pydantic_fields.items():
+                    django_field = convert_field(field_name, field_info)
+                    fields.append((field_name, self.field_to_string(django_field)))
+            except ImportError:
+                self._log(f"Could not import pydantic2django.fields, skipping field conversion for {model_name}")
             except Exception as e:
-                error_msg = f"Error converting Pydantic fields for {model_name}: {str(e)}"
-                logger.error(error_msg)
-                raise ValueError(error_msg) from e
+                self._log(f"Error converting fields for {model_name}: {e}")
 
-        # If we still have no fields, raise an error
-        if not fields:
-            error_msg = f"No fields could be extracted for {model_name}. Cannot generate model definition."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        # Get meta information
+        meta = {
+            "db_table": django_model._meta.db_table,
+            "app_label": django_model._meta.app_label,
+            "verbose_name": self._clean_docstring(getattr(django_model._meta, "verbose_name", model_name)),
+            "verbose_name_plural": self._clean_docstring(getattr(django_model._meta, "verbose_name_plural", f"{model_name}s")),
+        }
+
+        # Get module path from PydanticConfig or from the pydantic_model
+        module_path = ""
+        if hasattr(django_model, "PydanticConfig") and hasattr(django_model.PydanticConfig, "module_path"):
+            module_path = django_model.PydanticConfig.module_path
+        elif pydantic_model is not None:
+            # Use the module path from the Pydantic model
+            module_path = pydantic_model.__module__
+            
+        # Validate module path - it should not be empty
+        if not module_path:
+            # If we can't determine the module path, use a placeholder that will raise an error
+            # This ensures the issue is visible rather than silently passing through
+            module_path = "UNKNOWN_MODULE_PATH"
+            self._log(f"Warning: Could not determine module_path for {model_name}. Using placeholder that will raise an error.")
 
         # Get original name (without Django prefix)
-        original_name = model_name[6:] if model_name.startswith("Django") else model_name
-
-        # Get verbose name and verbose name plural
-        verbose_name = getattr(meta, "verbose_name", original_name)
-
-        # For verbose_name_plural, don't just append 's' if it's already a sentence
-        verbose_name_plural = getattr(meta, "verbose_name_plural", None)
-        if verbose_name_plural is None:
-            # If verbose_name contains spaces or punctuation, it's likely a sentence
-            if any(c in verbose_name for c in " .,;:!?"):
-                verbose_name_plural = verbose_name  # Don't append 's' to sentences
-            else:
-                verbose_name_plural = f"{verbose_name}s"  # Append 's' to simple names
-
-        # Prepare meta data for the template
-        meta_data = {
-            "db_table": getattr(meta, "db_table", f"{original_name.lower()}"),
-            "app_label": self.app_label,
-            "verbose_name": verbose_name,
-            "verbose_name_plural": verbose_name_plural,
-        }
-
-        # Get the module path for the Pydantic class
-        module_path = ""
-        if pydantic_model is not None:
-            module_path = pydantic_model.__module__
-        else:
-            # Try to find the module path from the module mappings in the class
-            module_mappings = getattr(self, "_module_mappings", {})
-            if original_name in module_mappings:
-                module_path = module_mappings.get(original_name, "")
-            else:
-                # As a fallback, check if there's a module path in the Meta class
-                # First check PydanticConfig
-                pydantic_config = getattr(django_model, "PydanticConfig", None)
-                if pydantic_config and hasattr(pydantic_config, "module_path"):
-                    module_path = pydantic_config.module_path
-                # For backward compatibility, also check Meta
-                elif hasattr(meta, "pydantic_module_path"):
-                    module_path = meta.pydantic_module_path
-
-        # Prepare template context
-        template_context = {
-            "model_name": model_name,
-            "original_name": original_name,
-            "fields": fields,
-            "meta": meta_data,
-            "module_path": module_path,
-        }
+        original_name = model_name
+        if model_name.startswith("Django"):
+            original_name = model_name[6:]
 
         # Render the template
-        try:
-            template = self.jinja_env.get_template("model_definition.py.j2")
-            return template.render(**template_context)
-        except Exception as e:
-            error_msg = f"Error rendering template for {model_name}: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg) from e
+        template = self.jinja_env.get_template("model_definition.py.j2")
+        return template.render(
+            model_name=model_name,
+            fields=fields,
+            meta=meta,
+            module_path=module_path,
+            original_name=original_name,
+        )
+
+    def _clean_docstring(self, text: str) -> str:
+        """Clean a docstring for use in a model definition."""
+        if not text:
+            return ""
+        
+        # Take only the first line of the docstring
+        first_line = text.split("\n")[0].strip()
+        return first_line
 
     def field_to_string(self, field: models.Field) -> str:
-        """
-        Convert a Django field to a string representation.
-        """
-        field_class = field.__class__.__name__
+        """Convert a Django field to its string representation."""
+        field_type = field.__class__.__name__
         kwargs = {}
 
         # Handle common field attributes
-        if hasattr(field, "null") and field.null:
-            kwargs["null"] = True
-        else:
-            kwargs["null"] = False
-
-        if hasattr(field, "blank") and field.blank:
-            kwargs["blank"] = True
-        else:
-            kwargs["blank"] = False
-
-        # Handle default values - avoid using PydanticUndefined
-        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
-            # Skip defaults that would be PydanticUndefined
-            if field.default is None:
-                kwargs["default"] = None
-            elif (
-                isinstance(field.default, (int | float | bool | str))
-                or field.default.__class__.__name__ != "UndefinedType"
-            ):
-                if isinstance(field.default, int | float | bool):
-                    kwargs["default"] = field.default
-                elif isinstance(field.default, str):
-                    kwargs["default"] = f'"{field.default}"'
-                else:
-                    # For complex defaults, use repr
-                    kwargs["default"] = repr(field.default)
-
-        # Handle field-specific attributes
-        if field_class == "CharField" or field_class == "TextField":
-            if hasattr(field, "max_length") and field.max_length is not None:
-                kwargs["max_length"] = field.max_length
-
-        # Handle verbose_name
-        if hasattr(field, "verbose_name") and field.verbose_name:
+        if field.verbose_name and field.verbose_name != field.name:
             kwargs["verbose_name"] = f'"{field.verbose_name}"'
 
-        # Handle help_text
+        if field.primary_key:
+            kwargs["primary_key"] = "True"
+
+        if field.blank:
+            kwargs["blank"] = "True"
+
+        if field.null:
+            kwargs["null"] = "True"
+
+        # Handle field-specific attributes
+        if hasattr(field, "max_length") and field.max_length:
+            kwargs["max_length"] = str(field.max_length)
+
         if hasattr(field, "help_text") and field.help_text:
             kwargs["help_text"] = f'"{field.help_text}"'
 
-        # Handle relationship fields
-        if field_class in ["ForeignKey", "OneToOneField", "ManyToManyField"]:
-            logger.info(f"  Handling relationship field: {field_class}")
-
-            # Get the related model name using the shared utility
-            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
-
-            # Set the 'to' parameter if we found a related model
-            if related_model_name:
-                # Check if it's a fully qualified name (with app_label)
-                if "." in related_model_name:
-                    kwargs["to"] = f'"{related_model_name}"'
-                else:
-                    # Assume it's in the same app
-                    kwargs["to"] = f'"{self.app_label}.{related_model_name}"'
+        # Handle default values - this is a critical part for primitive types
+        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
+            # Skip adding default for UndefinedType
+            if hasattr(field.default, "__class__") and getattr(field.default.__class__, "__name__", "") == "UndefinedType":
+                # Don't add default for UndefinedType
+                pass
+            # Handle primitive types properly
+            elif isinstance(field.default, bool):
+                # Use the actual value without quotes for booleans
+                kwargs["default"] = str(field.default)
+            elif isinstance(field.default, (int, float)):
+                # Use the actual value without quotes for numbers
+                kwargs["default"] = str(field.default)
+            elif isinstance(field.default, str):
+                # Use quotes for strings
+                kwargs["default"] = f'"{field.default}"'
+            elif field.default is None:
+                # Use None for null values
+                kwargs["default"] = "None"
             else:
-                # Default to a placeholder if we couldn't determine the related model
-                kwargs["to"] = f'"{self.app_label}.UnknownModel"'
+                # For other types, convert to string but don't add quotes
+                # This might not work for all types, but it's a reasonable default
+                try:
+                    kwargs["default"] = str(field.default)
+                except Exception:
+                    # If we can't convert to string, skip the default
+                    pass
 
-            # Handle on_delete for ForeignKey and OneToOneField
-            if field_class in ["ForeignKey", "OneToOneField"]:
-                # Default to CASCADE
-                on_delete = "CASCADE"
+        # Handle on_delete for ForeignKey and OneToOneField
+        if field_type in ["ForeignKey", "OneToOneField"]:
+            kwargs["on_delete"] = "models.CASCADE"  # Default to CASCADE
+            if hasattr(field, "remote_field") and hasattr(field.remote_field, "on_delete"):
+                on_delete_name = field.remote_field.on_delete.__name__
+                kwargs["on_delete"] = f"models.{on_delete_name}"
 
-                # Cast the field to ForeignKeyField for type checking
-                fk_field = cast(ForeignKeyField, field)
+        # Handle to for ForeignKey, OneToOneField, and ManyToManyField
+        if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]:
+            if hasattr(field, "remote_field") and hasattr(field.remote_field, "model"):
+                to_model = field.remote_field.model
+                if isinstance(to_model, str):
+                    kwargs["to"] = f'"{to_model}"'
+                else:
+                    to_model_name = to_model.__name__
+                    kwargs["to"] = f'"{to_model_name}"'
 
-                # Try to get the actual on_delete value
-                if hasattr(fk_field, "on_delete") and fk_field.on_delete is not None:
-                    if isinstance(fk_field.on_delete, str):
-                        on_delete = fk_field.on_delete
-                    else:
-                        try:
-                            on_delete = fk_field.on_delete.__name__
-                        except (AttributeError, TypeError):
-                            pass
-
-                kwargs["on_delete"] = f"models.{on_delete}"
-
-            # Handle related_name
-            rel_field = cast(RelationshipField, field)
-            if hasattr(rel_field, "related_name") and rel_field.related_name:
-                kwargs["related_name"] = f'"{rel_field.related_name}"'
-
-            # Handle through for ManyToManyField
-            if field_class == "ManyToManyField":
-                m2m_field = cast(ManyToManyField, field)
-                if hasattr(m2m_field, "through") and m2m_field.through:
-                    through_name = None
-                    if isinstance(m2m_field.through, str):
-                        through_name = m2m_field.through
-                    else:
-                        try:
-                            through_name = m2m_field.through.__name__
-                        except (AttributeError, TypeError):
-                            pass
-
-                    if through_name:
-                        kwargs["through"] = f'"{through_name}"'
-
-        # Format kwargs as string
+        # Format kwargs as a string
         kwargs_str = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
-
-        # Return the field definition
-        return f"models.{field_class}({kwargs_str})"
+        return f"models.{field_type}({kwargs_str})"
 
     def _generate_module_mappings(self, pydantic_models: dict[str, type[BaseModel]]) -> dict[str, str]:
         """
