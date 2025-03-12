@@ -5,6 +5,11 @@
 from django.db import models
 from pydantic2django import Pydantic2DjangoBaseClass
 
+# Constants for default values
+true = True
+false = False
+PydanticUndefined = None
+
 {% if imports %}
 # Additional imports
 {% for import_line in imports %}

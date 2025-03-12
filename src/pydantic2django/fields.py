@@ -74,22 +74,26 @@ def is_pydantic_model(obj: Any) -> bool:
     if not inspect.isclass(obj):
         return False
     
-    # Check if it's a Pydantic model
-    is_pydantic = issubclass(obj, BaseModel)
-    
-    # Skip abstract base classes (inheriting from ABC)
-    if is_pydantic and ABC in obj.__mro__:
+    try:
+        # Check if it's a Pydantic model
+        is_pydantic = issubclass(obj, BaseModel)
+        
+        # Skip abstract base classes (inheriting from ABC)
+        if is_pydantic and ABC in obj.__mro__:
+            return False
+        
+        # In Pydantic v2, we need to check for model_fields attribute
+        if is_pydantic and PYDANTIC_V2:
+            return hasattr(obj, "model_fields")
+        
+        # In Pydantic v1, we check for __fields__ attribute
+        if is_pydantic and not PYDANTIC_V2:
+            return hasattr(obj, "__fields__")
+        
+        return is_pydantic
+    except (TypeError, AttributeError):
+        # If there's an error checking subclass relationship, it's not a Pydantic model
         return False
-    
-    # In Pydantic v2, we need to check for model_fields attribute
-    if is_pydantic and PYDANTIC_V2:
-        return hasattr(obj, "model_fields")
-    
-    # In Pydantic v1, we check for __fields__ attribute
-    if is_pydantic and not PYDANTIC_V2:
-        return hasattr(obj, "__fields__")
-    
-    return is_pydantic
 
 
 def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
@@ -305,6 +309,15 @@ class FieldConverter:
 
         # Check for List/Dict types
         if origin in (list, List):
+            # Check if it's a list of Pydantic models
+            if args and len(args) > 0:
+                try:
+                    # Safely check if the first argument is a Pydantic model
+                    if is_pydantic_model(args[0]):
+                        return models.ManyToManyField, True
+                except (TypeError, AttributeError):
+                    # If there's an error, default to JSONField
+                    pass
             return models.JSONField, False
         elif origin in (dict, Dict):
             return models.JSONField, False
@@ -324,8 +337,12 @@ class FieldConverter:
             return models.JSONField, False
 
         # Handle relationship fields (Pydantic models)
-        if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
-            return models.ForeignKey, True
+        try:
+            if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
+                return models.ForeignKey, True
+        except (TypeError, AttributeError):
+            # If there's an error checking subclass relationship, it's not a Pydantic model
+            pass
 
         # Default to TextField for unknown types
         return models.TextField, False
@@ -381,14 +398,46 @@ class FieldConverter:
                     break
 
         # Handle List[Model] as ManyToManyField
-        if origin in (list, List) and args:
+        if origin in (list, List) and args and len(args) > 0:
             item_type = args[0]
-            if inspect.isclass(item_type) and issubclass(item_type, BaseModel):
-                # This is a List[Model], create a ManyToManyField
-                model_name = item_type.__name__
+            try:
+                if is_pydantic_model(item_type):
+                    # This is a List[Model], create a ManyToManyField
+                    model_name = item_type.__name__
+                    if not model_name.startswith("Django"):
+                        model_name = f"Django{model_name}"
+
+                    # Get null/blank from field_info
+                    try:
+                        # Try to use is_optional method if available
+                        null = field_info.is_optional()
+                    except (AttributeError, TypeError):
+                        # Fall back to checking if the field is required
+                        if PYDANTIC_V2:
+                            null = not field_info.is_required
+                        else:
+                            null = field_info.allow_none
+                    
+                    blank = null  # Usually blank follows null
+
+                    # Create the ManyToManyField
+                    related_name = sanitize_related_name(field_name, model_name=model_name)
+                    return models.ManyToManyField(
+                        f"{self.app_label}.{model_name}",
+                        related_name=related_name,
+                        blank=blank,
+                    )
+            except (TypeError, AttributeError):
+                # If there's an error, default to JSONField
+                return models.JSONField(null=True, blank=True)
+
+        # Handle direct Model reference as ForeignKey
+        try:
+            if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
+                model_name = field_type.__name__
                 if not model_name.startswith("Django"):
                     model_name = f"Django{model_name}"
-
+                
                 # Get null/blank from field_info
                 try:
                     # Try to use is_optional method if available
@@ -399,45 +448,21 @@ class FieldConverter:
                         null = not field_info.is_required
                     else:
                         null = field_info.allow_none
-                
+                    
                 blank = null  # Usually blank follows null
-
-                # Create the ManyToManyField
+                
+                # Create the ForeignKey
                 related_name = sanitize_related_name(field_name)
-                return models.ManyToManyField(
+                return models.ForeignKey(
                     f"{self.app_label}.{model_name}",
+                    on_delete=models.CASCADE,
                     related_name=related_name,
+                    null=null,
                     blank=blank,
                 )
-
-        # Handle direct Model reference as ForeignKey
-        if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
-            model_name = field_type.__name__
-            if not model_name.startswith("Django"):
-                model_name = f"Django{model_name}"
-            
-            # Get null/blank from field_info
-            try:
-                # Try to use is_optional method if available
-                null = field_info.is_optional()
-            except (AttributeError, TypeError):
-                # Fall back to checking if the field is required
-                if PYDANTIC_V2:
-                    null = not field_info.is_required
-                else:
-                    null = field_info.allow_none
-                
-            blank = null  # Usually blank follows null
-            
-            # Create the ForeignKey
-            related_name = sanitize_related_name(field_name)
-            return models.ForeignKey(
-                f"{self.app_label}.{model_name}",
-                on_delete=models.CASCADE,
-                related_name=related_name,
-                null=null,
-                blank=blank,
-            )
+        except (TypeError, AttributeError):
+            # If there's an error, default to JSONField
+            pass
 
         # Default to JSONField for unknown relationship types
         return models.JSONField(null=True, blank=True)
@@ -516,31 +541,69 @@ def convert_field(
     """
     # Use the FieldConverter for all field conversion
     converter = FieldConverter(app_label)
+    
+    # Get field type
+    if PYDANTIC_V2:
+        field_type = field_info.annotation
+    else:
+        field_type = field_info.type_
 
     # Handle special case for direct model relationships when model_name is provided
-    if model_name is not None and is_pydantic_model(field_info.annotation):
-        # Use the model name as a string to avoid circular dependencies
-        # Django expects "app_label.ModelName" format
-        to_model = f"{app_label}.{model_name}"
-
-        # Handle one-to-one relationships
-        if field_info.annotation is BaseModel:
-            if skip_relationships:
-                return None
-            return models.OneToOneField(
-                to_model,
-                on_delete=models.CASCADE,
-                related_name=f"{field_name}_set",
-            )
-
-        # Handle lists of models (many-to-many)
-        if get_origin(field_info.annotation) is list and issubclass(get_args(field_info.annotation)[0], BaseModel):
-            if skip_relationships:
-                return None
-            return models.ManyToManyField(
-                to_model,
-                related_name=f"{field_name}_set",
-            )
+    if model_name is not None:
+        # Check for list of models (many-to-many)
+        origin = get_origin(field_type)
+        args = get_args(field_type)
+        
+        if origin in (list, List) and args and len(args) > 0:
+            try:
+                if is_pydantic_model(args[0]):
+                    if skip_relationships:
+                        return None
+                        
+                    # Get the related model name
+                    related_model_name = args[0].__name__
+                    if not related_model_name.startswith("Django"):
+                        related_model_name = f"Django{related_model_name}"
+                        
+                    # Create a many-to-many field
+                    related_name = sanitize_related_name(field_name, model_name=model_name)
+                    return models.ManyToManyField(
+                        f"{app_label}.{related_model_name}",
+                        related_name=related_name,
+                        blank=True,
+                    )
+            except (TypeError, AttributeError):
+                # If there's an error, continue to standard field conversion
+                pass
+        
+        # Handle direct model relationship
+        try:
+            if is_pydantic_model(field_type):
+                if skip_relationships:
+                    return None
+                    
+                # Get the related model name
+                related_model_name = field_type.__name__
+                if not related_model_name.startswith("Django"):
+                    related_model_name = f"Django{related_model_name}"
+                    
+                # Create a foreign key
+                related_name = sanitize_related_name(field_name, model_name=model_name)
+                return models.ForeignKey(
+                    f"{app_label}.{related_model_name}",
+                    on_delete=models.CASCADE,
+                    related_name=related_name,
+                    null=True,
+                    blank=True,
+                )
+        except (TypeError, AttributeError):
+            # If there's an error, continue to standard field conversion
+            pass
 
     # Use the converter for standard field conversion
-    return converter.convert_field(field_name, field_info, skip_relationships)
+    try:
+        return converter.convert_field(field_name, field_info, skip_relationships)
+    except Exception as e:
+        logger.error(f"Error converting field {field_name}: {str(e)}")
+        # Return a default field as fallback
+        return models.TextField(null=True, blank=True)
