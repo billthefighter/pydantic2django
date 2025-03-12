@@ -1,0 +1,18 @@
+class Django{{ model_name }}(Pydantic2DjangoBaseClass):
+    {% for field in fields %}
+    {{ field.name }} = {{ field.definition }}
+    {% endfor %}
+    class Meta(Pydantic2DjangoBaseClass.Meta):
+        db_table = "{{ meta.db_table }}"
+        app_label = "{{ meta.app_label }}"
+        verbose_name = "{{ meta.verbose_name }}"
+        verbose_name_plural = "{{ meta.verbose_name_plural }}"
+        abstract = False
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("object_type", "{{ original_name }}")
+        super().__init__(*args, **kwargs)
+
+    def _get_module_path(self) -> str:
+        # Use the utility function to get the module path
+        return get_module_path("{{ original_name }}")

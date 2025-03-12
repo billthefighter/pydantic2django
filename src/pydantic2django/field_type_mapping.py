@@ -158,6 +158,16 @@ class TypeMapper:
             # Default to JSONField for these special forms
             return TypeMappingDefinition(python_type=dict, django_field=models.JSONField)
 
+        # Handle list of classes (potential many-to-many relationship)
+        origin = get_origin(python_type)
+        args = get_args(python_type)
+        if origin is list and args and len(args) == 1:
+            arg_type = args[0]
+            # Check if the argument is a class that could be a model
+            if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
+                # This is a list of Pydantic models, which should be a ManyToManyField
+                return TypeMappingDefinition(python_type=list, django_field=models.ManyToManyField)
+            
         for mapping in TYPE_MAPPINGS:
             if mapping.matches_type(python_type):
                 return mapping

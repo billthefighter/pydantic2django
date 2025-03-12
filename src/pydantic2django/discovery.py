@@ -7,6 +7,7 @@ Pydantic models as Django models.
 import importlib
 import inspect
 import logging
+from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -249,6 +250,23 @@ class ModelDiscovery:
         self.django_models: dict[str, type[models.Model]] = {}
         self._registration_order: Optional[list[str]] = None
 
+    def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
+        """
+        Determine if a Pydantic model should be converted to a Django model.
+        
+        Args:
+            model_class: The Pydantic model class to check
+            
+        Returns:
+            True if the model should be converted, False otherwise
+        """
+        # Skip models that inherit from ABC
+        if ABC in model_class.__mro__:
+            logger.info(f"Skipping {model_class.__name__} because it inherits from ABC")
+            return False
+        
+        return True
+
     def discover_models(
         self,
         package_names: list[str],
@@ -353,7 +371,7 @@ class ModelDiscovery:
                 logger.info(f"Module {package_name} has no __file__ attribute, inspecting directly")
                 for name, obj in inspect.getmembers(package):
                     logger.info(f"Inspecting {name}: {obj}")
-                    if is_pydantic_model(obj):
+                    if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
                         logger.info(f"Found Pydantic model: {name}")
                         model_name = name  # Don't normalize the name for test modules
                         discovered_models[model_name] = obj
@@ -388,7 +406,7 @@ class ModelDiscovery:
 
                     # Find all Pydantic models in the module
                     for name, obj in inspect.getmembers(module):
-                        if is_pydantic_model(obj):
+                        if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
                             model_name = normalize_model_name(name)
                             discovered_models[model_name] = obj
 

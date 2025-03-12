@@ -48,6 +48,22 @@ class DummyPydanticModel(BaseModel):
     is_active: bool = True
 
 
+# Define a related model for testing many-to-many relationships
+class RelatedModel(BaseModel):
+    """A related model for testing many-to-many relationships."""
+    
+    name: str
+    value: int = 0
+
+
+# Define a model with a many-to-many relationship
+class ModelWithM2M(BaseModel):
+    """A model with a many-to-many relationship."""
+    
+    name: str
+    related_items: List[RelatedModel] = Field(default_factory=list)
+
+
 # Create a mock Django model that would be generated
 class DjangoDummyPydanticModel(models.Model):
     """A mock Django model that would be generated."""
@@ -69,6 +85,44 @@ class DjangoDummyPydanticModel(models.Model):
         verbose_name_plural = "Dummy Pydantic Models"
 
 
+# Create a mock Django model for the related model
+class DjangoRelatedModel(models.Model):
+    """A mock Django model for the related model."""
+    
+    id = models.UUIDField(primary_key=True)
+    name = models.CharField(max_length=255)
+    object_type = models.CharField(max_length=100)
+    data = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    value = models.IntegerField(default=0)
+    
+    class Meta:
+        db_table = "related_model"
+        app_label = "test_app"
+        verbose_name = "Related Model"
+        verbose_name_plural = "Related Models"
+
+
+# Create a mock Django model for the model with a many-to-many relationship
+class DjangoModelWithM2M(models.Model):
+    """A mock Django model for the model with a many-to-many relationship."""
+    
+    id = models.UUIDField(primary_key=True)
+    name = models.CharField(max_length=255)
+    object_type = models.CharField(max_length=100)
+    data = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    related_items = models.ManyToManyField(DjangoRelatedModel, blank=True)
+    
+    class Meta:
+        db_table = "model_with_m2m"
+        app_label = "test_app"
+        verbose_name = "Model With M2M"
+        verbose_name_plural = "Models With M2M"
+
+
 class TestStaticDjangoModelGenerator(unittest.TestCase):
     """Test the StaticDjangoModelGenerator class."""
 
@@ -82,6 +136,14 @@ class TestStaticDjangoModelGenerator(unittest.TestCase):
         clear()
         register_model("DummyPydanticModel", DummyPydanticModel)
         register_django_model("DjangoDummyPydanticModel", DjangoDummyPydanticModel)
+        
+        # Register the related models
+        register_model("RelatedModel", RelatedModel)
+        register_django_model("DjangoRelatedModel", DjangoRelatedModel)
+        
+        # Register the model with a many-to-many relationship
+        register_model("ModelWithM2M", ModelWithM2M)
+        register_django_model("DjangoModelWithM2M", DjangoModelWithM2M)
 
         # Create the generator
         self.generator = StaticDjangoModelGenerator(
@@ -135,6 +197,34 @@ class TestStaticDjangoModelGenerator(unittest.TestCase):
         self.assertIn('verbose_name = "Dummy Pydantic Model"', content)
         self.assertIn('verbose_name_plural = "Dummy Pydantic Models"', content)
         self.assertIn("abstract = False", content)
+    
+    def test_many_to_many_relationship(self):
+        """Test that many-to-many relationships are properly generated."""
+        # Generate the models file
+        result = self.generator.generate()
+        
+        # Check that the file was created
+        self.assertEqual(result, self.output_path)
+        self.assertTrue(os.path.exists(self.output_path))
+        
+        # Read the file contents
+        with open(self.output_path, "r") as f:
+            content = f.read()
+        
+        # Check that the model with the many-to-many relationship is properly generated
+        self.assertIn("class DjangoModelWithM2M(Pydantic2DjangoBaseClass):", content)
+        
+        # Check that the many-to-many field is properly generated
+        self.assertIn('related_items = models.ManyToManyField("DjangoRelatedModel", blank=True)', content)
+        
+        # Check that the model has the expected meta attributes
+        self.assertIn('db_table = "model_with_m2m"', content)
+        self.assertIn('verbose_name = "Model With M2M"', content)
+        self.assertIn('verbose_name_plural = "Models With M2M"', content)
+        
+        # Check that the related model is also properly generated
+        self.assertIn("class DjangoRelatedModel(Pydantic2DjangoBaseClass):", content)
+        self.assertIn("value = models.IntegerField(default=0)", content)
 
 
 if __name__ == "__main__":
