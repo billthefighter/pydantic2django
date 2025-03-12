@@ -1,29 +1,25 @@
 import logging
 import os
 import pathlib
-from abc import ABC
 from collections.abc import Callable
-from typing import Optional, TypeVar, cast
+from datetime import datetime
+from typing import Optional, TypeVar
 
 import jinja2
 from django.db import models
 from pydantic import BaseModel
 
+# Import the base class for Django models
 from pydantic2django.discovery import (
     discover_models,
     get_discovered_models,
-    get_django_models,
     setup_dynamic_models,
-)
-from pydantic2django.field_utils import (
-    ForeignKeyField,
-    ManyToManyField,
-    RelationshipField,
-    RelationshipFieldHandler,
 )
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("pydantic2django.generator")
 
 T = TypeVar("T", bound=BaseModel)
@@ -39,7 +35,7 @@ class StaticDjangoModelGenerator:
         output_path: str = "generated_models.py",
         packages: Optional[list[str]] = None,
         app_label: str = "django_app",
-        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
+        filter_function: Optional[Callable[[str, type[BaseModel]], bool]] = None,
         verbose: bool = False,
     ):
         """
@@ -55,7 +51,7 @@ class StaticDjangoModelGenerator:
         self.output_path = output_path
         self.packages = packages or ["pydantic_models"]
         self.app_label = app_label
-        self.filter_function = filter_function or (lambda x: True)  # Default to include all models
+        self.filter_function = filter_function
         self.verbose = verbose
 
         # Initialize Jinja2 environment
@@ -64,7 +60,9 @@ class StaticDjangoModelGenerator:
 
         # If templates don't exist in the package, use the ones from the current directory
         if not os.path.exists(package_templates_dir):
-            package_templates_dir = os.path.join(pathlib.Path(__file__).parent.absolute(), "templates")
+            package_templates_dir = os.path.join(
+                pathlib.Path(__file__).parent.absolute(), "templates"
+            )
 
         self.jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(package_templates_dir),
@@ -72,308 +70,200 @@ class StaticDjangoModelGenerator:
             lstrip_blocks=True,
         )
 
-    def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
+    def discover_models(self) -> dict[str, type[BaseModel]]:
         """
-        Determine if a Pydantic model should be converted to a Django model.
-
-        Args:
-            model_class: The Pydantic model class to check
+        Discover Pydantic models from the specified packages.
 
         Returns:
-            True if the model should be converted, False otherwise
-        """
-        # Skip models that inherit from ABC
-        if ABC in model_class.__mro__:
-            if self.verbose:
-                print(f"Skipping {model_class.__name__} because it inherits from ABC")
-            return False
-
-        return True
-
-    def generate(self) -> Optional[str]:
-        """
-        Generate the models.py file content and write it to the output path.
-
-        Returns:
-            Path to the generated file or None if no models were generated
+            Dict of discovered models
         """
         if self.verbose:
-            print(f"Discovering models from packages: {', '.join(self.packages)}")
+            logger.info(f"Discovering models from packages: {self.packages}")
 
-        # Discover models with the filter function
-        adapted_filter = self._adapt_filter_function(self.filter_function)
+        # Use the discovery module to find models
         discover_models(
             self.packages,
             app_label=self.app_label,
-            filter_function=adapted_filter,
+            filter_function=self.filter_function,
         )
 
-        # Get the discovered models (these should be only the ones that passed the filter)
+        # Get the discovered models
         discovered_models = get_discovered_models()
 
         if self.verbose:
-            print(f"Discovered {len(discovered_models)} models that match the filter:")
-            for model_name in discovered_models.keys():
-                print(f"  - {model_name}")
+            logger.info(f"Discovered {len(discovered_models)} models")
+            for name, model in discovered_models.items():
+                logger.info(f"  - {name}: {model}")
 
-        # Setup dynamic models
-        setup_dynamic_models()
-        django_models = get_django_models()
+        return discovered_models
 
-        # Double-check that we only have models that passed our filter
-        filtered_django_models = {}
-        for model_name, django_model in django_models.items():
-            # Extract the original Pydantic model name (remove the "Django" prefix)
-            original_name = model_name[6:] if model_name.startswith("Django") else model_name
-
-            # Check if the original model was in our discovered models
-            if original_name in discovered_models or model_name in discovered_models:
-                filtered_django_models[model_name] = django_model
-            elif self.verbose:
-                print(f"Skipping model {model_name} as it didn't pass the filter")
-
-        if not filtered_django_models:
-            error_msg = "No Django models were generated that match the filter. Check your filter function."
-            if self.verbose:
-                print(error_msg)
-            raise ValueError(error_msg)
-
-        if self.verbose:
-            print(f"Generating {len(filtered_django_models)} Django models:")
-            for model_name in filtered_django_models.keys():
-                print(f"  - {model_name}")
-
-        try:
-            # Generate the models.py content
-            content = self.generate_models_file(discovered_models, filtered_django_models)
-
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-
-            # Write to file
-            with open(self.output_path, "w") as f:
-                f.write(content)
-
-            if self.verbose:
-                print(f"Successfully generated models file at {self.output_path}")
-                print(f"Generated {len(filtered_django_models)} model definitions")
-
-            return self.output_path
-        except Exception as e:
-            error_msg = f"Failed to generate models file: {str(e)}"
-            logger.error(error_msg)
-            if self.verbose:
-                print(f"ERROR: {error_msg}")
-            raise ValueError(error_msg) from e
-
-    def _adapt_filter_function(
-        self, filter_func: Callable[[type[BaseModel]], bool]
-    ) -> Callable[[str, type[BaseModel]], bool]:
+    def setup_django_models(self) -> dict[str, type[models.Model]]:
         """
-        Adapt a filter function that takes only a model to one that takes a name and a model.
-
-        Args:
-            filter_func: The filter function to adapt
+        Set up Django models from the discovered Pydantic models.
 
         Returns:
-            An adapted filter function that matches the expected signature
+            Dict of Django models
         """
+        if self.verbose:
+            logger.info("Setting up Django models...")
 
-        def combined_filter(name: str, model: type[BaseModel]) -> bool:
-            # First check if it's an ABC - always skip these
-            if ABC in model.__mro__:
-                if self.verbose:
-                    print(f"Skipping {name} ({model.__module__}.{model.__name__}) because it inherits from ABC")
-                return False
+        # Use the discovery module to set up Django models
+        django_models = setup_dynamic_models(app_label=self.app_label)
 
-            # Then apply the user's filter
-            result = filter_func(model)
-            if not result and self.verbose:
-                print(f"Skipping {name} due to custom filter function")
-            return result
+        if self.verbose:
+            logger.info(f"Set up {len(django_models)} Django models")
+            for name, model in django_models.items():
+                logger.info(f"  - {name}: {model}")
 
-        return combined_filter
+        return django_models
 
-    def generate_models_file(
-        self,
-        pydantic_models: dict[str, type[BaseModel]],
-        django_models: dict[str, type[models.Model]],
-    ) -> str:
+    def generate_field_definition(self, field: models.Field) -> str:
         """
-        Generate a Python file with Django model definitions.
-        Uses Jinja2 templating for cleaner code generation.
+        Generate a string representation of a Django model field.
+
+        Args:
+            field: The Django model field
+
+        Returns:
+            String representation of the field
         """
-        from datetime import datetime
+        field_type = type(field).__name__
 
-        # Generate module mappings and store as instance attribute
-        self._module_mappings = self._generate_module_mappings(pydantic_models)
+        # Start with the field type
+        definition = f"models.{field_type}("
 
-        # Generate model definitions
-        model_definitions = []
-        model_names = []
-        errors = []
+        # Add field parameters
+        params = []
 
-        for model_name, django_model in django_models.items():
-            pydantic_model = pydantic_models.get(model_name[6:]) if model_name.startswith("Django") else None
-            try:
-                model_def = self.generate_model_definition(model_name, django_model, pydantic_model)
-                model_definitions.append(model_def)
-                model_names.append(f'"{model_name}"')
-            except Exception as e:
-                error_message = f"# Error generating model {model_name}: {str(e)}"
-                logger.error(error_message)
-                errors.append((model_name, str(e)))
-                # Add a placeholder class with error comment
-                model_definitions.append(
-                    f"""class {model_name}(Pydantic2DjangoBaseClass):
-    # Error generating model: {str(e)}
-    pass
-"""
-                )
-                model_names.append(f'"{model_name}"')
+        # Common field parameters
+        if hasattr(field, "verbose_name") and field.verbose_name:
+            params.append(f"verbose_name='{field.verbose_name}'")
 
-        # If we have errors, raise an exception after collecting all errors
-        if errors:
-            error_summary = "\n".join([f"- {name}: {error}" for name, error in errors])
-            error_msg = f"Failed to generate {len(errors)} model(s) out of {len(django_models)}:\n{error_summary}"
-            logger.error(error_msg)
+        if hasattr(field, "help_text") and field.help_text:
+            params.append(f"help_text='{field.help_text}'")
 
-            # Decide whether to continue or raise an exception based on a threshold
-            if len(errors) / len(django_models) > 0.5:  # If more than 50% of models failed
-                raise ValueError(f"Too many model generation errors: {error_msg}")
+        if hasattr(field, "null") and field.null:
+            params.append(f"null={field.null}")
+
+        if hasattr(field, "blank") and field.blank:
+            params.append(f"blank={field.blank}")
+
+        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
+            if isinstance(field.default, str):
+                params.append(f"default='{field.default}'")
             else:
-                logger.warning("Continuing with partial model generation despite errors")
+                params.append(f"default={field.default}")
 
-        # Custom imports for the template
-        custom_imports = [
-            "from pydantic import BaseModel",
-            "from typing import Any, Optional, Dict, List, Union",
-        ]
+        # Field-specific parameters
+        if isinstance(field, models.CharField) and hasattr(field, "max_length"):
+            params.append(f"max_length={field.max_length}")
 
-        # Prepare template context
-        template_context = {
-            "generation_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "imports": custom_imports,
-            "module_mappings": self._module_mappings,
-            "model_definitions": model_definitions,
-            "all_models": ", ".join(model_names),
-        }
+        if isinstance(field, models.DecimalField):
+            if hasattr(field, "max_digits"):
+                params.append(f"max_digits={field.max_digits}")
+            if hasattr(field, "decimal_places"):
+                params.append(f"decimal_places={field.decimal_places}")
 
-        # Render the template
+        # Handle relationship fields
+        if isinstance(field, models.ForeignKey):
+            # Get the related model name safely
+            try:
+                related_model = field.related_model
+                if isinstance(related_model, type):
+                    related_model_name = related_model.__name__
+                else:
+                    related_model_name = str(related_model)
+                params.append(f"to='{related_model_name}'")
+            except Exception:
+                # Fallback to a string representation
+                params.append(
+                    "to='self'"
+                )  # Default to self-reference if we can't determine
+
+            # Get the on_delete behavior safely
+            try:
+                on_delete = getattr(field, "on_delete", None)
+                if on_delete and hasattr(on_delete, "__name__"):
+                    params.append(f"on_delete=models.{on_delete.__name__}")
+                else:
+                    params.append("on_delete=models.CASCADE")  # Default to CASCADE
+            except Exception:
+                params.append("on_delete=models.CASCADE")  # Default to CASCADE
+
+        if isinstance(field, models.ManyToManyField):
+            # Get the related model name safely
+            try:
+                related_model = field.related_model
+                if isinstance(related_model, type):
+                    related_model_name = related_model.__name__
+                else:
+                    related_model_name = str(related_model)
+                params.append(f"to='{related_model_name}'")
+            except Exception:
+                raise ValueError(f"Related model not found for {field}")
+        # Join parameters and close the definition
+        definition += ", ".join(params) + ")"
+
+        return definition
+
+    def generate_model_definition(self, model: type[models.Model]) -> str:
+        """
+        Generate a string representation of a Django model.
+
+        Args:
+            model: The Django model class
+
+        Returns:
+            String representation of the model
+        """
+        model_name = model.__name__
+        original_name = model_name
+
+        if model_name.startswith("Django"):
+            original_name = model_name[6:]  # Remove "Django" prefix
+
+        # Get fields from the model
+        fields = []
+        for field in model._meta.fields:
+            # Skip the fields from Pydantic2DjangoBaseClass
+            if field.name in ["id", "name", "object_type", "created_at", "updated_at"]:
+                continue
+
+            field_definition = self.generate_field_definition(field)
+            fields.append((field.name, field_definition))
+
+        # Get many-to-many fields safely
         try:
-            template = self.jinja_env.get_template("models_file.py.j2")
-            rendered = template.render(**template_context)
-
-            # Replace PydanticUndefined with a proper implementation
-            rendered = rendered.replace(
-                "PydanticUndefined = None",
-                """# Define a proper undefined type that won't cause issues with Django
-class UndefinedType:
-    def __repr__(self):
-        return "Undefined"
-
-    def __bool__(self):
-        return False
-
-PydanticUndefined = UndefinedType()""",
+            if hasattr(model._meta, "many_to_many"):
+                many_to_many = getattr(model._meta, "many_to_many", [])
+                for field in many_to_many:
+                    field_definition = self.generate_field_definition(field)
+                    fields.append((field.name, field_definition))
+        except Exception as e:
+            logger.exception(
+                f"Error processing many-to-many fields for {model_name}: {e}"
             )
 
-            return rendered
-        except Exception as e:
-            logger.error(f"Error rendering template for models_file.py.j2: {str(e)}")
-            raise ValueError(f"Failed to render models file template: {str(e)}") from e
-
-    def generate_model_definition(
-        self,
-        model_name: str,
-        django_model: type[models.Model],
-        pydantic_model: Optional[type[BaseModel]] = None,
-    ) -> str:
-        """Generate a Django model definition from a Pydantic model."""
-        # Get fields from Django model
-        fields = []
-        
-        # Use a try-except block to safely access Django model fields
-        try:
-            for field in django_model._meta.fields:
-                if field.name not in ["id", "name", "object_type", "created_at", "updated_at"]:
-                    field_str = self.field_to_string(field)
-                    fields.append((field.name, field_str))
-        except (AttributeError, TypeError):
-            logger.warning(f"Could not access fields from Django model {model_name}")
-
-        # If no fields were found in the Django model, try to get them from the Pydantic model
-        if pydantic_model is not None and not fields:
-            try:
-                from pydantic2django.fields import convert_field
-
-                # Get fields from Pydantic model
-                pydantic_fields = pydantic_model.model_fields
-                for field_name, field_info in pydantic_fields.items():
-                    django_field = convert_field(field_name, field_info)
-                    if django_field is not None:  # Add null check to handle potential None returns
-                        fields.append((field_name, self.field_to_string(django_field)))
-            except ImportError:
-                logger.warning(f"Could not import pydantic2django.fields, skipping field conversion for {model_name}")
-            except Exception as e:
-                logger.error(f"Error converting fields for {model_name}: {e}")
-
-        # Get meta information with safe access
-        meta = {}
-        try:
-            meta["db_table"] = django_model._meta.db_table
-        except (AttributeError, TypeError):
-            meta["db_table"] = f"{model_name.lower()}"
-            
-        try:
-            meta["app_label"] = django_model._meta.app_label
-        except (AttributeError, TypeError):
-            meta["app_label"] = self.app_label
-            
-        try:
-            meta["verbose_name"] = self._clean_docstring(django_model._meta.verbose_name)
-        except (AttributeError, TypeError):
-            meta["verbose_name"] = model_name
-            
-        try:
-            meta["verbose_name_plural"] = self._clean_docstring(django_model._meta.verbose_name_plural)
-        except (AttributeError, TypeError):
-            pass #Let Django handle the verbose name plural
-
-        # Get module path - ONLY from the Pydantic model or module mappings
+        # Get module path for the original Pydantic model
         module_path = ""
-        
-        # First priority: Get from the actual Pydantic model if available
-        if pydantic_model is not None:
-            module_path = pydantic_model.__module__
-            logger.info(f"Using module path from Pydantic model for {model_name}: {module_path}")
-        
-        # Second priority: Check our module mappings
-        elif hasattr(self, '_module_mappings'):
-            # Try with the current model name
-            if model_name in self._module_mappings:
-                module_path = self._module_mappings[model_name]
-                logger.info(f"Using module path from mappings for {model_name}: {module_path}")
-            
-            # Try with the original name (without Django prefix)
-            else:
-                original_name = model_name[6:] if model_name.startswith("Django") else model_name
-                if original_name in self._module_mappings:
-                    module_path = self._module_mappings[original_name]
-                    logger.info(f"Using module path from mappings for original name {original_name}: {module_path}")
-            
-        # Validate module path - it should not be empty
-        if not module_path:
-            # If we can't determine the module path, use a placeholder
-            module_path = "UNKNOWN_MODULE_PATH"
-            logger.warning(f"Warning: Could not determine module_path for {model_name}. Using placeholder.")
+        try:
+            if hasattr(model, "object_type"):
+                object_type = getattr(model, "object_type", "")
+                if object_type:
+                    module_path = object_type.rsplit(".", 1)[0]
+        except Exception as e:
+            logger.exception(f"Error getting module path for {model_name}: {e}")
 
-        # Get original name (without Django prefix)
-        original_name = model_name
-        if model_name.startswith("Django"):
-            original_name = model_name[6:]
+        # Prepare meta information
+        meta = {
+            "db_table": model._meta.db_table
+            or f"{self.app_label}_{model_name.lower()}",
+            "app_label": self.app_label,
+            "verbose_name": model._meta.verbose_name or model_name,
+            "verbose_name_plural": model._meta.verbose_name_plural or f"{model_name}s",
+        }
 
-        # Render the template
+        # Render the model definition template
         template = self.jinja_env.get_template("model_definition.py.j2")
         return template.render(
             model_name=model_name,
@@ -383,111 +273,120 @@ PydanticUndefined = UndefinedType()""",
             original_name=original_name,
         )
 
-    def _clean_docstring(self, text: str) -> str:
-        """Clean a docstring for use in a model definition."""
-        if not text:
-            return ""
-        
-        # Take only the first line of the docstring
-        first_line = text.split("\n")[0].strip()
-        return first_line
-
-    def field_to_string(self, field: models.Field) -> str:
-        """Convert a Django field to its string representation."""
-        field_type = field.__class__.__name__
-        kwargs = {}
-
-        # Handle common field attributes
-        if field.verbose_name and field.verbose_name != field.name:
-            kwargs["verbose_name"] = f'"{field.verbose_name}"'
-
-        if field.primary_key:
-            kwargs["primary_key"] = "True"
-
-        if field.blank:
-            kwargs["blank"] = "True"
-
-        if field.null:
-            kwargs["null"] = "True"
-
-        # Handle field-specific attributes
-        if hasattr(field, "max_length") and field.max_length:
-            kwargs["max_length"] = str(field.max_length)
-
-        if hasattr(field, "help_text") and field.help_text:
-            kwargs["help_text"] = f'"{field.help_text}"'
-
-        # Handle default values - this is a critical part for primitive types
-        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
-            # Skip adding default for UndefinedType
-            if hasattr(field.default, "__class__") and getattr(field.default.__class__, "__name__", "") == "UndefinedType":
-                # Don't add default for UndefinedType
-                pass
-            # Handle primitive types properly
-            elif isinstance(field.default, bool):
-                # Use the actual value without quotes for booleans
-                kwargs["default"] = str(field.default)
-            elif isinstance(field.default, (int, float)):
-                # Use the actual value without quotes for numbers
-                kwargs["default"] = str(field.default)
-            elif isinstance(field.default, str):
-                # Use quotes for strings
-                kwargs["default"] = f'"{field.default}"'
-            elif field.default is None:
-                # Use None for null values
-                kwargs["default"] = "None"
-            else:
-                # For other types, convert to string but don't add quotes
-                # This might not work for all types, but it's a reasonable default
-                try:
-                    kwargs["default"] = str(field.default)
-                except Exception:
-                    # If we can't convert to string, skip the default
-                    pass
-
-        # Handle on_delete for ForeignKey and OneToOneField
-        if field_type in ["ForeignKey", "OneToOneField"]:
-            kwargs["on_delete"] = "models.CASCADE"  # Default to CASCADE
-            if hasattr(field, "remote_field") and field.remote_field and hasattr(field.remote_field, "on_delete"):
-                on_delete_name = field.remote_field.on_delete.__name__
-                kwargs["on_delete"] = f"models.{on_delete_name}"
-
-        # Handle to for ForeignKey, OneToOneField, and ManyToManyField
-        if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]:
-            if hasattr(field, "remote_field") and field.remote_field and hasattr(field.remote_field, "model"):
-                to_model = field.remote_field.model
-                if isinstance(to_model, str):
-                    kwargs["to"] = f'"{to_model}"'
-                else:
-                    to_model_name = to_model.__name__
-                    kwargs["to"] = f'"{to_model_name}"'
-
-        # Format kwargs as a string
-        kwargs_str = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
-        return f"models.{field_type}({kwargs_str})"
-
-    def _generate_module_mappings(self, pydantic_models: dict[str, type[BaseModel]]) -> dict[str, str]:
+    def generate_models_file(self) -> str:
         """
-        Generate a mapping of model names to their module paths.
-
-        Args:
-            pydantic_models: Dict of discovered Pydantic models
+        Generate the complete models.py file content.
 
         Returns:
-            Dict mapping model names to their module paths
+            String content of the models.py file
         """
-        mappings = {}
-        for model_name, model_class in pydantic_models.items():
-            # Get the original name (without Django prefix)
-            original_name = model_name[6:] if model_name.startswith("Django") else model_name
+        # Discover and set up models
+        self.discover_models()
+        django_models = self.setup_django_models()
 
-            # Get the module path
-            module_path = model_class.__module__
+        # Generate model definitions
+        model_definitions = []
+        model_names = []
 
-            # Add to mappings
-            mappings[original_name] = module_path
+        for name, model in django_models.items():
+            try:
+                model_def = self.generate_model_definition(model)
+                model_definitions.append(model_def)
+                model_names.append(f"'{model.__name__}'")
+            except Exception as e:
+                logger.error(f"Error generating model definition for {name}: {e}")
 
-            if self.verbose:
-                print(f"Mapping {original_name} to {module_path}")
+        # Prepare imports
+        imports = [
+            "import uuid",
+            "import importlib",
+            "from typing import Any, Dict, List, Optional, Union",
+        ]
 
-        return mappings
+        # Render the models file template
+        template = self.jinja_env.get_template("models_file.py.j2")
+        return template.render(
+            generation_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            imports=imports,
+            model_definitions=model_definitions,
+            all_models=", ".join(model_names),
+        )
+
+    def write_models_file(self) -> None:
+        """
+        Write the generated models to the output file.
+        """
+        if self.verbose:
+            logger.info(f"Writing models to {self.output_path}")
+
+        # Generate the file content
+        content = self.generate_models_file()
+
+        # Create directory if it doesn't exist
+        output_dir = os.path.dirname(self.output_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        # Write the file
+        with open(self.output_path, "w") as f:
+            f.write(content)
+
+        if self.verbose:
+            logger.info(f"Successfully wrote models to {self.output_path}")
+
+    def generate(self) -> str:
+        """
+        Generate and write the models file.
+
+        Returns:
+            The path to the generated models file
+        """
+        try:
+            self.write_models_file()
+            logger.info(f"Successfully generated models file at {self.output_path}")
+            return self.output_path
+        except Exception as e:
+            logger.error(f"Error generating models file: {e}")
+            raise
+
+
+def main():
+    """
+    Command-line interface for the StaticDjangoModelGenerator.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate static Django models from Pydantic models"
+    )
+    parser.add_argument(
+        "--output", "-o", default="generated_models.py", help="Output file path"
+    )
+    parser.add_argument(
+        "--packages",
+        "-p",
+        nargs="+",
+        required=True,
+        help="Packages to scan for Pydantic models",
+    )
+    parser.add_argument(
+        "--app-label", "-a", default="django_app", help="Django app label"
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+
+    args = parser.parse_args()
+
+    generator = StaticDjangoModelGenerator(
+        output_path=args.output,
+        packages=args.packages,
+        app_label=args.app_label,
+        verbose=args.verbose,
+    )
+
+    generator.generate()
+
+
+if __name__ == "__main__":
+    main()

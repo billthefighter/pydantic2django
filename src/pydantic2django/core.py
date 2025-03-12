@@ -35,6 +35,7 @@ def make_django_model(
     check_migrations: bool = True,
     skip_relationships: bool = False,
     existing_model: Optional[type[models.Model]] = None,
+    class_name_prefix: str = "Django",
     **options: Any,
 ) -> tuple[type[models.Model], Optional[dict[str, models.Field]]]:
     """
@@ -181,7 +182,7 @@ def make_django_model(
     }
 
     # Create the Django model
-    model_name = f"Django{pydantic_model.__name__}"
+    model_name = f"{class_name_prefix}{pydantic_model.__name__}"
 
     # Use the correct base class
     bases = tuple(base_classes)

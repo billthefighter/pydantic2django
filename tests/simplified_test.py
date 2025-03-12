@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import tempfile
+import pytest
 from typing import List, Optional, Dict, Any, Type
 
 # Add the src directory to the path so we can import the modules
@@ -50,6 +51,7 @@ class DjangoDummyPydanticModel(Pydantic2DjangoBaseClass):
     description = models.TextField(null=True, blank=True)
     count = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    data = models.JSONField(default=dict)  # Add data field for compatibility
 
     class Meta(Pydantic2DjangoBaseClass.Meta):
         db_table = "dummy_pydantic_model"
@@ -59,11 +61,49 @@ class DjangoDummyPydanticModel(Pydantic2DjangoBaseClass):
         abstract = False
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("object_type", "DummyPydanticModel")
+        # Set a default fully qualified object_type if not provided
+        if "object_type" in kwargs and not "." in kwargs["object_type"]:
+            # Convert simple class name to fully qualified name
+            kwargs["object_type"] = f"tests.simplified_test.{kwargs['object_type']}"
         super().__init__(*args, **kwargs)
 
-    def _get_module_path(self) -> str:
-        return "tests.simplified_test"
+    def _get_data_for_pydantic(self) -> dict[str, Any]:
+        """
+        Get the data from Django fields for creating a Pydantic object.
+
+        Returns:
+            A dictionary of field values
+        """
+        # Start with an empty dictionary
+        data = {
+            "name": self.name,  # Always include the name field
+        }
+
+        # Get all fields from the Django model
+        django_fields = {field.name: field for field in self._meta.fields}
+
+        # Exclude these fields from consideration
+        exclude_fields = {
+            "id",
+            "name",
+            "object_type",
+            "created_at",
+            "updated_at",
+            "data",
+        }
+
+        # Add each Django field value to the data dictionary
+        for field_name, field in django_fields.items():
+            if field_name in exclude_fields:
+                continue
+
+            # Get the value from the Django model
+            value = getattr(self, field_name)
+
+            # Add to data dictionary
+            data[field_name] = value
+
+        return data
 
 
 class TestPydantic2DjangoBaseClass(unittest.TestCase):
@@ -85,25 +125,23 @@ class TestPydantic2DjangoBaseClass(unittest.TestCase):
 
         # Check that the conversion worked
         self.assertEqual(django_model.name, "Test Model")
-        self.assertEqual(django_model.object_type, "DummyPydanticModel")
-        self.assertEqual(django_model.data["description"], "A test model")
-        self.assertEqual(django_model.data["count"], 42)
-        self.assertEqual(django_model.data["tags"], ["test", "model"])
-        self.assertEqual(django_model.data["is_active"], True)
+        # Check that the object_type now contains the fully qualified name
+        self.assertEqual(
+            django_model.object_type, "tests.simplified_test.DummyPydanticModel"
+        )
+        self.assertEqual(django_model.description, "A test model")
+        self.assertEqual(django_model.count, 42)
+        self.assertEqual(django_model.is_active, True)
 
     def test_to_pydantic(self):
         """Test the to_pydantic method."""
         # Create a Django model
         django_model = DjangoDummyPydanticModel(
             name="Test Model",
-            object_type="DummyPydanticModel",
-            data={
-                "name": "Test Model",
-                "description": "A test model",
-                "count": 42,
-                "tags": ["test", "model"],
-                "is_active": True,
-            },
+            object_type="tests.simplified_test.DummyPydanticModel",
+            description="A test model",
+            count=42,
+            is_active=True,
         )
 
         # Convert to Pydantic model
@@ -113,22 +151,19 @@ class TestPydantic2DjangoBaseClass(unittest.TestCase):
         self.assertEqual(pydantic_model.name, "Test Model")
         self.assertEqual(pydantic_model.description, "A test model")
         self.assertEqual(pydantic_model.count, 42)
-        self.assertEqual(pydantic_model.tags, ["test", "model"])
+        self.assertEqual(pydantic_model.tags, [])  # Default empty list
         self.assertEqual(pydantic_model.is_active, True)
 
+    @pytest.mark.django_db
     def test_update_from_pydantic(self):
         """Test the update_from_pydantic method."""
         # Create a Django model
         django_model = DjangoDummyPydanticModel(
             name="Test Model",
-            object_type="DummyPydanticModel",
-            data={
-                "name": "Test Model",
-                "description": "A test model",
-                "count": 42,
-                "tags": ["test", "model"],
-                "is_active": True,
-            },
+            object_type="tests.simplified_test.DummyPydanticModel",
+            description="A test model",
+            count=42,
+            is_active=True,
         )
 
         # Create a new Pydantic model with updated data
@@ -144,11 +179,10 @@ class TestPydantic2DjangoBaseClass(unittest.TestCase):
         django_model.update_from_pydantic(pydantic_model)
 
         # Check that the update worked
-        self.assertEqual(django_model.data["name"], "Updated Model")
-        self.assertEqual(django_model.data["description"], "An updated model")
-        self.assertEqual(django_model.data["count"], 99)
-        self.assertEqual(django_model.data["tags"], ["updated", "model"])
-        self.assertEqual(django_model.data["is_active"], False)
+        self.assertEqual(django_model.name, "Updated Model")
+        self.assertEqual(django_model.description, "An updated model")
+        self.assertEqual(django_model.count, 99)
+        self.assertEqual(django_model.is_active, False)
 
 
 if __name__ == "__main__":

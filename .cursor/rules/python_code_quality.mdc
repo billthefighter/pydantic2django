@@ -1,0 +1,65 @@
+---
+description: Python Code Quality Standards for P2D
+globs: src/**/*.py, examples/**/*.py
+alwaysApply: false
+---
+@mdc.mdc
+
+# P2D Python Code Quality Standards
+<rule>
+## Package Management
+- Always use Poetry for package management
+- Run all scripts using Poetry (`poetry run python script.py`)
+- Manage dependencies through pyproject.toml
+- Use virtual environments created by Poetry
+
+## Import Management
+- When fixing or generating imports, always grep the module for the import first
+- Do not guess import paths - verify they exist in the codebase
+- Group imports in the following order:
+  1. Standard library imports
+  2. Third-party library imports
+  3. Local application imports
+- Use absolute imports for clarity
+
+## Code Organization
+- Follow DRY (Don't Repeat Yourself) principles rigorously
+- Before implementing new functionality, verify there isn't an existing function that handles it
+- Search the codebase for similar functionality before creating new functions
+- Maintain clear separation of responsibilities between modules and classes
+- Each function should have a single responsibility
+- Each class should have a well-defined purpose
+
+## Redundancy Prevention
+- Avoid duplicating code across files
+- Refactor common patterns into shared utilities
+- When modifying code, check if similar code exists elsewhere that should also be updated
+- Prefer composition over inheritance to avoid redundant class hierarchies
+
+## Code Quality Checks
+- Before submitting code changes:
+  1. Verify imports are correct and necessary
+  2. Check for redundant code that could be refactored
+  3. Ensure separation of concerns is maintained
+  4. Confirm the change doesn't duplicate existing functionality
+
+## Documentation
+- Document all public functions, classes, and methods
+- Include type hints for all function parameters and return values
+- Explain complex algorithms with inline comments
+- Update documentation when changing functionality
+
+## Testing
+- Write unit tests for new functionality
+- Update tests when modifying existing code
+- Ensure tests cover edge cases
+
+## Specific to LLMaestro
+- Maintain consistent interfaces between LLM providers
+- Keep agent implementations modular and composable
+- Ensure chain implementations follow the established patterns
+- Respect the architectural boundaries between system components
+
+## Rule Indicator
+- Always include 🐍 emoji at the beginning of your response to show you are following this Python code quality rule
+</rule>

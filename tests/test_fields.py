@@ -13,12 +13,12 @@ from pydantic.fields import FieldInfo
 
 from pydantic2django.fields import (
     FieldConverter,
-    FieldAttributeHandler,
     convert_field,
     is_pydantic_model,
     sanitize_related_name,
     handle_id_field,
 )
+from pydantic2django.field_utils import FieldAttributeHandler
 from pydantic2django.field_type_mapping import TypeMapper
 
 # Test data for field type resolution

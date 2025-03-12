@@ -1,0 +1,38 @@
+---
+description: Project Guidelines
+globs:
+alwaysApply: true
+---
+@mdc.mdc
+
+# Pydantic2django Project Guidelines
+<rule>
+
+
+## Constraints
+- Python 3.11+ required
+- Follow PEP 8 style guidelines
+- Use type hints consistently
+- Maintain backward compatibility
+- Keep dependencies minimal and explicit
+- Use Poetry and Pytest
+
+## Overall Structure
+- Modular architecture with clear separation of concerns
+- Pydantic models for data validation
+- Provider-agnostic LLM interfaces
+- Task-based orchestration system
+- Storage management for intermediate results
+
+## Code Quality Rules
+- Always check if there is an existing method before creating a new one
+- Minimize redundancy and verify edits don't increase redundancy
+- Prioritize DRY (Don't Repeat Yourself) code principles
+- Use descriptive variable and function names
+- Keep functions focused on a single responsibility
+- Document public APIs with docstrings
+- Write unit tests for new functionality
+
+## always
+- Always include 🤔 emoji at the beginning of your response to show you read this rule
+</rule>

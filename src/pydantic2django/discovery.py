@@ -11,7 +11,7 @@ from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional, TypeVar, cast, get_args, get_origin
+from typing import Any, Optional, cast, get_args, get_origin
 
 from django.apps import apps
 from django.db import models
@@ -24,9 +24,6 @@ from .types import DjangoBaseModel, T
 from .utils import normalize_model_name
 
 logger = logging.getLogger(__name__)
-
-# Type variable for BaseModel subclasses
-T = TypeVar("T", bound=BaseModel)
 
 
 def get_model_dependencies_recursive(model: type[models.Model], app_label: str) -> set[str]:
@@ -253,10 +250,10 @@ class ModelDiscovery:
     def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
         """
         Determine if a Pydantic model should be converted to a Django model.
-        
+
         Args:
             model_class: The Pydantic model class to check
-            
+
         Returns:
             True if the model should be converted, False otherwise
         """
@@ -264,7 +261,7 @@ class ModelDiscovery:
         if ABC in model_class.__mro__:
             logger.info(f"Skipping {model_class.__name__} because it inherits from ABC")
             return False
-        
+
         return True
 
     def discover_models(
@@ -647,9 +644,14 @@ class ModelDiscovery:
         if not self.django_models:
             self.setup_models(app_label=app_label)
 
-        # Look for the model in the registry
+        # Get the fully qualified name of the Pydantic model
+        module_name = actual_model.__module__
+        class_name = actual_model.__name__
+        fully_qualified_name = f"{module_name}.{class_name}"
+
+        # Look for the model in the registry by checking the object_type field
         for model in self.django_models.values():
-            if getattr(model, "_pydantic_model", None) == actual_model:
+            if getattr(model, "object_type", None) == fully_qualified_name:
                 return cast(type[DjangoBaseModel[T]], model)
 
         # If not found, try to create it

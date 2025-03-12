@@ -91,9 +91,14 @@ class DjangoModelFactory(Generic[T]):
             **options,
         )
 
-        # Store reference to the Pydantic model
-        # Use setattr to avoid linter errors
-        django_model._pydantic_model = pydantic_model
+        # Store reference to the Pydantic model in the object_type field
+        # Use fully qualified module path
+        module_name = pydantic_model.__module__
+        class_name = pydantic_model.__name__
+        fully_qualified_name = f"{module_name}.{class_name}"
+
+        # Set the object_type field
+        django_model.object_type = fully_qualified_name
 
         # Ensure the model is not abstract by setting Meta attributes
         meta_attrs = {
@@ -144,8 +149,13 @@ class DjangoModelFactory(Generic[T]):
             **kwargs,
         )
 
-        # Add type hints
-        # Use setattr to avoid linter errors
-        django_model._pydantic_model = pydantic_model
+        # Store reference to the Pydantic model in the object_type field
+        # Use fully qualified module path
+        module_name = pydantic_model.__module__
+        class_name = pydantic_model.__name__
+        fully_qualified_name = f"{module_name}.{class_name}"
 
-        return cast(type[DjangoBaseModel[T]], django_model)
+        # Set the object_type field
+        django_model.object_type = fully_qualified_name
+
+        return django_model

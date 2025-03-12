@@ -1,0 +1,97 @@
+---
+description: Changenotes Standards
+globs: docs/changenotes/*.md
+---
+# Changenotes Standards
+
+Standards for creating and organizing change notes in the LLMaestro project.
+
+<rule>
+name: changenotes_standards
+description: Guidelines for creating and organizing change notes
+
+## Placement and Organization
+
+Change notes should be placed in the `docs/changenotes` directory with the following structure:
+
+```
+docs/changenotes/
+├── changes_from_<branch_name>_<commit_hash>.md
+├── changes_from_<feature>_<commit_hash>.md
+└── ...
+```
+
+## Naming Convention
+
+- Use the format `changes_from_<branch_name>_<commit_hash>.md`
+- Always include the branch name and a short commit hash
+- Use lowercase and underscores for consistency
+- Example: `changes_from_tool_dev_5884f30.md`
+
+## Content Requirements
+
+Each change note should include:
+
+1. **Title**: Clear heading with the change description and commit reference
+2. **Overview**: Brief summary of the changes made
+3. **Changes Made**: Detailed list of specific changes
+4. **Benefits**: Explanation of why the changes improve the codebase
+5. **Test Coverage**: Information about test coverage and verification
+6. **Verification**: How the changes were tested and verified
+
+## Example Structure
+
+```markdown
+# Feature Implementation Changes from branch_name 1234abc
+
+## Overview
+
+Brief description of the changes.
+
+## Changes Made
+
+1. **Change Category One**:
+   - Specific change details
+   - More details
+
+2. **Change Category Two**:
+   - Specific change details
+   - More details
+
+## Benefits of Changes
+
+Explanation of how these changes improve the codebase.
+
+## Test Coverage
+
+Information about test coverage.
+
+## Verification
+
+How the changes were tested and verified.
+```
+
+## When to Create Change Notes
+
+Create change notes for:
+- Major feature implementations
+- Significant refactorings
+- Architecture changes
+- Breaking changes
+- Important bug fixes
+
+## Integration with Development Workflow
+
+1. Create the change note as part of your feature branch
+2. Update it as you make changes
+3. Finalize before merging to main/master
+4. Include the file path in your PR description
+
+## Best Practices
+
+- Be concise but thorough
+- Focus on the "why" as much as the "what"
+- Include code examples when helpful
+- Reference related issues or PRs
+- Update if changes are made after initial creation
+</rule>
