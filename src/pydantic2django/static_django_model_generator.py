@@ -147,30 +147,38 @@ class StaticDjangoModelGenerator:
                 print(f"Skipping model {model_name} as it didn't pass the filter")
 
         if not filtered_django_models:
+            error_msg = "No Django models were generated that match the filter. Check your filter function."
             if self.verbose:
-                print("No Django models were generated that match the filter. Check your filter function.")
-            return None
+                print(error_msg)
+            raise ValueError(error_msg)
 
         if self.verbose:
             print(f"Generating {len(filtered_django_models)} Django models:")
             for model_name in filtered_django_models.keys():
                 print(f"  - {model_name}")
 
-        # Generate the models.py content
-        content = self.generate_models_file(discovered_models, filtered_django_models)
+        try:
+            # Generate the models.py content
+            content = self.generate_models_file(discovered_models, filtered_django_models)
 
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
 
-        # Write to file
-        with open(self.output_path, "w") as f:
-            f.write(content)
+            # Write to file
+            with open(self.output_path, "w") as f:
+                f.write(content)
 
-        if self.verbose:
-            print(f"Successfully generated models file at {self.output_path}")
-            print(f"Generated {len(filtered_django_models)} model definitions")
+            if self.verbose:
+                print(f"Successfully generated models file at {self.output_path}")
+                print(f"Generated {len(filtered_django_models)} model definitions")
 
-        return self.output_path
+            return self.output_path
+        except Exception as e:
+            error_msg = f"Failed to generate models file: {str(e)}"
+            logger.error(error_msg)
+            if self.verbose:
+                print(f"ERROR: {error_msg}")
+            raise ValueError(error_msg) from e
 
     def _adapt_filter_function(
         self, filter_func: Callable[[type[BaseModel]], bool]
@@ -217,12 +225,38 @@ class StaticDjangoModelGenerator:
         # Generate model definitions
         model_definitions = []
         model_names = []
+        errors = []
 
         for model_name, django_model in django_models.items():
             pydantic_model = pydantic_models.get(model_name[6:]) if model_name.startswith("Django") else None
-            model_def = self.generate_model_definition(model_name, django_model, pydantic_model)
-            model_definitions.append(model_def)
-            model_names.append(f'"{model_name}"')
+            try:
+                model_def = self.generate_model_definition(model_name, django_model, pydantic_model)
+                model_definitions.append(model_def)
+                model_names.append(f'"{model_name}"')
+            except Exception as e:
+                error_message = f"# Error generating model {model_name}: {str(e)}"
+                logger.error(error_message)
+                errors.append((model_name, str(e)))
+                # Add a placeholder class with error comment
+                model_definitions.append(
+                    f"""class {model_name}(Pydantic2DjangoBaseClass):
+    # Error generating model: {str(e)}
+    pass
+"""
+                )
+                model_names.append(f'"{model_name}"')
+
+        # If we have errors, raise an exception after collecting all errors
+        if errors:
+            error_summary = "\n".join([f"- {name}: {error}" for name, error in errors])
+            error_msg = f"Failed to generate {len(errors)} model(s) out of {len(django_models)}:\n{error_summary}"
+            logger.error(error_msg)
+
+            # Decide whether to continue or raise an exception based on a threshold
+            if len(errors) / len(django_models) > 0.5:  # If more than 50% of models failed
+                raise ValueError(f"Too many model generation errors: {error_msg}")
+            else:
+                logger.warning("Continuing with partial model generation despite errors")
 
         # Prepare template context
         template_context = {
@@ -239,7 +273,7 @@ class StaticDjangoModelGenerator:
             return template.render(**template_context)
         except Exception as e:
             logger.error(f"Error rendering template for models_file.py.j2: {str(e)}")
-            raise e
+            raise ValueError(f"Failed to render models file template: {str(e)}") from e
 
     def generate_model_definition(
         self,
@@ -256,17 +290,9 @@ class StaticDjangoModelGenerator:
         # Access _meta safely using getattr
         meta = getattr(django_model, "_meta", None)
         if meta is None:
-            logger.warning(f"Could not access _meta for {model_name}. Using fallback values.")
-
-            # Create a fallback meta object with default values
-            class FallbackMeta:
-                db_table = f"django_llm_{model_name.lower()}"
-                verbose_name = model_name
-                verbose_name_plural = f"{model_name}s"
-                fields = []
-                many_to_many = []
-
-            meta = FallbackMeta
+            error_msg = f"Could not access _meta for {model_name}. This is required for model generation."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Get fields
         fields = []
@@ -291,7 +317,9 @@ class StaticDjangoModelGenerator:
                         field_str = self.field_to_string(attr)
                         fields.append((name, field_str))
         except Exception as e:
-            logger.error(f"Error getting fields for {model_name}: {str(e)}")
+            error_msg = f"Error getting fields for {model_name}: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
 
         # If we have a Pydantic model, try to get fields from it
         if pydantic_model is not None and not fields:
@@ -317,7 +345,15 @@ class StaticDjangoModelGenerator:
                         field_str = self.field_to_string(django_field)
                         fields.append((name, field_str))
             except Exception as e:
-                logger.error(f"Error converting Pydantic fields for {model_name}: {str(e)}")
+                error_msg = f"Error converting Pydantic fields for {model_name}: {str(e)}"
+                logger.error(error_msg)
+                raise ValueError(error_msg) from e
+
+        # If we still have no fields, raise an error
+        if not fields:
+            error_msg = f"No fields could be extracted for {model_name}. Cannot generate model definition."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Get original name (without Django prefix)
         original_name = model_name[6:] if model_name.startswith("Django") else model_name
@@ -343,29 +379,9 @@ class StaticDjangoModelGenerator:
             template = self.jinja_env.get_template("model_definition.py.j2")
             return template.render(**template_context)
         except Exception as e:
-            logger.error(f"Error rendering template for {model_name}: {str(e)}")
-            # Return a minimal model definition as fallback
-            return f"""class {model_name}(Pydantic2DjangoBaseClass):
-    nodes = models.JSONField(null=True, blank=True)
-    edges = models.JSONField(null=True, blank=True)
-    metadata = models.JSONField(null=True, blank=True)
-
-    class Meta(Pydantic2DjangoBaseClass.Meta):
-        db_table = "django_llm_{model_name.lower()}"
-        app_label = "{self.app_label}"
-        verbose_name = "{original_name}"
-        verbose_name_plural = "{original_name}s"
-        abstract = False
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("object_type", "{original_name}")
-        super().__init__(*args, **kwargs)
-
-    def _get_module_path(self) -> str:
-        # Use the utility function to get the module path
-        from django_llm.models.models import get_module_path
-        return get_module_path(self.object_type)
-"""
+            error_msg = f"Error rendering template for {model_name}: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
 
     def field_to_string(self, field: models.Field) -> str:
         """
