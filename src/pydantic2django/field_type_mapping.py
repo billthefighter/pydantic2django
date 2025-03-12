@@ -20,6 +20,11 @@ from django.db import models
 # EmailStr and IPvAnyAddress are likely from pydantic
 from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 
+# Import shared utilities
+from pydantic2django.field_utils import (
+    get_default_max_length,
+)
+
 logger = getLogger(__name__)
 
 
@@ -167,7 +172,7 @@ class TypeMapper:
             if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
                 # This is a list of Pydantic models, which should be a ManyToManyField
                 return TypeMappingDefinition(python_type=list, django_field=models.ManyToManyField)
-            
+
         for mapping in TYPE_MAPPINGS:
             if mapping.matches_type(python_type):
                 return mapping
@@ -354,20 +359,7 @@ class TypeMapper:
             field_type: The Django field type
 
         Returns:
-            The max_length value or None if not applicable
+            The default max_length or None if not applicable
         """
-        # Special case for email fields
-        if field_type == models.EmailField or "email" in field_name.lower():
-            return 254
-
-        # Get mappings for this field type
-        mappings = cls.filter_by_django_field(field_type)
-        if not mappings:
-            return None
-
-        # Return the max_length from the first mapping that has one
-        for mapping in mappings:
-            if mapping.max_length is not None:
-                return mapping.max_length
-
-        return None
+        # Use the shared utility function
+        return get_default_max_length(field_name, field_type)

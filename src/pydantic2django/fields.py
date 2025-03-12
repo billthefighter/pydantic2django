@@ -2,227 +2,66 @@
 Field mapping between Pydantic and Django models.
 """
 import logging
-import re
-import inspect
-from collections.abc import Callable
-from decimal import Decimal
-from enum import Enum
-from typing import (
-    Any,
-    Generic,
-    Optional,
-    TypeVar,
-    Union,
-    get_args,
-    get_origin,
-    List,
-    Dict,
-)
-from abc import ABC
+from typing import Any, Optional, Union, cast, get_args, get_origin
 
-from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
-# Determine Pydantic version
-import pydantic
-PYDANTIC_V2 = pydantic.__version__.startswith("2.")
+# Import shared utilities
+from pydantic2django.field_utils import (
+    RelationshipFieldHandler,
+    get_default_max_length,
+    is_pydantic_model,
+    sanitize_related_name,
+)
 
-if PYDANTIC_V2:
-    # Pydantic v2 imports
-    from pydantic.fields import FieldInfo as _FieldInfo
-    # In Pydantic v2, we need to use model_fields instead of __fields__
-    def get_model_fields(model_class):
-        return model_class.model_fields
-else:
-    # Pydantic v1 imports
-    from pydantic import FieldInfo as _FieldInfo
-    # In Pydantic v1, we use __fields__
-    def get_model_fields(model_class):
-        return model_class.__fields__
-
-# Use a consistent FieldInfo type for our code
-FieldInfo = _FieldInfo
-
-# Add compatibility layer for is_optional method
-if not hasattr(FieldInfo, "is_optional"):
-    def is_optional(self) -> bool:
-        """Check if a field is optional (can be None)."""
-        if PYDANTIC_V2:
-            # In v2, check if None is allowed in the field
-            return self.is_required is False
-        else:
-            # In v1, check if the field allows None
-            return self.allow_none
-    
-    # Monkey patch the method
-    setattr(FieldInfo, "is_optional", is_optional)
-
+# Configure logging
 logger = logging.getLogger(__name__)
 
 
-def is_pydantic_model(obj: Any) -> bool:
+def get_field_attributes(field_info: FieldInfo, extra: Any = None) -> dict[str, Any]:
     """
-    Check if an object is a Pydantic model class.
+    Extract field attributes from a Pydantic field.
 
     Args:
-        obj: The object to check
+        field_info: The Pydantic field info
+        extra: Optional extra attributes or callable to get extra attributes
 
     Returns:
-        True if the object is a Pydantic model class, False otherwise
+        Dictionary of field attributes
     """
-    if not inspect.isclass(obj):
-        return False
-    
-    try:
-        # Check if it's a Pydantic model
-        is_pydantic = issubclass(obj, BaseModel)
-        
-        # Skip abstract base classes (inheriting from ABC)
-        if is_pydantic and ABC in obj.__mro__:
-            return False
-        
-        # In Pydantic v2, we need to check for model_fields attribute
-        if is_pydantic and PYDANTIC_V2:
-            return hasattr(obj, "model_fields")
-        
-        # In Pydantic v1, we check for __fields__ attribute
-        if is_pydantic and not PYDANTIC_V2:
-            return hasattr(obj, "__fields__")
-        
-        return is_pydantic
-    except (TypeError, AttributeError):
-        # If there's an error checking subclass relationship, it's not a Pydantic model
-        return False
+    kwargs = {}
 
+    # Handle null/blank based on whether the field is optional
+    is_optional = field_info.is_required is False
+    kwargs["null"] = is_optional
+    kwargs["blank"] = is_optional
 
-def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
-    """
-    Convert a string into a valid Python identifier for use as a related_name.
-    Ensures uniqueness by incorporating model and field names.
+    # Handle default value
+    if field_info.default is not None and field_info.default != Ellipsis:
+        kwargs["default"] = field_info.default
 
-    Args:
-        name: The string to convert
-        model_name: Name of the model containing the field
-        field_name: Name of the field
+    # Handle description as help_text
+    if field_info.description:
+        kwargs["help_text"] = field_info.description
 
-    Returns:
-        A valid Python identifier
-    """
-    # Handle empty or None name
-    if not name:
-        name = "related"
+    # Handle title as verbose_name
+    if field_info.title:
+        kwargs["verbose_name"] = field_info.title
 
-    # Convert camelCase and PascalCase to snake_case
-    # Insert underscore between lowercase and uppercase letters
-    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
-
-    # Replace invalid characters with underscores
-    name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-
-    # Remove consecutive underscores
-    name = re.sub(r"_+", "_", name)
-
-    # Start with model name and field name to ensure uniqueness
-    prefix = ""
-    if model_name and field_name:
-        expected_prefix = f"{model_name.lower()}_{field_name.lower()}"
-        # Only add prefix if the name doesn't already contain it
-        if expected_prefix != name and not name.startswith(f"{expected_prefix}_"):
-            prefix = f"{expected_prefix}_"
-    elif model_name:
-        prefix += f"{model_name.lower()}_"
-    elif field_name:
-        prefix += f"{field_name.lower()}_"
-
-    # Preserve leading underscore if it exists
-    has_leading_underscore = name.startswith("_")
-
-    # Ensure it starts with a letter or underscore if it doesn't already
-    if not name[0].isalpha() and not has_leading_underscore:
-        name = f"_{name}"
-
-    # Combine prefix and name
-    result = f"{prefix}{name}".lower()
-
-    # Remove any trailing underscores
-    result = result.rstrip("_")
-
-    # If result is empty after all processing, use a default
-    if not result:
-        result = f"{prefix}related"
-
-    # Ensure the name doesn't exceed Django's field name length limit (63 characters)
-    if len(result) > 63:
-        # Use a consistent suffix for truncated names
-        result = f"{result[:54]}_{'a' * 8}"
-
-    return result
-
-
-class FieldAttributeHandler:
-    """
-    Handles extracting attributes from Pydantic field info for Django fields.
-    """
-
-    @staticmethod
-    def handle_field_attributes(
-        field_info: FieldInfo,
-        extra: Union[Dict[str, Any], Callable[..., Any], None] = None,
-    ) -> dict[str, Any]:
-        """
-        Extract attributes from Pydantic field info for Django fields.
-
-        Args:
-            field_info: The Pydantic field info
-            extra: Extra attributes to include
-
-        Returns:
-            Dict of field attributes
-        """
-        attrs = {}
-
-        # Handle null/blank
-        try:
-            # Try to use is_optional method if available
-            null = field_info.is_optional()
-        except (AttributeError, TypeError):
-            # Fall back to checking if the field is required
-            if PYDANTIC_V2:
-                null = not field_info.is_required
-            else:
-                null = field_info.allow_none
-                
-        attrs["null"] = null
-        attrs["blank"] = null  # Usually blank follows null
-
-        # Handle default value
-        if PYDANTIC_V2:
-            has_default = field_info.default is not None and field_info.default != ...
+    # Process extra attributes
+    if extra:
+        if callable(extra):
+            extra_kwargs = extra(field_info)
+            kwargs.update(extra_kwargs)
         else:
-            has_default = field_info.default is not None and field_info.default != Ellipsis
-            
-        if has_default:
-            default_value = field_info.default
-            if not callable(default_value) and default_value is not None:
-                attrs["default"] = default_value
+            kwargs.update(extra)
 
-        # Handle description/help_text
-        if hasattr(field_info, "description") and field_info.description:
-            attrs["help_text"] = field_info.description
-
-        # Add extra attributes
-        if extra:
-            if callable(extra):
-                extra_attrs = extra(field_info)
-            else:
-                extra_attrs = extra
-            attrs.update(extra_attrs)
-
-        return attrs
+    return kwargs
 
 
-def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[str, Any]]:
+def handle_id_field(field_name: str, field_info: FieldInfo) -> Optional[models.Field]:
     """
     Handle potential ID field naming conflicts with Django's automatic primary key.
 
@@ -231,45 +70,35 @@ def handle_id_field(field_name: str, field_info: FieldInfo) -> tuple[str, dict[s
         field_info: The Pydantic field info
 
     Returns:
-        Tuple of (new_field_name, field_kwargs)
+        A Django field instance configured as a primary key
     """
-    field_kwargs = {}
-    new_field_name = field_name
-
     # Check if this is an ID field (case insensitive)
     if field_name.lower() == "id":
-        # Set as primary key
-        field_kwargs["primary_key"] = True
-        # Add a helpful comment in verbose_name
-        field_kwargs["verbose_name"] = f"Custom {field_name} (used as primary key)"
+        field_type = field_info.annotation
 
-    return new_field_name, field_kwargs
+        # Determine the field type based on the annotation
+        if field_type is int:
+            field_class = models.AutoField
+        elif field_type is str:
+            field_class = models.CharField
+        else:
+            # Default to AutoField for other types
+            field_class = models.AutoField
 
+        # Create field kwargs
+        field_kwargs = {
+            "primary_key": True,
+            "verbose_name": f"Custom {field_name} (used as primary key)",
+        }
 
-def _handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:
-    """
-    Handle enum field by creating a CharField with choices.
+        # Add max_length for CharField
+        if field_class is models.CharField:
+            field_kwargs["max_length"] = 255
 
-    Args:
-        field_type: The enum class
-        kwargs: Additional field arguments
+        # Create and return the field
+        return field_class(**field_kwargs)
 
-    Returns:
-        A CharField with choices set from the enum
-    """
-    # Create choices from enum members
-    choices = [(member.value, member.name) for member in field_type]
-
-    # Set max_length based on the longest value if not already set
-    if "max_length" not in kwargs:
-        max_length = max(len(str(choice[0])) for choice in choices)
-        kwargs["max_length"] = max(max_length, 1)  # Ensure at least length 1
-
-    # Add choices to kwargs
-    kwargs["choices"] = choices
-
-    # Create and return the CharField
-    return models.CharField(**kwargs)
+    return None
 
 
 class FieldConverter:
@@ -302,24 +131,15 @@ class FieldConverter:
 
         if origin is Union and type(None) in args:
             # This is an Optional type, get the actual type
-            for arg in args:
-                if arg is not type(None):
-                    field_type = arg
-                    break
+            field_type = next(arg for arg in args if arg is not type(None))
 
         # Check for List/Dict types
-        if origin in (list, List):
+        if origin is list:
             # Check if it's a list of Pydantic models
-            if args and len(args) > 0:
-                try:
-                    # Safely check if the first argument is a Pydantic model
-                    if is_pydantic_model(args[0]):
-                        return models.ManyToManyField, True
-                except (TypeError, AttributeError):
-                    # If there's an error, default to JSONField
-                    pass
+            if args and is_pydantic_model(args[0]):
+                return models.ManyToManyField, True
             return models.JSONField, False
-        elif origin in (dict, Dict):
+        elif origin is dict:
             return models.JSONField, False
 
         # Handle basic types
@@ -331,148 +151,24 @@ class FieldConverter:
             return models.FloatField, False
         elif field_type is bool:
             return models.BooleanField, False
-        elif field_type is dict or field_type is Dict:
+        elif field_type is dict:
             return models.JSONField, False
-        elif field_type is list or field_type is List:
+        elif field_type is list:
             return models.JSONField, False
 
         # Handle relationship fields (Pydantic models)
-        try:
-            if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
-                return models.ForeignKey, True
-        except (TypeError, AttributeError):
-            # If there's an error checking subclass relationship, it's not a Pydantic model
-            pass
+        if is_pydantic_model(field_type):
+            return models.ForeignKey, True
 
         # Default to TextField for unknown types
         return models.TextField, False
-
-    def _get_default_max_length(self, field_name: str, field_type: type[models.Field]) -> int:
-        """
-        Get the default max_length for a field based on its name and type.
-
-        Args:
-            field_name: The name of the field
-            field_type: The Django field type
-
-        Returns:
-            The default max_length value
-        """
-        if field_type is models.CharField:
-            if "name" in field_name or "title" in field_name:
-                return 255
-            elif "description" in field_name:
-                return 1000
-            elif "id" in field_name or field_name.endswith("_id"):
-                return 100
-            else:
-                return 255
-        return 255
-
-    def _create_relationship_field(
-        self,
-        field_name: str,
-        field_info: FieldInfo,
-        field_type: Any,
-    ) -> models.Field:
-        """
-        Create a relationship field (ForeignKey, ManyToManyField, etc.).
-
-        Args:
-            field_name: The name of the field
-            field_info: The Pydantic field info
-            field_type: The Pydantic field type
-
-        Returns:
-            A Django relationship field
-        """
-        # Handle Optional types
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-
-        if origin is Union and type(None) in args:
-            # This is an Optional type, get the actual type
-            for arg in args:
-                if arg is not type(None):
-                    field_type = arg
-                    break
-
-        # Handle List[Model] as ManyToManyField
-        if origin in (list, List) and args and len(args) > 0:
-            item_type = args[0]
-            try:
-                if is_pydantic_model(item_type):
-                    # This is a List[Model], create a ManyToManyField
-                    model_name = item_type.__name__
-                    if not model_name.startswith("Django"):
-                        model_name = f"Django{model_name}"
-
-                    # Get null/blank from field_info
-                    try:
-                        # Try to use is_optional method if available
-                        null = field_info.is_optional()
-                    except (AttributeError, TypeError):
-                        # Fall back to checking if the field is required
-                        if PYDANTIC_V2:
-                            null = not field_info.is_required
-                        else:
-                            null = field_info.allow_none
-                    
-                    blank = null  # Usually blank follows null
-
-                    # Create the ManyToManyField
-                    related_name = sanitize_related_name(field_name, model_name=model_name)
-                    return models.ManyToManyField(
-                        f"{self.app_label}.{model_name}",
-                        related_name=related_name,
-                        blank=blank,
-                    )
-            except (TypeError, AttributeError):
-                # If there's an error, default to JSONField
-                return models.JSONField(null=True, blank=True)
-
-        # Handle direct Model reference as ForeignKey
-        try:
-            if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
-                model_name = field_type.__name__
-                if not model_name.startswith("Django"):
-                    model_name = f"Django{model_name}"
-                
-                # Get null/blank from field_info
-                try:
-                    # Try to use is_optional method if available
-                    null = field_info.is_optional()
-                except (AttributeError, TypeError):
-                    # Fall back to checking if the field is required
-                    if PYDANTIC_V2:
-                        null = not field_info.is_required
-                    else:
-                        null = field_info.allow_none
-                    
-                blank = null  # Usually blank follows null
-                
-                # Create the ForeignKey
-                related_name = sanitize_related_name(field_name)
-                return models.ForeignKey(
-                    f"{self.app_label}.{model_name}",
-                    on_delete=models.CASCADE,
-                    related_name=related_name,
-                    null=null,
-                    blank=blank,
-                )
-        except (TypeError, AttributeError):
-            # If there's an error, default to JSONField
-            pass
-
-        # Default to JSONField for unknown relationship types
-        return models.JSONField(null=True, blank=True)
 
     def convert_field(
         self,
         field_name: str,
         field_info: FieldInfo,
         skip_relationships: bool = False,
-    ) -> models.Field:
+    ) -> Optional[models.Field]:
         """
         Convert a Pydantic field to a Django model field.
 
@@ -482,17 +178,16 @@ class FieldConverter:
             skip_relationships: Whether to skip relationship fields
 
         Returns:
-            A Django model field
+            A Django model field or None if the field should be skipped
         """
-        # Get field type
-        if PYDANTIC_V2:
-            field_type = field_info.annotation
-        else:
-            field_type = field_info.type_
-            
         # Handle special case for id field
         if field_name == "id":
-            return handle_id_field(field_name, field_info)[1]
+            id_field = handle_id_field(field_name, field_info)
+            if id_field is not None:
+                return id_field
+
+        # Get field type from annotation
+        field_type = field_info.annotation
 
         # Resolve field type
         django_field_type, is_relationship = self._resolve_field_type(field_type)
@@ -503,19 +198,24 @@ class FieldConverter:
 
         # Handle relationship fields
         if is_relationship:
-            return self._create_relationship_field(field_name, field_info, field_type)
+            result = RelationshipFieldHandler.create_relationship_field(
+                field_name, field_info, field_type, self.app_label
+            )
+            return result or models.JSONField(null=True, blank=True)
 
         # Get field attributes
-        field_attrs = FieldAttributeHandler.handle_field_attributes(field_info)
+        field_attrs = get_field_attributes(field_info)
 
         # Handle specific field types
-        if django_field_type is models.CharField:
-            # Add max_length if not provided
-            if "max_length" not in field_attrs:
-                field_attrs["max_length"] = self._get_default_max_length(field_name, django_field_type)
+        if django_field_type is models.CharField and "max_length" not in field_attrs:
+            field_attrs["max_length"] = get_default_max_length(field_name, django_field_type)
 
         # Create the field
-        return django_field_type(**field_attrs)
+        try:
+            return django_field_type(**field_attrs)
+        except Exception as e:
+            logger.error(f"Error creating field {field_name}: {str(e)}")
+            return models.TextField(null=True, blank=True)
 
 
 def convert_field(
@@ -541,69 +241,71 @@ def convert_field(
     """
     # Use the FieldConverter for all field conversion
     converter = FieldConverter(app_label)
-    
-    # Get field type
-    if PYDANTIC_V2:
-        field_type = field_info.annotation
-    else:
-        field_type = field_info.type_
+
+    # Get field type from annotation
+    field_type = field_info.annotation
 
     # Handle special case for direct model relationships when model_name is provided
     if model_name is not None:
         # Check for list of models (many-to-many)
         origin = get_origin(field_type)
         args = get_args(field_type)
-        
-        if origin in (list, List) and args and len(args) > 0:
-            try:
-                if is_pydantic_model(args[0]):
-                    if skip_relationships:
-                        return None
-                        
-                    # Get the related model name
-                    related_model_name = args[0].__name__
-                    if not related_model_name.startswith("Django"):
-                        related_model_name = f"Django{related_model_name}"
-                        
-                    # Create a many-to-many field
-                    related_name = sanitize_related_name(field_name, model_name=model_name)
-                    return models.ManyToManyField(
-                        f"{app_label}.{related_model_name}",
-                        related_name=related_name,
-                        blank=True,
-                    )
-            except (TypeError, AttributeError):
-                # If there's an error, continue to standard field conversion
-                pass
-        
-        # Handle direct model relationship
-        try:
-            if is_pydantic_model(field_type):
+
+        # Handle list of models (many-to-many)
+        if origin is list and args:
+            first_arg = args[0]
+            if first_arg is not None and is_pydantic_model(first_arg):
+                # At this point, we know first_arg is a Pydantic model class
+                model_class = cast(type[BaseModel], first_arg)
                 if skip_relationships:
                     return None
-                    
+
                 # Get the related model name
-                related_model_name = field_type.__name__
+                related_model_name = model_class.__name__
                 if not related_model_name.startswith("Django"):
                     related_model_name = f"Django{related_model_name}"
-                    
-                # Create a foreign key
-                related_name = sanitize_related_name(field_name, model_name=model_name)
-                return models.ForeignKey(
+
+                # Create a many-to-many field
+                related_name = sanitize_related_name(
+                    field_name,
+                    model_name=model_name if model_name else "",
+                    field_name=field_name,
+                )
+                return models.ManyToManyField(
                     f"{app_label}.{related_model_name}",
-                    on_delete=models.CASCADE,
                     related_name=related_name,
-                    null=True,
                     blank=True,
                 )
-        except (TypeError, AttributeError):
-            # If there's an error, continue to standard field conversion
-            pass
+
+        # Handle direct model relationship
+        if is_pydantic_model(field_type):
+            # At this point, we know field_type is a Pydantic model class
+            model_class = cast(type[BaseModel], field_type)
+            if skip_relationships:
+                return None
+
+            # Get the related model name
+            related_model_name = model_class.__name__
+            if not related_model_name.startswith("Django"):
+                related_model_name = f"Django{related_model_name}"
+
+            # Create a foreign key
+            related_name = sanitize_related_name(
+                field_name,
+                model_name=model_name if model_name else "",
+                field_name=field_name,
+            )
+            return models.ForeignKey(
+                f"{app_label}.{related_model_name}",
+                on_delete=models.CASCADE,
+                related_name=related_name,
+                null=True,
+                blank=True,
+            )
 
     # Use the converter for standard field conversion
     try:
         return converter.convert_field(field_name, field_info, skip_relationships)
     except Exception as e:
         logger.error(f"Error converting field {field_name}: {str(e)}")
-        # Return a default field as fallback
         return models.TextField(null=True, blank=True)

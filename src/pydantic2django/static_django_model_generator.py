@@ -3,7 +3,7 @@ import os
 import pathlib
 from abc import ABC
 from collections.abc import Callable
-from typing import Any, Optional, TypeVar, cast
+from typing import Optional, TypeVar, cast
 
 import jinja2
 from django.db import models
@@ -15,32 +15,18 @@ from pydantic2django.discovery import (
     get_django_models,
     setup_dynamic_models,
 )
+from pydantic2django.field_utils import (
+    ForeignKeyField,
+    ManyToManyField,
+    RelationshipField,
+    RelationshipFieldHandler,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("pydantic2django.generator")
 
 T = TypeVar("T", bound=BaseModel)
-
-
-# Define types for relationship fields
-class RelationshipField(models.Field):
-    """Base class for relationship fields to help with type checking."""
-
-    to: Any
-    related_name: Optional[str]
-
-
-class ForeignKeyField(RelationshipField):
-    """Type for ForeignKey fields to help with type checking."""
-
-    on_delete: Any
-
-
-class ManyToManyField(RelationshipField):
-    """Type for ManyToManyField fields to help with type checking."""
-
-    through: Any
 
 
 class StaticDjangoModelGenerator:
@@ -466,7 +452,7 @@ PydanticUndefined = UndefinedType()""",
             if field.default is None:
                 kwargs["default"] = None
             elif (
-                isinstance(field.default, (int, float, bool, str))
+                isinstance(field.default, (int | float | bool | str))
                 or field.default.__class__.__name__ != "UndefinedType"
             ):
                 if isinstance(field.default, int | float | bool):
@@ -494,50 +480,8 @@ PydanticUndefined = UndefinedType()""",
         if field_class in ["ForeignKey", "OneToOneField", "ManyToManyField"]:
             logger.info(f"  Handling relationship field: {field_class}")
 
-            # Get the related model - safely handle all possible field structures
-            related_model_name = None
-
-            # Try different ways to get the related model
-            if hasattr(field, "related_model") and field.related_model is not None:
-                if isinstance(field.related_model, str):
-                    related_model_name = field.related_model
-                else:
-                    try:
-                        related_model_name = field.related_model.__name__
-                    except (AttributeError, TypeError):
-                        pass
-
-            # Try remote_field.model if related_model didn't work
-            if not related_model_name and hasattr(field, "remote_field") and field.remote_field is not None:
-                remote_field = field.remote_field
-                if hasattr(remote_field, "model") and remote_field.model is not None:
-                    if isinstance(remote_field.model, str):
-                        related_model_name = remote_field.model
-                    else:
-                        try:
-                            related_model_name = remote_field.model.__name__
-                        except (AttributeError, TypeError):
-                            pass
-
-            # Try to_field as a last resort
-            if not related_model_name:
-                # Cast the field to the appropriate type for type checking
-                if field_class == "ForeignKey" or field_class == "OneToOneField":
-                    rel_field = cast(ForeignKeyField, field)
-                elif field_class == "ManyToManyField":
-                    rel_field = cast(ManyToManyField, field)
-                else:
-                    rel_field = cast(RelationshipField, field)
-
-                # Check if the field has a 'to' attribute
-                if hasattr(rel_field, "to") and rel_field.to is not None:
-                    if isinstance(rel_field.to, str):
-                        related_model_name = rel_field.to
-                    else:
-                        try:
-                            related_model_name = rel_field.to.__name__
-                        except (AttributeError, TypeError):
-                            pass
+            # Get the related model name using the shared utility
+            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
 
             # Set the 'to' parameter if we found a related model
             if related_model_name:
