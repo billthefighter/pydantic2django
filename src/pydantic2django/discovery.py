@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .base_django_model import Pydantic2DjangoBaseClass
 from .core import make_django_model
 from .factory import DjangoModelFactory
-from .fields import is_pydantic_model
+from .field_utils import is_pydantic_model
 from .types import T
 from .utils import normalize_model_name
 
