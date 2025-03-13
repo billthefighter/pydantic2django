@@ -43,6 +43,10 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
     for field in model._meta.get_fields():
         if hasattr(field, "remote_field") and field.remote_field:
             target = field.remote_field.model
+            # Skip if target is None or not a valid model reference
+            if target is None:
+                continue
+
             if isinstance(target, str):
                 if "." not in target:
                     if not target.startswith("Django"):
@@ -61,6 +65,10 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
             if isinstance(remote_field, models.ManyToManyRel):
                 # Add the target model as a dependency
                 target = remote_field.model
+                # Skip if target is None or not a valid model reference
+                if target is None:
+                    continue
+
                 if isinstance(target, str):
                     if "." not in target:
                         if not target.startswith("Django"):
@@ -75,7 +83,8 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
 
                 # Handle through model if specified
                 through = remote_field.through
-                if through and through is not models.ManyToManyRel:
+                # Only add explicit through models, not auto-generated ones
+                if through and through is not models.ManyToManyRel and not remote_field.auto_created:
                     if isinstance(through, str):
                         if "." not in through:
                             if not through.startswith("Django"):
