@@ -48,12 +48,15 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
                 continue
 
             if isinstance(target, str):
+                # If it's a string reference, ensure it has app_label and Django prefix
                 if "." not in target:
-                    if not target.startswith("Django"):
-                        target = f"Django{target}"
-                    target = f"{app_label}.{target}"
+                    target_name = target
+                    if not target_name.startswith("Django"):
+                        target_name = f"Django{target_name}"
+                    target = f"{app_label}.{target_name}"
                 deps.add(target)
             elif inspect.isclass(target):
+                # If it's a class reference, get its name and ensure Django prefix
                 target_name = target.__name__
                 if not target_name.startswith("Django"):
                     target_name = f"Django{target_name}"
@@ -70,12 +73,15 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
                     continue
 
                 if isinstance(target, str):
+                    # If it's a string reference, ensure it has app_label and Django prefix
                     if "." not in target:
-                        if not target.startswith("Django"):
-                            target = f"Django{target}"
-                        target = f"{app_label}.{target}"
+                        target_name = target
+                        if not target_name.startswith("Django"):
+                            target_name = f"Django{target_name}"
+                        target = f"{app_label}.{target_name}"
                     deps.add(target)
                 elif inspect.isclass(target):
+                    # If it's a class reference, get its name and ensure Django prefix
                     target_name = target.__name__
                     if not target_name.startswith("Django"):
                         target_name = f"Django{target_name}"
@@ -86,12 +92,15 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
                 # Only add explicit through models, not auto-generated ones
                 if through and through is not models.ManyToManyRel and not remote_field.auto_created:
                     if isinstance(through, str):
+                        # If it's a string reference, ensure it has app_label and Django prefix
                         if "." not in through:
-                            if not through.startswith("Django"):
-                                through = f"Django{through}"
-                            through = f"{app_label}.{through}"
+                            through_name = through
+                            if not through_name.startswith("Django"):
+                                through_name = f"Django{through_name}"
+                            through = f"{app_label}.{through_name}"
                         deps.add(through)
                     elif inspect.isclass(through):
+                        # If it's a class reference, get its name and ensure Django prefix
                         through_name = through.__name__
                         if not through_name.startswith("Django"):
                             through_name = f"Django{through_name}"
@@ -114,7 +123,16 @@ def validate_model_references(models: dict[str, type], dependencies: dict[str, s
     errors = []
     for model_name, deps in dependencies.items():
         for dep in deps:
-            if dep not in models and dep != "self":
+            if dep == "self":
+                continue
+
+            # Extract the model name without app_label if it exists
+            dep_model_name = dep.split(".")[-1]
+            if not dep_model_name.startswith("Django"):
+                dep_model_name = f"Django{dep_model_name}"
+
+            # Check if the model exists in the normalized models
+            if dep_model_name not in models:
                 errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
     return errors
 
@@ -395,7 +413,7 @@ class ModelDiscovery:
                     logger.info(f"Inspecting {name}: {obj}")
                     if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
                         logger.info(f"Found Pydantic model: {name}")
-                        model_name = name  # Don't normalize the name for test modules
+                        model_name = f"Django{name}"  # Ensure Django prefix
                         discovered_models[model_name] = obj
                     else:
                         if inspect.isclass(obj):
@@ -430,6 +448,8 @@ class ModelDiscovery:
                     for name, obj in inspect.getmembers(module):
                         if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
                             model_name = normalize_model_name(name)
+                            if not model_name.startswith("Django"):
+                                model_name = f"Django{model_name}"
                             discovered_models[model_name] = obj
 
                 except Exception as e:

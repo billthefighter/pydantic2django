@@ -306,8 +306,16 @@ class FieldAttributeHandler:
             through = getattr(field, "through", None)
             if through:
                 # Skip auto-generated through models
-                if not (isinstance(through, str) and through.endswith("_edges") or through.endswith("_nodes")):
-                    through_name = through.__name__ if hasattr(through, "__name__") else str(through)
+                # Django's auto-created through models are instances of ManyToManyRel
+                # or have the auto_created flag set to True
+                if not (isinstance(through, models.ManyToManyRel) or getattr(through, "auto_created", False)):
+                    # If through is a string, use it directly
+                    # Otherwise, try to get the class name or fall back to string representation
+                    through_name = (
+                        through
+                        if isinstance(through, str)
+                        else (through.__name__ if hasattr(through, "__name__") else str(through))
+                    )
                     if "." in through_name:
                         # If it's a cross-app reference, keep it as a string
                         params.append(f"through='{through_name}'")
