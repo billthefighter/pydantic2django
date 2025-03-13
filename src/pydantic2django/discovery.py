@@ -27,6 +27,18 @@ from .utils import normalize_model_name
 logger = logging.getLogger(__name__)
 
 
+def setup_logging(level=logging.DEBUG):
+    """Set up logging configuration for dependency analysis."""
+    logger.setLevel(level)
+    # Create console handler if no handlers exist
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(level)
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+
 def get_model_dependencies_recursive(model: type[models.Model], app_label: str) -> set[str]:
     """
     Get all dependencies for a model recursively.
@@ -39,64 +51,94 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
         Set of model names that this model depends on
     """
     deps = set()
+    logger.debug(f"Analyzing dependencies for model: {model.__name__}")
 
     for field in model._meta.get_fields():
+        logger.debug(f"  Checking field: {field.name} (type: {type(field).__name__})")
+
         if hasattr(field, "remote_field") and field.remote_field:
             target = field.remote_field.model
+            logger.debug(f"    Found remote field with target: {target}")
+
             # Skip if target is None or not a valid model reference
             if target is None:
+                logger.warning(f"    Skipping None target for field {field.name} in model {model.__name__}")
                 continue
 
             if isinstance(target, str):
+                logger.debug(f"    Target is string: {target}")
                 if "." not in target:
                     if not target.startswith("Django"):
                         target = f"Django{target}"
                     target = f"{app_label}.{target}"
                 deps.add(target)
+                logger.debug(f"    Added dependency: {target}")
             elif inspect.isclass(target):
+                logger.debug(f"    Target is class: {target.__name__}")
                 target_name = target.__name__
                 if not target_name.startswith("Django"):
                     target_name = f"Django{target_name}"
-                deps.add(f"{app_label}.{target_name}")
+                target_name = f"{app_label}.{target_name}"
+                deps.add(target_name)
+                logger.debug(f"    Added dependency: {target_name}")
 
         # Check through relationships for ManyToManyField
         if isinstance(field, models.ManyToManyField):
+            logger.debug(f"  Processing ManyToManyField: {field.name}")
             remote_field = field.remote_field
             if isinstance(remote_field, models.ManyToManyRel):
                 # Add the target model as a dependency
                 target = remote_field.model
+                logger.debug(f"    M2M target model: {target}")
+
                 # Skip if target is None or not a valid model reference
                 if target is None:
+                    logger.warning(f"    Skipping None target for M2M field {field.name} in model {model.__name__}")
                     continue
 
                 if isinstance(target, str):
+                    logger.debug(f"    M2M target is string: {target}")
                     if "." not in target:
                         if not target.startswith("Django"):
                             target = f"Django{target}"
                         target = f"{app_label}.{target}"
                     deps.add(target)
+                    logger.debug(f"    Added M2M dependency: {target}")
                 elif inspect.isclass(target):
+                    logger.debug(f"    M2M target is class: {target.__name__}")
                     target_name = target.__name__
                     if not target_name.startswith("Django"):
                         target_name = f"Django{target_name}"
-                    deps.add(f"{app_label}.{target_name}")
+                    target_name = f"{app_label}.{target_name}"
+                    deps.add(target_name)
+                    logger.debug(f"    Added M2M dependency: {target_name}")
 
                 # Handle through model if specified
                 through = remote_field.through
+                logger.debug(
+                    f"    Through model: {through} (auto_created: {getattr(remote_field, 'auto_created', None)})"
+                )
+
                 # Only add explicit through models, not auto-generated ones
                 if through and through is not models.ManyToManyRel and not remote_field.auto_created:
                     if isinstance(through, str):
+                        logger.debug(f"    Through model is string: {through}")
                         if "." not in through:
                             if not through.startswith("Django"):
                                 through = f"Django{through}"
                             through = f"{app_label}.{through}"
                         deps.add(through)
+                        logger.debug(f"    Added through model dependency: {through}")
                     elif inspect.isclass(through):
+                        logger.debug(f"    Through model is class: {through.__name__}")
                         through_name = through.__name__
                         if not through_name.startswith("Django"):
                             through_name = f"Django{through_name}"
-                        deps.add(f"{app_label}.{through_name}")
+                        through_name = f"{app_label}.{through_name}"
+                        deps.add(through_name)
+                        logger.debug(f"    Added through model dependency: {through_name}")
 
+    logger.debug(f"Final dependencies for {model.__name__}: {deps}")
     return deps
 
 
@@ -112,10 +154,24 @@ def validate_model_references(models: dict[str, type], dependencies: dict[str, s
         List of error messages for missing models
     """
     errors = []
+    logger.debug("Validating model references...")
+    logger.debug(f"Available models: {sorted(models.keys())}")
+    logger.debug("Checking dependencies:")
+
     for model_name, deps in dependencies.items():
+        logger.debug(f"  Model {model_name} dependencies: {deps}")
         for dep in deps:
             if dep not in models and dep != "self":
+                logger.warning(f"    Missing dependency: {dep} for model {model_name}")
                 errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
+
+    if errors:
+        logger.error(f"Found {len(errors)} dependency errors")
+        for error in errors:
+            logger.error(f"  {error}")
+    else:
+        logger.debug("All model references are valid")
+
     return errors
 
 
@@ -511,6 +567,10 @@ class ModelDiscovery:
         Args:
             app_label: The Django app label the models are registered under
         """
+        setup_logging()  # Enable debug logging
+        logger.info(f"Analyzing dependencies for app {app_label}")
+        logger.info(f"Normalized models: {sorted(self.normalized_models.keys())}")
+
         for model_name, _model_cls in self.normalized_models.items():
             try:
                 # Get the registered Django model
