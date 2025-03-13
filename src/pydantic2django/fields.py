@@ -11,6 +11,7 @@ from pydantic.fields import FieldInfo
 from pydantic2django.field_utils import (
     RelationshipFieldHandler,
     get_default_max_length,
+    process_default_value,
 )
 
 # Configure logging
@@ -35,9 +36,10 @@ def get_field_attributes(field_info: FieldInfo, extra: Any = None) -> dict[str, 
     kwargs["null"] = is_optional
     kwargs["blank"] = is_optional
 
-    # Handle default value
-    if field_info.default is not None and field_info.default != Ellipsis:
-        kwargs["default"] = field_info.default
+    # Handle default value using the standardized function
+    default_value = process_default_value(field_info.default)
+    if default_value is not models.NOT_PROVIDED:
+        kwargs["default"] = default_value
 
     # Handle description as help_text
     if field_info.description:

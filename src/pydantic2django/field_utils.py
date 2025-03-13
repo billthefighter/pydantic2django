@@ -30,6 +30,34 @@ from pydantic_core import PydanticUndefined
 logger = logging.getLogger("pydantic2django.field_utils")
 
 
+def is_valid_default_value(value: Any) -> bool:
+    """
+    Check if a value is a valid default value for a Django field.
+
+    Args:
+        value: The value to check
+
+    Returns:
+        True if the value is valid as a default, False otherwise
+    """
+    return value is not None and value != Ellipsis and value != PydanticUndefined and value != models.NOT_PROVIDED
+
+
+def process_default_value(value: Any) -> Any:
+    """
+    Process a default value for use in a Django field.
+
+    Args:
+        value: The default value to process
+
+    Returns:
+        The processed default value, or models.NOT_PROVIDED if the value is invalid
+    """
+    if not is_valid_default_value(value):
+        return models.NOT_PROVIDED
+    return value
+
+
 def is_pydantic_model(obj: Any) -> bool:
     """
     Check if an object is a Pydantic model class.
@@ -122,13 +150,10 @@ class FieldAttributeHandler:
         kwargs["null"] = is_optional
         kwargs["blank"] = is_optional
 
-        # Handle default value
-        if (
-            field_info.default is not None
-            and field_info.default != Ellipsis
-            and field_info.default != PydanticUndefined
-        ):
-            kwargs["default"] = field_info.default
+        # Handle default value using the standardized function
+        default_value = process_default_value(field_info.default)
+        if default_value is not models.NOT_PROVIDED:
+            kwargs["default"] = default_value
 
         # Handle description as help_text
         if field_info.description:
@@ -194,11 +219,17 @@ class FieldAttributeHandler:
         if hasattr(field, "blank") and field.blank:
             params.append(f"blank={field.blank}")
 
+        # Handle default value using the standardized function
+        # Only include default if it was explicitly set (not models.NOT_PROVIDED)
         if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
-            if isinstance(field.default, str):
-                params.append(f"default='{sanitize_string(field.default)}'")
-            else:
-                params.append(f"default={field.default}")
+            # Check if this is a Django-provided default or one we explicitly set
+            if not isinstance(field, (models.AutoField | models.BigAutoField)):
+                default_value = process_default_value(field.default)
+                if default_value is not models.NOT_PROVIDED:
+                    if isinstance(default_value, str):
+                        params.append(f"default='{sanitize_string(default_value)}'")
+                    else:
+                        params.append(f"default={default_value}")
 
         # Field-specific parameters
         if isinstance(field, models.CharField) and hasattr(field, "max_length"):
