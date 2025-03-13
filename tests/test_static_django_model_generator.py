@@ -4,6 +4,9 @@ import pytest
 import tempfile
 from typing import List, Optional
 import src.pydantic2django.static_django_model_generator
+import io
+import logging
+import importlib
 
 # Add the src directory to the path so we can import the modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -370,3 +373,184 @@ def test_many_to_many_field_content(generator_setup):
     assert (
         "default=" in related_model_content
     ), "default parameter not found in IntegerField"
+
+
+def test_field_collision_handling():
+    """Test that field collisions are properly handled during model generation.
+
+    This test verifies that models with field collisions are still successfully generated
+    by resolving the field collisions rather than skipping the models.
+    """
+    # Create a temporary directory for output
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_path = os.path.join(temp_dir, "models.py")
+
+        # Create a test module with the chains module
+        test_module = type(sys)("test_chains_module")
+
+        # Import the chains module
+        chains_module = importlib.import_module("tests.test_models.chains")
+
+        # Copy all attributes from chains_module to test_module
+        for name in dir(chains_module):
+            if not name.startswith("__"):
+                setattr(test_module, name, getattr(chains_module, name))
+
+        # Add the module to sys.modules temporarily
+        sys.modules["test_chains_module"] = test_module
+
+        # Capture logs to analyze errors
+        log_capture = io.StringIO()
+        handler = logging.StreamHandler(log_capture)
+        logger = logging.getLogger("pydantic2django")
+        logger.addHandler(handler)
+        previous_level = logger.level
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            # Create a generator with verbose output
+            generator = StaticDjangoModelGenerator(
+                output_path=output_path,
+                packages=["test_chains_module"],
+                app_label="test_chains",
+                verbose=True,
+            )
+
+            # Create a custom filter function to only include models with field collisions
+            def filter_models_with_collisions(name, model):
+                # Include models that have id, created_at, or name fields that might collide
+                if not hasattr(model, "model_fields"):
+                    return False
+                field_names = model.model_fields.keys()
+                collision_fields = {"id", "created_at", "updated_at", "name"}
+                return bool(set(field_names) & collision_fields)
+
+            # Set the filter function
+            generator.filter_function = filter_models_with_collisions
+
+            # Generate the models
+            generator.generate()
+
+            # Check that the output file was created
+            assert os.path.exists(output_path), "Output file was not created"
+
+            # Read the generated file to verify content
+            with open(output_path, "r") as f:
+                content = f.read()
+
+            # Verify that models with field collisions were successfully generated
+            # with the collisions properly resolved
+            assert (
+                "class DjangoBaseNode" in content
+            ), "BaseNode model should be generated with field collisions resolved"
+            assert (
+                "class DjangoChainNode" in content
+            ), "ChainNode model should be generated with field collisions resolved"
+            assert (
+                "class DjangoChainGraph" in content
+            ), "ChainGraph model should be generated with field collisions resolved"
+
+            # Verify that the field collisions were resolved by checking for renamed fields
+            # or other resolution strategies
+            assert (
+                "id_field" in content
+                or "custom_id" in content
+                or "pydantic_id" in content
+            ), "No renamed id field found"
+            assert (
+                "created_at_field" in content
+                or "custom_created_at" in content
+                or "pydantic_created_at" in content
+            ), "No renamed created_at field found"
+
+        finally:
+            # Clean up logging
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+
+            # Clean up the test module
+            if "test_chains_module" in sys.modules:
+                del sys.modules["test_chains_module"]
+
+
+def test_app_label_configuration():
+    """Test that app label configuration issues are properly handled during model generation.
+
+    This test verifies that models from external packages are successfully generated
+    by resolving app label configuration issues.
+    """
+    # Create a temporary directory for output
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_path = os.path.join(temp_dir, "models.py")
+
+        # Create a test module with the chains module
+        test_module = type(sys)("test_chains_module")
+
+        # Import the chains module
+        chains_module = importlib.import_module("tests.test_models.chains")
+
+        # Copy all attributes from chains_module to test_module
+        for name in dir(chains_module):
+            if not name.startswith("__"):
+                setattr(test_module, name, getattr(chains_module, name))
+
+        # Add the module to sys.modules temporarily
+        sys.modules["test_chains_module"] = test_module
+
+        # Capture logs to analyze errors
+        log_capture = io.StringIO()
+        handler = logging.StreamHandler(log_capture)
+        logger = logging.getLogger("pydantic2django")
+        logger.addHandler(handler)
+        previous_level = logger.level
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            # Create a generator with verbose output
+            generator = StaticDjangoModelGenerator(
+                output_path=output_path,
+                packages=["test_chains_module"],
+                app_label="test_chains",
+                verbose=True,
+            )
+
+            # Create a custom filter function to only include external models
+            def filter_external_models(name, model):
+                # Include models from external packages that might have app label issues
+                return hasattr(model, "__module__") and "llmaestro" in model.__module__
+
+            # Set the filter function
+            generator.filter_function = filter_external_models
+
+            # Generate the models
+            generator.generate()
+
+            # Check that the output file was created
+            assert os.path.exists(output_path), "Output file was not created"
+
+            # Read the generated file to verify content
+            with open(output_path, "r") as f:
+                content = f.read()
+
+            # Verify that external models were successfully generated
+            # with app label issues properly resolved
+            assert (
+                "class DjangoLLMResponse" in content
+            ), "LLMResponse model should be generated with app label issues resolved"
+            assert (
+                "class DjangoBaseEdge" in content
+            ), "BaseEdge model should be generated with app label issues resolved"
+
+            # Verify that the app label was properly set in the Meta class
+            assert (
+                'app_label = "test_chains"' in content
+            ), "app_label not properly set in Meta class"
+
+        finally:
+            # Clean up logging
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+
+            # Clean up the test module
+            if "test_chains_module" in sys.modules:
+                del sys.modules["test_chains_module"]

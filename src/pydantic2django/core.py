@@ -96,7 +96,7 @@ def make_django_model(
             # Handle relationship fields differently based on skip_relationships
             if isinstance(
                 django_field,
-                (models.ForeignKey, models.ManyToManyField, models.OneToOneField),
+                (models.ForeignKey | models.ManyToManyField | models.OneToOneField),
             ):
                 if skip_relationships:
                     # Store relationship fields for later
@@ -131,8 +131,16 @@ def make_django_model(
         # Check for collisions
         collision_fields = set(django_fields.keys()) & base_field_names
         if collision_fields:
-            logger.error(f"Field collision detected with base model: {collision_fields}")
-            raise ValueError(f"Field collision detected with base model. Conflicting fields: {collision_fields}")
+            logger.warning(f"Field collision detected with base model: {collision_fields}. Renaming fields.")
+
+            # Rename conflicting fields instead of raising an error
+            for field_name in collision_fields:
+                new_field_name = f"pydantic_{field_name}"
+                logger.info(f"Renaming field '{field_name}' to '{new_field_name}'")
+                django_fields[new_field_name] = django_fields.pop(field_name)
+                # Update the field's name attribute if it has one
+                if hasattr(django_fields[new_field_name], "name"):
+                    django_fields[new_field_name].name = new_field_name
 
     # Determine base classes
     base_classes = [base_django_model] if base_django_model else [models.Model]
@@ -155,10 +163,11 @@ def make_django_model(
     meta_attrs["verbose_name"] = doc or pydantic_model.__name__
     meta_attrs["verbose_name_plural"] = f"{meta_attrs['verbose_name']}s"
 
-    # If inheriting from an abstract model, don't set app_label
+    # If inheriting from an abstract model, we still need to set app_label
+    # to avoid Django's error about missing app_label
     if base_django_model and getattr(base_django_model._meta, "abstract", False):
-        meta_attrs.pop("app_label", None)
-        logger.debug("Removed app_label from Meta for abstract base model")
+        # Keep app_label even for abstract base models
+        logger.debug("Keeping app_label for model with abstract base")
 
     # Create Meta class
     if base_django_model and hasattr(base_django_model, "_meta"):
@@ -168,6 +177,8 @@ def make_django_model(
         # Ensure model is not abstract even if base model is
         meta_attrs["abstract"] = False
         meta_attrs["managed"] = True
+        # Always ensure app_label is set
+        meta_attrs["app_label"] = meta_app_label
         Meta = type("Meta", (base_django_model._meta.__class__,), meta_attrs)
         logger.debug(f"Created Meta class inheriting from {base_django_model.__name__}")
     else:
