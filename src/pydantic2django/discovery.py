@@ -677,7 +677,7 @@ discovery = ModelDiscovery()
 def discover_models(
     package_names: list[str],
     app_label: str = "django_llm",
-    filter_function: Optional[Callable[[str, type[BaseModel]], bool]] = None,
+    filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
 ) -> None:
     """
     Discover and analyze Pydantic models from specified packages.

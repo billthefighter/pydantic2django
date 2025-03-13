@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from pydantic2django.discovery import (
     discover_models,
     get_discovered_models,
-    setup_dynamic_models,
 )
 from pydantic2django.field_utils import FieldAttributeHandler
 
@@ -34,7 +33,7 @@ class StaticDjangoModelGenerator:
         output_path: str = "generated_models.py",
         packages: Optional[list[str]] = None,
         app_label: str = "django_app",
-        filter_function: Optional[Callable[[str, type[BaseModel]], bool]] = None,
+        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
         verbose: bool = False,
     ):
         """
@@ -105,7 +104,9 @@ class StaticDjangoModelGenerator:
             logger.info("Setting up Django models...")
 
         # Use the discovery module to set up Django models
-        django_models = setup_dynamic_models(app_label=self.app_label)
+        from pydantic2django.discovery import discovery
+
+        django_models = discovery.setup_dynamic_models(app_label=self.app_label)
 
         if self.verbose:
             logger.info(f"Set up {len(django_models)} Django models")
@@ -201,17 +202,35 @@ class StaticDjangoModelGenerator:
         self.discover_models()
         django_models = self.setup_django_models()
 
-        # Generate model definitions
+        # Get the discovery instance and analyze dependencies
+        from pydantic2django.discovery import discovery
+
+        discovery.analyze_dependencies(self.app_label)
+
+        # Get registration order
+        registration_order = discovery.get_registration_order()
+
+        # Generate model definitions in dependency order
         model_definitions = []
         model_names = []
 
-        for name, model in django_models.items():
+        # Process models in registration order
+        for full_name in registration_order:
             try:
+                _, model_name = full_name.split(".")
+                if model_name not in django_models:
+                    logger.warning(
+                        f"Model '{model_name}' missing from generated Django models - "
+                        "possible model generation or dependency issue"
+                    )
+                    continue
+
+                model = django_models[model_name]
                 model_def = self.generate_model_definition(model)
                 model_definitions.append(model_def)
                 model_names.append(f"'{model.__name__}'")
             except Exception as e:
-                logger.error(f"Error generating model definition for {name}: {e}")
+                logger.error(f"Error generating model definition for {full_name}: {e}")
 
         # Prepare imports
         imports = [
