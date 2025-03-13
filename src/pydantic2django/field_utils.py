@@ -24,6 +24,7 @@ from django.db import models
 from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.field_utils")
@@ -122,7 +123,11 @@ class FieldAttributeHandler:
         kwargs["blank"] = is_optional
 
         # Handle default value
-        if field_info.default is not None and field_info.default != Ellipsis:
+        if (
+            field_info.default is not None
+            and field_info.default != Ellipsis
+            and field_info.default != PydanticUndefined
+        ):
             kwargs["default"] = field_info.default
 
         # Handle description as help_text

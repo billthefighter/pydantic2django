@@ -5,18 +5,6 @@
 from django.db import models
 from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
-# Constants for default values
-true = True
-false = False
-# Define a proper undefined type that won't cause issues with Django
-class UndefinedType:
-    def __repr__(self):
-        return "Undefined"
-
-    def __bool__(self):
-        return False
-
-PydanticUndefined = UndefinedType()
 
 {% if imports %}
 # Additional imports
