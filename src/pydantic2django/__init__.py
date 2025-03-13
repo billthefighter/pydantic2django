@@ -15,6 +15,7 @@ from .admin import (
     register_model_admin,
     register_model_admins,
 )
+from .base_django_model import Pydantic2DjangoBaseClass
 from .core import clear_model_registry, make_django_model
 from .discovery import (
     ModelDiscovery,
@@ -35,11 +36,10 @@ from .field_type_mapping import (
     TypeMapper,
     TypeMappingDefinition,
 )
-from .types import DjangoBaseModel
 
 __all__ = [
     # Type-safe model creation
-    "DjangoBaseModel",
+    "Pydantic2DjangoBaseClass",
     "DjangoModelFactory",
     # Core model conversion
     "make_django_model",

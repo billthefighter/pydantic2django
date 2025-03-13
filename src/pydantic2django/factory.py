@@ -3,9 +3,11 @@ from typing import Any, Generic, Optional, cast
 
 from django.db import models
 
+from .base_django_model import Pydantic2DjangoBaseClass
+
 # Remove direct import from core to avoid circular import
 # from .core import make_django_model
-from .types import DjangoBaseModel, T
+from .types import T
 
 # Forward reference to make_django_model to be imported at runtime
 make_django_model: Optional[Callable] = None
@@ -40,7 +42,7 @@ class DjangoModelFactory(Generic[T]):
         check_migrations: bool = True,
         skip_relationships: bool = False,
         **options: Any,
-    ) -> tuple[type[DjangoBaseModel[T]], Optional[dict[str, models.Field]]]:
+    ) -> tuple[type[Pydantic2DjangoBaseClass[T]], Optional[dict[str, models.Field]]]:
         """
         Create a Django model class with proper type hints.
 
@@ -61,10 +63,10 @@ class DjangoModelFactory(Generic[T]):
             if make_django_model is None:
                 raise ImportError("Failed to import make_django_model")
 
-        # Ensure DjangoBaseModel is in the inheritance chain
+        # Ensure Pydantic2DjangoBaseClass is in the inheritance chain
         if base_django_model:
-            if not issubclass(base_django_model, DjangoBaseModel):
-                # Create a new base class that includes DjangoBaseModel
+            if not issubclass(base_django_model, Pydantic2DjangoBaseClass):
+                # Create a new base class that includes Pydantic2DjangoBaseClass
                 base_name = f"Base{base_django_model.__name__}"
                 # Create Meta class
                 meta_attrs = {
@@ -74,7 +76,7 @@ class DjangoModelFactory(Generic[T]):
                 meta = type("Meta", (), meta_attrs)
                 base_django_model = type(
                     base_name,
-                    (DjangoBaseModel, base_django_model),
+                    (Pydantic2DjangoBaseClass, base_django_model),
                     {
                         "__module__": base_django_model.__module__,
                         "Meta": meta,
@@ -84,7 +86,7 @@ class DjangoModelFactory(Generic[T]):
         # Call the original make_django_model
         django_model, field_updates = make_django_model(
             pydantic_model=pydantic_model,
-            base_django_model=base_django_model or DjangoBaseModel,
+            base_django_model=base_django_model or Pydantic2DjangoBaseClass,
             check_migrations=check_migrations,
             skip_relationships=skip_relationships,
             app_label=app_label,
@@ -114,14 +116,14 @@ class DjangoModelFactory(Generic[T]):
         django_model.Meta = meta
 
         # Cast to proper type for IDE support
-        return cast(type[DjangoBaseModel[T]], django_model), field_updates
+        return cast(type[Pydantic2DjangoBaseClass[T]], django_model), field_updates
 
     @classmethod
     def create_abstract_model(
         cls,
         pydantic_model: type[T],
         **kwargs: Any,
-    ) -> type[DjangoBaseModel[T]]:
+    ) -> type[Pydantic2DjangoBaseClass[T]]:
         """
         Create an abstract Django model from a Pydantic model.
 
@@ -144,7 +146,7 @@ class DjangoModelFactory(Generic[T]):
         # Create the model
         django_model, _ = make_django_model(
             pydantic_model=pydantic_model,
-            base_django_model=DjangoBaseModel,
+            base_django_model=Pydantic2DjangoBaseClass,
             check_migrations=False,
             **kwargs,
         )

@@ -17,10 +17,11 @@ from django.apps import apps
 from django.db import models
 from pydantic import BaseModel
 
+from .base_django_model import Pydantic2DjangoBaseClass
 from .core import make_django_model
 from .factory import DjangoModelFactory
 from .fields import is_pydantic_model
-from .types import DjangoBaseModel, T
+from .types import T
 from .utils import normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -617,7 +618,7 @@ class ModelDiscovery:
 
     def get_django_model(
         self, pydantic_model: type[T] | type[type[T]], app_label: str = "django_llm"
-    ) -> type[DjangoBaseModel[T]]:
+    ) -> type[Pydantic2DjangoBaseClass[T]]:
         """
         Get a Django model with proper type hints for a given Pydantic model.
 
@@ -652,7 +653,7 @@ class ModelDiscovery:
         # Look for the model in the registry by checking the object_type field
         for model in self.django_models.values():
             if getattr(model, "object_type", None) == fully_qualified_name:
-                return cast(type[DjangoBaseModel[T]], model)
+                return cast(type[Pydantic2DjangoBaseClass[T]], model)
 
         # If not found, try to create it
         django_model, _ = DjangoModelFactory[T].create_model(actual_model, app_label=app_label)
@@ -767,7 +768,7 @@ def get_django_models(app_label: str = "django_llm") -> dict[str, type[models.Mo
     return discovery.get_django_models(app_label)
 
 
-def get_django_model(pydantic_model: type[T], app_label: str = "django_llm") -> type[DjangoBaseModel[T]]:
+def get_django_model(pydantic_model: type[T], app_label: str = "django_llm") -> type[Pydantic2DjangoBaseClass[T]]:
     """
     Get a Django model with proper type hints for a given Pydantic model.
 

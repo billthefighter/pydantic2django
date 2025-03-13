@@ -11,9 +11,6 @@ class {{ model_name }}(Pydantic2DjangoBaseClass):
         verbose_name_plural = """{{ meta.verbose_name_plural.split('\n')[0] }}"""
         abstract = False
 
-    class PydanticConfig:
-        module_path = "{{ module_path }}"
-
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("object_type", "{{ original_name }}")
         super().__init__(*args, **kwargs)
