@@ -5,6 +5,7 @@ This module contains common utilities, constants, and type definitions used by
 field_type_mapping.py, fields.py, and static_django_model_generator.py to reduce
 code duplication and improve maintainability.
 """
+import inspect
 import logging
 import re
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from typing import (
     Any,
     Optional,
     Union,
+    cast,
     get_args,
     get_origin,
 )
@@ -57,8 +59,6 @@ def inspect_is_class_or_type(obj: Any) -> bool:
     Returns:
         True if the object is a class or type, False otherwise
     """
-    import inspect
-
     return inspect.isclass(obj)
 
 
@@ -306,12 +306,51 @@ class RelationshipFieldHandler:
     """
 
     @staticmethod
-    def get_related_model_name(model_class: type[BaseModel]) -> str:
-        """Get the Django model name for a Pydantic model class."""
-        related_name = model_class.__name__
-        if not related_name.startswith("Django"):
-            related_name = f"Django{related_name}"
-        return related_name
+    def get_related_model_name(model_class: Union[type[BaseModel], models.Field, type[Any]]) -> str:
+        """Get the Django model name for a Pydantic model class or Django field.
+
+        Args:
+            model_class: Either a Pydantic model class or a Django field
+
+        Returns:
+            The Django model name
+        """
+        # Handle Django field objects
+        if isinstance(model_class, (models.ForeignKey | models.ManyToManyField)):
+            if hasattr(model_class, "remote_field") and model_class.remote_field and model_class.remote_field.model:
+                # Get the model name from the remote_field.model
+                remote_model = model_class.remote_field.model
+                if isinstance(remote_model, str):
+                    # If it's a string reference, return it as is
+                    return remote_model
+                # If it's a model class, get its name
+                if inspect.isclass(remote_model):
+                    model_name = remote_model.__name__
+                    if not model_name.startswith("Django"):
+                        model_name = f"Django{model_name}"
+                    return model_name
+                # If it's not a class, convert to string
+                return str(remote_model)
+            return "self"  # Default to self-reference if we can't determine the model
+
+        # Handle Pydantic model classes
+        if is_pydantic_model(model_class):
+            related_name = cast(type[Any], model_class).__name__
+            if not related_name.startswith("Django"):
+                related_name = f"Django{related_name}"
+            return related_name
+
+        # If we can't determine the type, try to get the name safely
+        try:
+            if inspect.isclass(model_class):
+                name = cast(type[Any], model_class).__name__
+            else:
+                name = str(model_class)
+            if not name.startswith("Django"):
+                name = f"Django{name}"
+            return name
+        except Exception:
+            return "self"  # Default to self-reference if all else fails
 
     @staticmethod
     def detect_relationship_type(field_type: Any) -> Optional[type[models.Field]]:
