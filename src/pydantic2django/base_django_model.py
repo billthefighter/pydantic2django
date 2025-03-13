@@ -1,9 +1,11 @@
 import importlib
 import uuid
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from django.db import models
 from pydantic import BaseModel
+
+from .serialization import serialize_value
 
 # Type variable for BaseModel subclasses
 T = TypeVar("T", bound=BaseModel)
@@ -185,7 +187,9 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         # Check if this is a subclass with a specific expected type
         cls._check_expected_type(pydantic_obj, class_name)
 
+        # Get data from the Pydantic object and serialize any nested objects
         data = pydantic_obj.model_dump()
+        serialized_data = {key: serialize_value(value) for key, value in data.items()}
 
         # Use class_name as name if not provided and if object has a name attribute
         name = cls._derive_name(pydantic_obj, name, class_name)
@@ -193,7 +197,7 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         instance = cls(
             name=name,
             object_type=fully_qualified_name,
-            data=data,
+            data=serialized_data,
         )
 
         return instance
@@ -456,26 +460,53 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
 
             # Check if this field exists in the Pydantic data
             if field_name in data:
-                # Get the value from the Pydantic data
+                # Get the value from the Pydantic data and serialize it if needed
                 value = data[field_name]
+                serialized_value = serialize_value(value)
 
                 # Set the Django field value
-                setattr(self, field_name, value)
+                setattr(self, field_name, serialized_value)
 
-    def to_pydantic(self) -> T:
+    def to_pydantic(self, context: dict[str, Any] | None = None) -> T:
         """
         Convert this Django model to a Pydantic object.
 
+        Args:
+            context: Optional dictionary containing values for non-serializable fields.
+                    Required if the model has any non-serializable fields.
+
         Returns:
             The corresponding Pydantic object
+
+        Raises:
+            ValueError: If context is required but not provided, or if provided context
+                      is missing required fields.
         """
         pydantic_class = self._get_pydantic_class()
 
         # Get data from Django fields
         data = self._get_data_for_pydantic()
 
+        # Check if we need context
+        required_context = self._get_required_context_fields()
+        if required_context:
+            if not context:
+                raise ValueError(
+                    f"This model has non-serializable fields that require context: {', '.join(required_context)}. "
+                    "Please provide the context dictionary when calling to_pydantic()."
+                )
+
+            # Verify all required fields are in the context
+            missing_fields = [field for field in required_context if field not in context]
+            if missing_fields:
+                raise ValueError(f"Missing required context fields: {', '.join(missing_fields)}")
+
+            # Add context values to data
+            data.update({field: context[field] for field in required_context})
+
         # Reconstruct the object and cast to the correct type
-        return pydantic_class.model_validate(data)  # type: ignore
+        result = pydantic_class.model_validate(data)
+        return cast(T, result)
 
     def _get_data_for_pydantic(self) -> dict[str, Any]:
         """
@@ -515,6 +546,40 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
             data[field_name] = value
 
         return data
+
+    def _get_required_context_fields(self) -> set[str]:
+        """
+        Get the set of field names that require context when converting to Pydantic.
+
+        Returns:
+            Set of field names that require context
+        """
+        required_fields = set()
+
+        # Get all fields from the Django model
+        django_fields = {field.name: field for field in self._meta.fields}
+
+        # Exclude these fields from consideration
+        exclude_fields = {
+            "id",
+            "name",
+            "object_type",
+            "created_at",
+            "updated_at",
+        }
+
+        # Check each field
+        for field_name, field in django_fields.items():
+            if field_name in exclude_fields:
+                continue
+
+            # Check if this is a context field (non-serializable)
+            # We use the is_relationship flag to indicate context fields
+            # This was set in _resolve_field_type
+            if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+                required_fields.add(field_name)
+
+        return required_fields
 
     def update_from_pydantic(self, pydantic_obj: T) -> None:
         """

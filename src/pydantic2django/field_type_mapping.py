@@ -23,6 +23,7 @@ from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 # Import shared utilities
 from pydantic2django.field_utils import (
     get_default_max_length,
+    is_serializable_type,
 )
 
 logger = getLogger(__name__)
@@ -363,3 +364,94 @@ class TypeMapper:
         """
         # Use the shared utility function
         return get_default_max_length(field_name, field_type)
+
+
+def get_django_field_type(
+    python_type: type[Any],
+    field_info: Optional[dict[str, Any]] = None,
+) -> type[models.Field]:
+    """
+    Get the appropriate Django field type for a Python type.
+
+    Args:
+        python_type: The Python type to map
+        field_info: Optional field information from Pydantic
+
+    Returns:
+        The Django field type
+    """
+    # Check if the type is serializable
+    if not is_serializable_type(python_type):
+        # Non-serializable types are stored as TextField with is_relationship=True
+        return models.TextField
+
+    # Handle basic Python types
+    if python_type == str:
+        return models.CharField
+    elif python_type == int:
+        return models.IntegerField
+    elif python_type == float:
+        return models.FloatField
+    elif python_type == bool:
+        return models.BooleanField
+    elif python_type == bytes:
+        return models.BinaryField
+    elif python_type == dict:
+        return models.JSONField
+    elif python_type == list:
+        return models.JSONField
+
+    # Handle relationship fields
+    if isinstance(python_type, type) and issubclass(python_type, BaseModel):
+        # Check field info for relationship type
+        if field_info and field_info.get("relationship_type") == "many_to_many":
+            return models.ManyToManyField
+        return models.ForeignKey
+
+    # Default to TextField for unknown types
+    return models.TextField
+
+
+def get_field_kwargs(
+    python_type: type[Any],
+    field_info: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """
+    Get the field keyword arguments for a Django field.
+
+    Args:
+        python_type: The Python type
+        field_info: Optional field information from Pydantic
+
+    Returns:
+        Dictionary of field keyword arguments
+    """
+    kwargs: dict[str, Any] = {}
+
+    # Handle non-serializable types
+    if not is_serializable_type(python_type):
+        kwargs["is_relationship"] = True
+        return kwargs
+
+    # Handle CharField max_length
+    if python_type == str:
+        kwargs["max_length"] = field_info.get("max_length", 255) if field_info else 255
+
+    # Handle null/blank
+    if field_info:
+        if field_info.get("nullable", False):
+            kwargs["null"] = True
+        if field_info.get("allow_blank", False):
+            kwargs["blank"] = True
+
+    # Handle relationship fields
+    if isinstance(python_type, type) and issubclass(python_type, BaseModel):
+        if field_info and field_info.get("relationship_type") == "many_to_many":
+            kwargs["related_name"] = field_info.get("related_name")
+            if "through" in field_info:
+                kwargs["through"] = field_info["through"]
+        else:
+            kwargs["on_delete"] = models.CASCADE
+            kwargs["related_name"] = field_info.get("related_name") if field_info else None
+
+    return kwargs

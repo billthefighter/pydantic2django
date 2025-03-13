@@ -14,7 +14,6 @@ from typing import (
     Any,
     Optional,
     Union,
-    cast,
     get_args,
     get_origin,
 )
@@ -25,6 +24,8 @@ from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
+
+from .serialization import is_serializable
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.field_utils")
@@ -312,8 +313,47 @@ class FieldAttributeHandler:
                     # Direct class reference for same-app models
                     params.append(f"through={through_name}")
 
+        # Handle context fields (non-serializable fields)
+        if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+            params.append("is_relationship=True")
+
         # Join parameters and return definition
         return f"models.{field_type}({', '.join(params)})"
+
+    @staticmethod
+    def get_field_kwargs(field_info: FieldInfo) -> dict[str, Any]:
+        """
+        Get field kwargs from Pydantic field info.
+
+        Args:
+            field_info: The Pydantic field info
+
+        Returns:
+            Dict of field kwargs
+        """
+        kwargs = {}
+
+        # Handle null/blank based on whether the field is required
+        kwargs["null"] = not field_info.is_required()
+        kwargs["blank"] = not field_info.is_required()
+
+        # Add description as help_text if available
+        if field_info.description:
+            kwargs["help_text"] = field_info.description
+
+        # Add default if available and valid
+        if is_valid_default_value(field_info.default):
+            kwargs["default"] = process_default_value(field_info.default)
+
+        # Add max_length for CharField if available in field metadata
+        if hasattr(field_info, "metadata") and isinstance(field_info.metadata, dict):
+            max_length = field_info.metadata.get("max_length")
+            if max_length is not None:
+                kwargs["max_length"] = max_length
+        elif isinstance(field_info.annotation, type) and field_info.annotation == str:
+            kwargs["max_length"] = 255  # Default max_length for strings
+
+        return kwargs
 
 
 # Define a type for relationship fields to help with type checking
@@ -337,56 +377,70 @@ class ManyToManyField(RelationshipField):
 
 
 class RelationshipFieldHandler:
-    """
-    Handles creation and processing of relationship fields.
-    """
+    """Handles relationship fields between Django models."""
 
     @staticmethod
-    def get_related_model_name(model_class: Union[type[BaseModel], models.Field, type[Any]]) -> str:
-        """Get the Django model name for a Pydantic model class or Django field.
+    def get_related_model_name(field: models.Field) -> Optional[str]:
+        """
+        Get the name of the related model from a relationship field.
 
         Args:
-            model_class: Either a Pydantic model class or a Django field
+            field: The Django model field
 
         Returns:
-            The Django model name
+            The name of the related model or None if not found
         """
-        # Handle Django field objects
-        if isinstance(model_class, (models.ForeignKey | models.ManyToManyField)):
-            if hasattr(model_class, "remote_field") and model_class.remote_field and model_class.remote_field.model:
-                # Get the model name from the remote_field.model
-                remote_model = model_class.remote_field.model
-                if isinstance(remote_model, str):
-                    # If it's a string reference, return it as is
-                    return remote_model
-                # If it's a model class, get its name
-                if inspect.isclass(remote_model):
-                    model_name = remote_model.__name__
-                    if not model_name.startswith("Django"):
-                        model_name = f"Django{model_name}"
-                    return model_name
-                # If it's not a class, convert to string
-                return str(remote_model)
-            return "self"  # Default to self-reference if we can't determine the model
-
-        # Handle Pydantic model classes
-        if is_pydantic_model(model_class):
-            related_name = cast(type[Any], model_class).__name__
-            if not related_name.startswith("Django"):
-                related_name = f"Django{related_name}"
-            return related_name
-
-        # If we can't determine the type, try to get the name safely
         try:
-            if inspect.isclass(model_class):
-                name = cast(type[Any], model_class).__name__
-            else:
-                name = str(model_class)
-            if not name.startswith("Django"):
-                name = f"Django{name}"
-            return name
+            if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
+                remote_field = field.remote_field
+                if remote_field and remote_field.model:
+                    if isinstance(remote_field.model, str):
+                        return remote_field.model
+                    elif hasattr(remote_field.model, "__name__"):
+                        return remote_field.model.__name__
         except Exception:
-            return "self"  # Default to self-reference if all else fails
+            pass
+        return None
+
+    @staticmethod
+    def is_relationship_field(field: models.Field) -> bool:
+        """
+        Check if a field is a relationship field.
+
+        Args:
+            field: The Django model field
+
+        Returns:
+            True if the field is a relationship field, False otherwise
+        """
+        # Check for standard relationship fields
+        if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
+            return True
+
+        # Check for context fields marked as relationships
+        if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+            return True
+
+        return False
+
+    @staticmethod
+    def get_relationship_type(field: models.Field) -> Optional[str]:
+        """
+        Get the type of relationship for a field.
+
+        Args:
+            field: The Django model field
+
+        Returns:
+            The type of relationship or None if not a relationship field
+        """
+        if isinstance(field, models.ForeignKey):
+            return "ForeignKey"
+        elif isinstance(field, models.ManyToManyField):
+            return "ManyToManyField"
+        elif isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+            return "ContextField"
+        return None
 
     @staticmethod
     def detect_relationship_type(field_type: Any) -> Optional[type[models.Field]]:
@@ -616,3 +670,54 @@ def sanitize_string(value: Union[str, Promise, Any]) -> str:
     str_value = str_value.replace("\r", "\\r")
 
     return str_value
+
+
+def is_serializable_type(field_type: Any) -> bool:
+    """
+    Check if a type is serializable (can be stored in the database).
+
+    Args:
+        field_type: The type to check
+
+    Returns:
+        True if the type is serializable, False otherwise
+    """
+    # Handle Optional types
+    origin = get_origin(field_type)
+    args = get_args(field_type)
+
+    if origin is Union and type(None) in args:
+        # For Optional types, check the inner type
+        inner_type = next(arg for arg in args if arg is not type(None))
+        return is_serializable_type(inner_type)
+
+    # Basic Python types that are always serializable
+    basic_types = (str, int, float, bool, dict, list, set)
+    if field_type in basic_types:
+        return True
+
+    # Handle collection types
+    if origin in (list, dict, set):
+        # For collections, check if all type arguments are serializable
+        return all(is_serializable_type(arg) for arg in args)
+
+    # Handle Pydantic models (they can be serialized to JSON)
+    if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
+        return True
+
+    # Handle Enums (they can be serialized)
+    if inspect.isclass(field_type) and issubclass(field_type, Enum):
+        return True
+
+    # For class types, check if they have a serialization method
+    if inspect.isclass(field_type):
+        # Create a dummy instance to test serialization
+        try:
+            instance = object.__new__(field_type)
+            return is_serializable(instance)
+        except Exception:
+            # If we can't create an instance, assume it's not serializable
+            return False
+
+    # If none of the above conditions are met, it's not serializable
+    return False
