@@ -48,19 +48,21 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
                 continue
 
             if isinstance(target, str):
-                # If it's a string reference, ensure it has app_label and Django prefix
-                if "." not in target:
+                # If it's a string reference, ensure it has Django prefix
+                if "." in target:
+                    # If it has a dot, extract just the model name
+                    target_name = target.split(".")[-1]
+                else:
                     target_name = target
-                    if not target_name.startswith("Django"):
-                        target_name = f"Django{target_name}"
-                    target = target_name  # Don't add app_label here
-                deps.add(target)
+                if not target_name.startswith("Django"):
+                    target_name = f"Django{target_name}"
+                deps.add(target_name)
             elif inspect.isclass(target):
                 # If it's a class reference, get its name and ensure Django prefix
                 target_name = target.__name__
                 if not target_name.startswith("Django"):
                     target_name = f"Django{target_name}"
-                deps.add(target_name)  # Don't add app_label here
+                deps.add(target_name)
 
         # Check through relationships for ManyToManyField
         if isinstance(field, models.ManyToManyField):
@@ -73,38 +75,42 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
                     continue
 
                 if isinstance(target, str):
-                    # If it's a string reference, ensure it has app_label and Django prefix
-                    if "." not in target:
+                    # If it's a string reference, ensure it has Django prefix
+                    if "." in target:
+                        # If it has a dot, extract just the model name
+                        target_name = target.split(".")[-1]
+                    else:
                         target_name = target
-                        if not target_name.startswith("Django"):
-                            target_name = f"Django{target_name}"
-                        target = target_name  # Don't add app_label here
-                    deps.add(target)
+                    if not target_name.startswith("Django"):
+                        target_name = f"Django{target_name}"
+                    deps.add(target_name)
                 elif inspect.isclass(target):
                     # If it's a class reference, get its name and ensure Django prefix
                     target_name = target.__name__
                     if not target_name.startswith("Django"):
                         target_name = f"Django{target_name}"
-                    deps.add(target_name)  # Don't add app_label here
+                    deps.add(target_name)
 
                 # Handle through model if specified
                 through = remote_field.through
                 # Only add explicit through models, not auto-generated ones
                 if through and through is not models.ManyToManyRel and not remote_field.auto_created:
                     if isinstance(through, str):
-                        # If it's a string reference, ensure it has app_label and Django prefix
-                        if "." not in through:
+                        # If it's a string reference, ensure it has Django prefix
+                        if "." in through:
+                            # If it has a dot, extract just the model name
+                            through_name = through.split(".")[-1]
+                        else:
                             through_name = through
-                            if not through_name.startswith("Django"):
-                                through_name = f"Django{through_name}"
-                            through = through_name  # Don't add app_label here
-                        deps.add(through)
+                        if not through_name.startswith("Django"):
+                            through_name = f"Django{through_name}"
+                        deps.add(through_name)
                     elif inspect.isclass(through):
                         # If it's a class reference, get its name and ensure Django prefix
                         through_name = through.__name__
                         if not through_name.startswith("Django"):
                             through_name = f"Django{through_name}"
-                        deps.add(through_name)  # Don't add app_label here
+                        deps.add(through_name)
 
     return deps
 
@@ -126,21 +132,19 @@ def validate_model_references(models: dict[str, type], dependencies: dict[str, s
             if dep == "self":
                 continue
 
-            # Extract the model name without app_label if it exists
-            dep_model_name = dep.split(".")[-1]
+            # Extract just the model name if it includes app_label
+            if "." in dep:
+                dep_model_name = dep.split(".")[-1]
+            else:
+                dep_model_name = dep
+
+            # Ensure Django prefix
             if not dep_model_name.startswith("Django"):
                 dep_model_name = f"Django{dep_model_name}"
 
-            # First try to find the model with the full path
-            if dep in models:
-                continue
-
-            # Then try to find it with just the model name
-            if dep_model_name in models:
-                continue
-
-            # If we get here, the model wasn't found in either form
-            errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
+            # Check if the model exists in the normalized models
+            if dep_model_name not in models:
+                errors.append(f"Model '{model_name}' references non-existent model '{dep_model_name}'")
     return errors
 
 
@@ -545,7 +549,9 @@ class ModelDiscovery:
                 deps = get_model_dependencies_recursive(django_model, app_label)
                 # Store dependencies without app_label prefix
                 self.dependencies[model_name] = deps
-                logger.info(f"Dependencies for {model_name}: {deps}")
+                # Log dependencies in a consistent format
+                formatted_deps = {f"{dep}" for dep in deps}
+                logger.info(f"Dependencies for {model_name}: {formatted_deps}")
             except Exception as e:
                 logger.warning(f"Could not analyze dependencies for {model_name}: {e}")
                 continue
