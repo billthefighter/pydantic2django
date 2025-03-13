@@ -535,6 +535,17 @@ class RelationshipFieldHandler:
         else:
             model_class = field_type
 
+        # Get the model name, handling both string and class references
+        if isinstance(model_class, str):
+            target_model_name = model_class
+        elif inspect.isclass(model_class):
+            target_model_name = model_class.__name__
+            if not target_model_name.startswith("Django"):
+                target_model_name = f"Django{target_model_name}"
+        else:
+            logger.warning(f"Invalid model class type for field {field_name}: {type(model_class)}")
+            return None
+
         # Get the related name
         related_name = sanitize_related_name(
             getattr(field_info, "related_name", ""),
@@ -545,7 +556,7 @@ class RelationshipFieldHandler:
         # Create the appropriate field type
         if field_class is models.ManyToManyField:
             return models.ManyToManyField(
-                to=f"{app_label}.{RelationshipFieldHandler.get_related_model_name(model_class)}",
+                to=f"{app_label}.{target_model_name}",
                 related_name=related_name,
                 **kwargs,
             )
@@ -553,7 +564,7 @@ class RelationshipFieldHandler:
             # For ForeignKey, we need on_delete
             kwargs["on_delete"] = models.CASCADE  # Default to CASCADE
             return models.ForeignKey(
-                to=f"{app_label}.{RelationshipFieldHandler.get_related_model_name(model_class)}",
+                to=f"{app_label}.{target_model_name}",
                 related_name=related_name,
                 **kwargs,
             )
