@@ -305,13 +305,15 @@ class FieldAttributeHandler:
             # Add through model if present - use direct class reference
             through = getattr(field, "through", None)
             if through:
-                through_name = through.__name__ if hasattr(through, "__name__") else str(through)
-                if "." in through_name:
-                    # If it's a cross-app reference, keep it as a string
-                    params.append(f"through='{through_name}'")
-                else:
-                    # Direct class reference for same-app models
-                    params.append(f"through={through_name}")
+                # Skip auto-generated through models
+                if not (isinstance(through, str) and through.endswith("_edges") or through.endswith("_nodes")):
+                    through_name = through.__name__ if hasattr(through, "__name__") else str(through)
+                    if "." in through_name:
+                        # If it's a cross-app reference, keep it as a string
+                        params.append(f"through='{through_name}'")
+                    else:
+                        # Direct class reference for same-app models
+                        params.append(f"through={through_name}")
 
         # Handle context fields (non-serializable fields)
         if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
@@ -458,8 +460,14 @@ class RelationshipFieldHandler:
 
         # Handle Optional[...]
         if origin is Union and type(None) in args:
+            # Get the non-None type
             inner_type = next(arg for arg in args if arg is not type(None))
-            return RelationshipFieldHandler.detect_relationship_type(inner_type)
+            # Only recurse if the inner type might be a relationship
+            if is_pydantic_model(inner_type) or (
+                get_origin(inner_type) in (list, dict) and any(is_pydantic_model(arg) for arg in get_args(inner_type))
+            ):
+                return RelationshipFieldHandler.detect_relationship_type(inner_type)
+            return None
 
         # Handle List[Model]
         if origin is list and args and is_pydantic_model(args[0]):

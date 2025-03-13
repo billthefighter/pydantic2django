@@ -59,6 +59,21 @@ def get_model_dependencies_recursive(model: type[models.Model], app_label: str) 
         if isinstance(field, models.ManyToManyField):
             remote_field = field.remote_field
             if isinstance(remote_field, models.ManyToManyRel):
+                # Add the target model as a dependency
+                target = remote_field.model
+                if isinstance(target, str):
+                    if "." not in target:
+                        if not target.startswith("Django"):
+                            target = f"Django{target}"
+                        target = f"{app_label}.{target}"
+                    deps.add(target)
+                elif inspect.isclass(target):
+                    target_name = target.__name__
+                    if not target_name.startswith("Django"):
+                        target_name = f"Django{target_name}"
+                    deps.add(f"{app_label}.{target_name}")
+
+                # Handle through model if specified
                 through = remote_field.through
                 if through and through is not models.ManyToManyRel:
                     if isinstance(through, str):
