@@ -15,11 +15,10 @@ from pydantic2django.discovery import (
     get_discovered_models,
     setup_dynamic_models,
 )
+from pydantic2django.field_utils import FieldAttributeHandler
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("pydantic2django.generator")
 
 T = TypeVar("T", bound=BaseModel)
@@ -60,9 +59,7 @@ class StaticDjangoModelGenerator:
 
         # If templates don't exist in the package, use the ones from the current directory
         if not os.path.exists(package_templates_dir):
-            package_templates_dir = os.path.join(
-                pathlib.Path(__file__).parent.absolute(), "templates"
-            )
+            package_templates_dir = os.path.join(pathlib.Path(__file__).parent.absolute(), "templates")
 
         self.jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(package_templates_dir),
@@ -127,84 +124,7 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the field
         """
-        field_type = type(field).__name__
-
-        # Start with the field type
-        definition = f"models.{field_type}("
-
-        # Add field parameters
-        params = []
-
-        # Common field parameters
-        if hasattr(field, "verbose_name") and field.verbose_name:
-            params.append(f"verbose_name='{field.verbose_name}'")
-
-        if hasattr(field, "help_text") and field.help_text:
-            params.append(f"help_text='{field.help_text}'")
-
-        if hasattr(field, "null") and field.null:
-            params.append(f"null={field.null}")
-
-        if hasattr(field, "blank") and field.blank:
-            params.append(f"blank={field.blank}")
-
-        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
-            if isinstance(field.default, str):
-                params.append(f"default='{field.default}'")
-            else:
-                params.append(f"default={field.default}")
-
-        # Field-specific parameters
-        if isinstance(field, models.CharField) and hasattr(field, "max_length"):
-            params.append(f"max_length={field.max_length}")
-
-        if isinstance(field, models.DecimalField):
-            if hasattr(field, "max_digits"):
-                params.append(f"max_digits={field.max_digits}")
-            if hasattr(field, "decimal_places"):
-                params.append(f"decimal_places={field.decimal_places}")
-
-        # Handle relationship fields
-        if isinstance(field, models.ForeignKey):
-            # Get the related model name safely
-            try:
-                related_model = field.related_model
-                if isinstance(related_model, type):
-                    related_model_name = related_model.__name__
-                else:
-                    related_model_name = str(related_model)
-                params.append(f"to='{related_model_name}'")
-            except Exception:
-                # Fallback to a string representation
-                params.append(
-                    "to='self'"
-                )  # Default to self-reference if we can't determine
-
-            # Get the on_delete behavior safely
-            try:
-                on_delete = getattr(field, "on_delete", None)
-                if on_delete and hasattr(on_delete, "__name__"):
-                    params.append(f"on_delete=models.{on_delete.__name__}")
-                else:
-                    params.append("on_delete=models.CASCADE")  # Default to CASCADE
-            except Exception:
-                params.append("on_delete=models.CASCADE")  # Default to CASCADE
-
-        if isinstance(field, models.ManyToManyField):
-            # Get the related model name safely
-            try:
-                related_model = field.related_model
-                if isinstance(related_model, type):
-                    related_model_name = related_model.__name__
-                else:
-                    related_model_name = str(related_model)
-                params.append(f"to='{related_model_name}'")
-            except Exception:
-                raise ValueError(f"Related model not found for {field}")
-        # Join parameters and close the definition
-        definition += ", ".join(params) + ")"
-
-        return definition
+        return FieldAttributeHandler.serialize_field(field)
 
     def generate_model_definition(self, model: type[models.Model]) -> str:
         """
@@ -240,9 +160,7 @@ class StaticDjangoModelGenerator:
                     field_definition = self.generate_field_definition(field)
                     fields.append((field.name, field_definition))
         except Exception as e:
-            logger.exception(
-                f"Error processing many-to-many fields for {model_name}: {e}"
-            )
+            logger.exception(f"Error processing many-to-many fields for {model_name}: {e}")
 
         # Get module path for the original Pydantic model
         module_path = ""
@@ -256,8 +174,7 @@ class StaticDjangoModelGenerator:
 
         # Prepare meta information
         meta = {
-            "db_table": model._meta.db_table
-            or f"{self.app_label}_{model_name.lower()}",
+            "db_table": model._meta.db_table or f"{self.app_label}_{model_name.lower()}",
             "app_label": self.app_label,
             "verbose_name": model._meta.verbose_name or model_name,
             "verbose_name_plural": model._meta.verbose_name_plural or f"{model_name}s",
@@ -356,12 +273,8 @@ def main():
     """
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Generate static Django models from Pydantic models"
-    )
-    parser.add_argument(
-        "--output", "-o", default="generated_models.py", help="Output file path"
-    )
+    parser = argparse.ArgumentParser(description="Generate static Django models from Pydantic models")
+    parser.add_argument("--output", "-o", default="generated_models.py", help="Output file path")
     parser.add_argument(
         "--packages",
         "-p",
@@ -369,12 +282,8 @@ def main():
         required=True,
         help="Packages to scan for Pydantic models",
     )
-    parser.add_argument(
-        "--app-label", "-a", default="django_app", help="Django app label"
-    )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Print verbose output"
-    )
+    parser.add_argument("--app-label", "-a", default="django_app", help="Django app label")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
 
     args = parser.parse_args()
 

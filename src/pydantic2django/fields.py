@@ -2,18 +2,15 @@
 Field mapping between Pydantic and Django models.
 """
 import logging
-from typing import Any, Optional, Union, cast, get_args, get_origin
+from typing import Any, Optional, Union, get_args, get_origin
 
 from django.db import models
-from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 # Import shared utilities
 from pydantic2django.field_utils import (
     RelationshipFieldHandler,
     get_default_max_length,
-    is_pydantic_model,
-    sanitize_related_name,
 )
 
 # Configure logging
@@ -125,6 +122,11 @@ class FieldConverter:
         Returns:
             Tuple of (Django field class, is_relationship)
         """
+        # First check if it's a relationship field
+        relationship_field = RelationshipFieldHandler.detect_relationship_type(field_type)
+        if relationship_field:
+            return relationship_field, True
+
         # Handle Optional types
         origin = get_origin(field_type)
         args = get_args(field_type)
@@ -132,15 +134,9 @@ class FieldConverter:
         if origin is Union and type(None) in args:
             # This is an Optional type, get the actual type
             field_type = next(arg for arg in args if arg is not type(None))
-
-        # Check for List/Dict types
-        if origin is list:
-            # Check if it's a list of Pydantic models
-            if args and is_pydantic_model(args[0]):
-                return models.ManyToManyField, True
-            return models.JSONField, False
-        elif origin is dict:
-            return models.JSONField, False
+            # Recursively resolve the inner type
+            inner_field, is_rel = self._resolve_field_type(field_type)
+            return inner_field, is_rel
 
         # Handle basic types
         if field_type is str:
@@ -151,14 +147,10 @@ class FieldConverter:
             return models.FloatField, False
         elif field_type is bool:
             return models.BooleanField, False
-        elif field_type is dict:
+        elif field_type is dict or origin is dict:
             return models.JSONField, False
-        elif field_type is list:
+        elif field_type is list or origin is list:
             return models.JSONField, False
-
-        # Handle relationship fields (Pydantic models)
-        if is_pydantic_model(field_type):
-            return models.ForeignKey, True
 
         # Default to TextField for unknown types
         return models.TextField, False
@@ -239,72 +231,25 @@ def convert_field(
     Returns:
         A Django field instance or None if the field should be skipped
     """
-    # Use the FieldConverter for all field conversion
-    converter = FieldConverter(app_label)
-
     # Get field type from annotation
     field_type = field_info.annotation
 
-    # Handle special case for direct model relationships when model_name is provided
-    if model_name is not None:
-        # Check for list of models (many-to-many)
-        origin = get_origin(field_type)
-        args = get_args(field_type)
+    # First try to handle it as a relationship field
+    if not skip_relationships:
+        relationship_field = RelationshipFieldHandler.create_relationship_field(
+            field_name=field_name,
+            field_info=field_info,
+            field_type=field_type,
+            app_label=app_label,
+            model_name=model_name,
+        )
+        if relationship_field:
+            return relationship_field
 
-        # Handle list of models (many-to-many)
-        if origin is list and args:
-            first_arg = args[0]
-            if first_arg is not None and is_pydantic_model(first_arg):
-                # At this point, we know first_arg is a Pydantic model class
-                model_class = cast(type[BaseModel], first_arg)
-                if skip_relationships:
-                    return None
-
-                # Get the related model name
-                related_model_name = model_class.__name__
-                if not related_model_name.startswith("Django"):
-                    related_model_name = f"Django{related_model_name}"
-
-                # Create a many-to-many field
-                related_name = sanitize_related_name(
-                    field_name,
-                    model_name=model_name if model_name else "",
-                    field_name=field_name,
-                )
-                return models.ManyToManyField(
-                    f"{app_label}.{related_model_name}",
-                    related_name=related_name,
-                    blank=True,
-                )
-
-        # Handle direct model relationship
-        if is_pydantic_model(field_type):
-            # At this point, we know field_type is a Pydantic model class
-            model_class = cast(type[BaseModel], field_type)
-            if skip_relationships:
-                return None
-
-            # Get the related model name
-            related_model_name = model_class.__name__
-            if not related_model_name.startswith("Django"):
-                related_model_name = f"Django{related_model_name}"
-
-            # Create a foreign key
-            related_name = sanitize_related_name(
-                field_name,
-                model_name=model_name if model_name else "",
-                field_name=field_name,
-            )
-            return models.ForeignKey(
-                f"{app_label}.{related_model_name}",
-                on_delete=models.CASCADE,
-                related_name=related_name,
-                null=True,
-                blank=True,
-            )
-
-    # Use the converter for standard field conversion
+    # If it's not a relationship or we're skipping relationships,
+    # use the FieldConverter for standard field conversion
     try:
+        converter = FieldConverter(app_label)
         return converter.convert_field(field_name, field_info, skip_relationships)
     except Exception as e:
         logger.error(f"Error converting field {field_name}: {str(e)}")

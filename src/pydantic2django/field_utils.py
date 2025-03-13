@@ -13,13 +13,13 @@ from typing import (
     Any,
     Optional,
     Union,
-    cast,
     get_args,
     get_origin,
 )
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
@@ -163,6 +163,122 @@ class FieldAttributeHandler:
 
         return kwargs
 
+    @staticmethod
+    def serialize_field_attributes(field: models.Field) -> list[str]:
+        """
+        Serialize Django model field attributes to a list of parameter strings.
+
+        Args:
+            field: The Django model field
+
+        Returns:
+            List of parameter strings in the format "param=value"
+        """
+        params = []
+
+        # Common field parameters
+        if hasattr(field, "verbose_name") and field.verbose_name:
+            params.append(f"verbose_name='{sanitize_string(field.verbose_name)}'")
+
+        if hasattr(field, "help_text") and field.help_text:
+            params.append(f"help_text='{sanitize_string(field.help_text)}'")
+
+        if hasattr(field, "null") and field.null:
+            params.append(f"null={field.null}")
+
+        if hasattr(field, "blank") and field.blank:
+            params.append(f"blank={field.blank}")
+
+        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
+            if isinstance(field.default, str):
+                params.append(f"default='{sanitize_string(field.default)}'")
+            else:
+                params.append(f"default={field.default}")
+
+        # Field-specific parameters
+        if isinstance(field, models.CharField) and hasattr(field, "max_length"):
+            params.append(f"max_length={field.max_length}")
+
+        if isinstance(field, models.DecimalField):
+            if hasattr(field, "max_digits"):
+                params.append(f"max_digits={field.max_digits}")
+            if hasattr(field, "decimal_places"):
+                params.append(f"decimal_places={field.decimal_places}")
+
+        return params
+
+    @staticmethod
+    def serialize_field(field: models.Field) -> str:
+        """
+        Serialize a Django model field to its string representation.
+
+        Args:
+            field: The Django model field
+
+        Returns:
+            String representation of the field
+        """
+        field_type = type(field).__name__
+        params = FieldAttributeHandler.serialize_field_attributes(field)
+
+        # Handle relationship fields
+        if isinstance(field, models.ForeignKey):
+            # Get the related model name safely
+            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
+            if related_model_name:
+                # Use direct class reference for type checking
+                if "." in related_model_name:
+                    # If it's a cross-app reference, keep it as a string
+                    params.append(f"to='{related_model_name}'")
+                else:
+                    # Direct class reference for same-app models
+                    params.append(f"to={related_model_name}")
+            else:
+                params.append("to='self'")  # Default to self-reference if we can't determine
+
+            # Get the on_delete behavior safely
+            try:
+                on_delete = getattr(field, "on_delete", None)
+                if on_delete and hasattr(on_delete, "__name__"):
+                    params.append(f"on_delete=models.{on_delete.__name__}")
+                else:
+                    params.append("on_delete=models.CASCADE")  # Default to CASCADE
+            except Exception:
+                params.append("on_delete=models.CASCADE")  # Default to CASCADE
+
+        if isinstance(field, models.ManyToManyField):
+            # Get the related model name safely
+            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
+            if related_model_name:
+                # Use direct class reference for type checking
+                if "." in related_model_name:
+                    # If it's a cross-app reference, keep it as a string
+                    params.append(f"to='{related_model_name}'")
+                else:
+                    # Direct class reference for same-app models
+                    params.append(f"to={related_model_name}")
+            else:
+                raise ValueError(f"Related model not found for {field}")
+
+            # Add related_name if present - this should be sanitized since it's a Python identifier
+            related_name = getattr(field, "related_name", None)
+            if related_name:
+                params.append(f"related_name='{sanitize_related_name(related_name)}'")
+
+            # Add through model if present - use direct class reference
+            through = getattr(field, "through", None)
+            if through:
+                through_name = through.__name__ if hasattr(through, "__name__") else str(through)
+                if "." in through_name:
+                    # If it's a cross-app reference, keep it as a string
+                    params.append(f"through='{through_name}'")
+                else:
+                    # Direct class reference for same-app models
+                    params.append(f"through={through_name}")
+
+        # Join parameters and return definition
+        return f"models.{field_type}({', '.join(params)})"
+
 
 # Define a type for relationship fields to help with type checking
 class RelationshipField(models.Field):
@@ -190,61 +306,45 @@ class RelationshipFieldHandler:
     """
 
     @staticmethod
-    def get_related_model_name(field: models.Field) -> Optional[str]:
+    def get_related_model_name(model_class: type[BaseModel]) -> str:
+        """Get the Django model name for a Pydantic model class."""
+        related_name = model_class.__name__
+        if not related_name.startswith("Django"):
+            related_name = f"Django{related_name}"
+        return related_name
+
+    @staticmethod
+    def detect_relationship_type(field_type: Any) -> Optional[type[models.Field]]:
         """
-        Get the related model name from a relationship field.
+        Detect if a field type represents a relationship and return the appropriate Django field type.
 
         Args:
-            field: The relationship field
+            field_type: The field type to check
 
         Returns:
-            The related model name or None if it couldn't be determined
+            Django field type if it's a relationship, None otherwise
         """
-        related_model_name = None
+        origin = get_origin(field_type)
+        args = get_args(field_type)
 
-        # Try different ways to get the related model
-        if hasattr(field, "related_model") and field.related_model is not None:
-            if isinstance(field.related_model, str):
-                related_model_name = field.related_model
-            else:
-                try:
-                    related_model_name = field.related_model.__name__
-                except (AttributeError, TypeError):
-                    pass
+        # Handle Optional[...]
+        if origin is Union and type(None) in args:
+            inner_type = next(arg for arg in args if arg is not type(None))
+            return RelationshipFieldHandler.detect_relationship_type(inner_type)
 
-        # Try remote_field.model if related_model didn't work
-        if not related_model_name and hasattr(field, "remote_field") and field.remote_field is not None:
-            remote_field = field.remote_field
-            if hasattr(remote_field, "model") and remote_field.model is not None:
-                if isinstance(remote_field.model, str):
-                    related_model_name = remote_field.model
-                else:
-                    try:
-                        related_model_name = remote_field.model.__name__
-                    except (AttributeError, TypeError):
-                        pass
+        # Handle List[Model]
+        if origin is list and args and is_pydantic_model(args[0]):
+            return models.ManyToManyField
 
-        # Try to_field as a last resort
-        if not related_model_name:
-            # Cast the field to the appropriate type for type checking
-            if isinstance(field, models.ForeignKey) or isinstance(field, models.OneToOneField):
-                rel_field = cast(ForeignKeyField, field)
-            elif isinstance(field, models.ManyToManyField):
-                rel_field = cast(ManyToManyField, field)
-            else:
-                rel_field = cast(RelationshipField, field)
+        # Handle Dict[str, Model] or Dict[Any, Model]
+        if origin is dict and len(args) == 2 and is_pydantic_model(args[1]):
+            return models.ManyToManyField
 
-            # Check if the field has a 'to' attribute
-            if hasattr(rel_field, "to") and rel_field.to is not None:
-                if isinstance(rel_field.to, str):
-                    related_model_name = rel_field.to
-                else:
-                    try:
-                        related_model_name = rel_field.to.__name__
-                    except (AttributeError, TypeError):
-                        pass
+        # Handle direct Model reference
+        if is_pydantic_model(field_type):
+            return models.ForeignKey
 
-        return related_model_name
+        return None
 
     @staticmethod
     def create_relationship_field(
@@ -265,187 +365,62 @@ class RelationshipFieldHandler:
             model_name: Optional model name for context
 
         Returns:
-            A Django relationship field or None if the field type is not supported
+            A Django relationship field or None if the field type is not a relationship
         """
+        # First detect if this is a relationship field
+        field_class = RelationshipFieldHandler.detect_relationship_type(field_type)
+        if not field_class:
+            return None
+
         # Get field attributes
         kwargs = FieldAttributeHandler.handle_field_attributes(field_info)
 
-        # Get the related model type
+        # Get the origin and args for type analysis
         origin = get_origin(field_type)
         args = get_args(field_type)
 
-        # Enhanced detection for collections of models
-        
-        # Handle List[Model] as ManyToManyField
+        # Handle Optional types
+        if origin is Union and type(None) in args:
+            # For Optional fields, ensure they're nullable
+            kwargs["null"] = True
+            kwargs["blank"] = True
+            # Get the actual type (not None)
+            field_type = next(arg for arg in args if arg is not type(None))
+            # Update origin and args for the actual type
+            origin = get_origin(field_type)
+            args = get_args(field_type)
+
+        # Get the model class based on the field type
         if origin is list and args:
-            # Check if the list contains Pydantic models
-            item_type = args[0]
-            if is_pydantic_model(item_type):
-                related_model = item_type
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
+            model_class = args[0]
+        elif origin is dict and len(args) == 2:
+            model_class = args[1]
+        else:
+            model_class = field_type
 
-                return models.ManyToManyField(
-                    to=f"{app_label}.{related_model.__name__}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-            
-            # Handle nested types like List[List[Model]] or List[Dict[str, Model]]
-            nested_origin = get_origin(item_type)
-            nested_args = get_args(item_type)
-            
-            if nested_origin is list and nested_args and is_pydantic_model(nested_args[0]):
-                # List[List[Model]] -> ManyToManyField
-                related_model = nested_args[0]
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
-                
-                return models.ManyToManyField(
-                    to=f"{app_label}.{related_model.__name__}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-            
-            if nested_origin is dict and len(nested_args) == 2 and is_pydantic_model(nested_args[1]):
-                # List[Dict[str, Model]] -> ManyToManyField
-                related_model = nested_args[1]
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
-                
-                return models.ManyToManyField(
-                    to=f"{app_label}.{related_model.__name__}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-        
-        # Handle Dict[str, Model] or Dict[Any, Model] as ManyToManyField with through model
-        if origin is dict and len(args) == 2:
-            value_type = args[1]
-            if is_pydantic_model(value_type):
-                related_model = value_type
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
+        # Get the related name
+        related_name = sanitize_related_name(
+            getattr(field_info, "related_name", ""),
+            model_name or "",
+            field_name,
+        )
 
-                return models.ManyToManyField(
-                    to=f"{app_label}.{related_model.__name__}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-            
-            # Handle nested types like Dict[str, List[Model]]
-            nested_origin = get_origin(value_type)
-            nested_args = get_args(value_type)
-            
-            if nested_origin is list and nested_args and is_pydantic_model(nested_args[0]):
-                # Dict[str, List[Model]] -> ManyToManyField
-                related_model = nested_args[0]
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
-                
-                return models.ManyToManyField(
-                    to=f"{app_label}.{related_model.__name__}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-
-        # Handle direct model reference as ForeignKey
-        if is_pydantic_model(field_type):
-            related_name = sanitize_related_name(
-                getattr(field_info, "related_name", ""),
-                model_name or "",
-                field_name,
+        # Create the appropriate field type
+        if field_class is models.ManyToManyField:
+            return models.ManyToManyField(
+                to=f"{app_label}.{RelationshipFieldHandler.get_related_model_name(model_class)}",
+                related_name=related_name,
+                **kwargs,
             )
-
+        elif field_class is models.ForeignKey:
+            # For ForeignKey, we need on_delete
+            kwargs["on_delete"] = models.CASCADE  # Default to CASCADE
             return models.ForeignKey(
-                to=f"{app_label}.{field_type.__name__}",
-                on_delete=models.CASCADE,  # Default to CASCADE
+                to=f"{app_label}.{RelationshipFieldHandler.get_related_model_name(model_class)}",
                 related_name=related_name,
                 **kwargs,
             )
 
-        # Handle Optional[Model] as ForeignKey with null=True
-        if origin is Union and type(None) in args:
-            # Find the model type in the Union
-            model_type = next((arg for arg in args if is_pydantic_model(arg)), None)
-            if model_type:
-                related_name = sanitize_related_name(
-                    getattr(field_info, "related_name", ""),
-                    model_name or "",
-                    field_name,
-                )
-
-                # Ensure null and blank are True for optional relationships
-                kwargs["null"] = True
-                kwargs["blank"] = True
-
-                return models.ForeignKey(
-                    to=f"{app_label}.{model_type.__name__}",
-                    on_delete=models.SET_NULL,  # Use SET_NULL for optional relationships
-                    related_name=related_name,
-                    **kwargs,
-                )
-                
-        # Handle Optional[List[Model]] as ManyToManyField with blank=True
-        if origin is Union and type(None) in args:
-            # Find any List type in the Union
-            list_type = next((arg for arg in args if get_origin(arg) is list), None)
-            if list_type:
-                list_args = get_args(list_type)
-                if list_args and is_pydantic_model(list_args[0]):
-                    related_model = list_args[0]
-                    related_name = sanitize_related_name(
-                        getattr(field_info, "related_name", ""),
-                        model_name or "",
-                        field_name,
-                    )
-                    
-                    # Ensure blank is True for optional M2M
-                    kwargs["blank"] = True
-                    
-                    return models.ManyToManyField(
-                        to=f"{app_label}.{related_model.__name__}",
-                        related_name=related_name,
-                        **kwargs,
-                    )
-            
-            # Find any Dict type in the Union
-            dict_type = next((arg for arg in args if get_origin(arg) is dict), None)
-            if dict_type:
-                dict_args = get_args(dict_type)
-                if len(dict_args) == 2 and is_pydantic_model(dict_args[1]):
-                    related_model = dict_args[1]
-                    related_name = sanitize_related_name(
-                        getattr(field_info, "related_name", ""),
-                        model_name or "",
-                        field_name,
-                    )
-                    
-                    # Ensure blank is True for optional M2M
-                    kwargs["blank"] = True
-                    
-                    return models.ManyToManyField(
-                        to=f"{app_label}.{related_model.__name__}",
-                        related_name=related_name,
-                        **kwargs,
-                    )
-
-        # Not a relationship field
         return None
 
 
@@ -532,3 +507,37 @@ def get_model_fields(model_class: type[BaseModel]) -> dict[str, FieldInfo]:
         A dictionary mapping field names to field info
     """
     return model_class.model_fields
+
+
+def sanitize_string(value: Union[str, Promise, Any]) -> str:
+    """
+    Sanitize a string for safe inclusion in generated code.
+
+    Escapes special characters like quotes and newlines to prevent syntax errors
+    in the generated code.
+
+    Args:
+        value: The string to sanitize. Can be a string, Django's Promise object, or any other type
+
+    Returns:
+        A sanitized string safe for code generation
+    """
+    # Convert value to string first
+    str_value = str(value)
+
+    # Replace backslashes first to avoid double-escaping
+    str_value = str_value.replace("\\", "\\\\")
+
+    # Escape single quotes since we're using them for string literals
+    str_value = str_value.replace("'", "\\'")
+
+    # Replace newlines with escaped newlines
+    str_value = str_value.replace("\n", "\\n")
+
+    # Replace tabs with escaped tabs
+    str_value = str_value.replace("\t", "\\t")
+
+    # Replace carriage returns
+    str_value = str_value.replace("\r", "\\r")
+
+    return str_value

@@ -118,7 +118,7 @@ class Pydantic2DjangoBase(models.Model):
                 self.__class__._pydantic_class_cache[cache_key] = pydantic_class
             return pydantic_class
         except (ImportError, AttributeError, ValueError) as e:
-            raise ValueError(f"Could not find Pydantic class for {self.object_type}: {str(e)}")
+            raise ValueError(f"Could not find Pydantic class for {self.object_type}: {str(e)}") from e
 
     def _verify_object_type_match(self, pydantic_obj: Any) -> str:
         """
@@ -357,7 +357,7 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
         try:
             pydantic_cls = self._get_pydantic_class()
         except ValueError as e:
-            raise AttributeError(str(e))
+            raise AttributeError(str(e)) from e
 
         # Check if the attribute exists in the Pydantic model
         if hasattr(pydantic_cls, name):
@@ -491,6 +491,8 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
         django_fields = {field.name: field for field in self._meta.fields}
 
         # Exclude these fields from consideration
+        # TODO: There are cases where these fields are defined on the source pydantic object.
+        # Need to handle that.
         exclude_fields = {
             "id",
             "name",
@@ -499,8 +501,10 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
             "updated_at",
         }
 
+        # TODO: Handle relationship fields
+        # TODO: Handle nested models
         # Add each Django field value to the data dictionary
-        for field_name, field in django_fields.items():
+        for field_name, _ in django_fields.items():
             if field_name in exclude_fields:
                 continue
 
