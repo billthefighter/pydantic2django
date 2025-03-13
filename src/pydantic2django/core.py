@@ -36,6 +36,7 @@ def make_django_model(
     skip_relationships: bool = False,
     existing_model: Optional[type[models.Model]] = None,
     class_name_prefix: str = "Django",
+    strict: bool = False,
     **options: Any,
 ) -> tuple[type[models.Model], Optional[dict[str, models.Field]]]:
     """
@@ -47,6 +48,8 @@ def make_django_model(
         check_migrations: Whether to check for needed migrations
         skip_relationships: Whether to skip relationship fields (useful during initial model creation)
         existing_model: Optional existing model to update with new fields
+        class_name_prefix: Prefix to use for the generated Django model class name
+        strict: If True, raise an error on field collisions; if False, keep base model fields
         **options: Additional options for customizing the conversion
 
     Returns:
@@ -96,13 +99,13 @@ def make_django_model(
             # Handle relationship fields differently based on skip_relationships
             if isinstance(
                 django_field,
-                (models.ForeignKey | models.ManyToManyField | models.OneToOneField),
+                (models.ForeignKey, models.ManyToManyField, models.OneToOneField),
             ):
                 if skip_relationships:
                     # Store relationship fields for later
                     relationship_fields[field_name] = django_field
                     continue
-
+            
             django_fields[field_name] = django_field
 
         except (ValueError, TypeError) as e:
@@ -124,23 +127,32 @@ def make_django_model(
 
     # Check for field collisions if a base Django model is provided
     if base_django_model:
-        base_fields = base_django_model._meta.get_fields()
-        base_field_names = {field.name for field in base_fields}
-        logger.debug(f"Checking field collisions with base model {base_django_model.__name__}")
+        # Use hasattr to safely check for _meta
+        if hasattr(base_django_model, '_meta'):
+            base_fields = base_django_model._meta.get_fields()
+            base_field_names = {field.name for field in base_fields}
+            logger.debug(f"Checking field collisions with base model {base_django_model.__name__}")
 
-        # Check for collisions
-        collision_fields = set(django_fields.keys()) & base_field_names
-        if collision_fields:
-            logger.warning(f"Field collision detected with base model: {collision_fields}. Renaming fields.")
-
-            # Rename conflicting fields instead of raising an error
-            for field_name in collision_fields:
-                new_field_name = f"pydantic_{field_name}"
-                logger.info(f"Renaming field '{field_name}' to '{new_field_name}'")
-                django_fields[new_field_name] = django_fields.pop(field_name)
-                # Update the field's name attribute if it has one
-                if hasattr(django_fields[new_field_name], "name"):
-                    django_fields[new_field_name].name = new_field_name
+            # Check for collisions
+            collision_fields = set(django_fields.keys()) & base_field_names
+            if collision_fields:
+                if strict:
+                    # In strict mode, raise an error with helpful message
+                    error_msg = (
+                        f"Field collision detected with base model: {collision_fields}. "
+                        f"Options: 1) Change the base model fields, 2) Rename the Pydantic fields, "
+                        f"or 3) Set strict=False to keep base model fields and discard Pydantic fields."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                else:
+                    # In non-strict mode, keep base model fields and discard Pydantic fields
+                    logger.warning(
+                        f"Field collision detected with base model: {collision_fields}. "
+                        f"Keeping base model fields and discarding Pydantic fields."
+                    )
+                    for field_name in collision_fields:
+                        django_fields.pop(field_name, None)
 
     # Determine base classes
     base_classes = [base_django_model] if base_django_model else [models.Model]
@@ -165,7 +177,7 @@ def make_django_model(
 
     # If inheriting from an abstract model, we still need to set app_label
     # to avoid Django's error about missing app_label
-    if base_django_model and getattr(base_django_model._meta, "abstract", False):
+    if base_django_model and hasattr(base_django_model, '_meta') and getattr(base_django_model._meta, "abstract", False):
         # Keep app_label even for abstract base models
         logger.debug("Keeping app_label for model with abstract base")
 
@@ -179,7 +191,7 @@ def make_django_model(
         meta_attrs["managed"] = True
         # Always ensure app_label is set
         meta_attrs["app_label"] = meta_app_label
-        Meta = type("Meta", (base_django_model._meta.__class__,), meta_attrs)
+        Meta = type("Meta", (object,), meta_attrs)
         logger.debug(f"Created Meta class inheriting from {base_django_model.__name__}")
     else:
         Meta = type("Meta", (), meta_attrs)

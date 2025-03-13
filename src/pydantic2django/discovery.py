@@ -269,7 +269,7 @@ class ModelDiscovery:
         self,
         package_names: list[str],
         app_label: str = "django_llm",
-        filter_function: Optional[Callable[[str, type[BaseModel]], bool]] = None,
+        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
     ) -> None:
         """
         Discover and analyze Pydantic models from specified packages.
@@ -326,7 +326,7 @@ class ModelDiscovery:
                 filtered_out = []
 
                 for model_name, model_cls in discovered_models.items():
-                    if filter_function(model_name, model_cls):
+                    if filter_function(model_cls):
                         filtered_models[model_name] = model_cls
                     else:
                         filtered_out.append(model_name)
