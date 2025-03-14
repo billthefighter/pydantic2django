@@ -24,7 +24,8 @@ from .fixtures import (
     context_django_model,
     context_model_context,
     context_temp_file,
-    context_pydantic_model
+    context_pydantic_model,
+    context_with_data,
 )
 
 # Add the project root to the Python path

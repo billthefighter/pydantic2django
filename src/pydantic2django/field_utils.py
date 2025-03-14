@@ -333,26 +333,6 @@ class FieldAttributeHandler:
         return kwargs
 
 
-# Define a type for relationship fields to help with type checking
-class RelationshipField(models.Field):
-    """Base class for relationship fields to help with type checking."""
-
-    to: Any
-    related_name: Optional[str]
-
-
-class ForeignKeyField(RelationshipField):
-    """Type for ForeignKey fields to help with type checking."""
-
-    on_delete: Any
-
-
-class ManyToManyField(RelationshipField):
-    """Type for ManyToManyField fields to help with type checking."""
-
-    through: Any
-
-
 class RelationshipFieldHandler:
     """Handles relationship fields between Django models."""
 
@@ -509,41 +489,6 @@ class RelationshipFieldHandler:
             return models.TextField(**kwargs)
 
         return None
-
-
-def get_default_max_length(field_name: str, field_type: type[models.Field]) -> Optional[int]:
-    """
-    Get the default max_length for a field based on its name and type.
-
-    Args:
-        field_name: The name of the field
-        field_type: The Django field type
-
-    Returns:
-        The default max_length or None if not applicable
-    """
-    # Default max_length for CharField
-    if field_type == models.CharField:
-        # Special cases based on field name
-        if "email" in field_name.lower():
-            return 254  # Standard max length for email fields
-        elif "password" in field_name.lower():
-            return 128  # Common length for password fields
-        elif "phone" in field_name.lower():
-            return 20  # Reasonable length for phone numbers
-        elif "url" in field_name.lower() or "link" in field_name.lower():
-            return 200  # Reasonable length for URLs
-        elif "name" in field_name.lower() or "title" in field_name.lower():
-            return 100  # Reasonable length for names/titles
-        elif "description" in field_name.lower() or "summary" in field_name.lower():
-            return 500  # Longer text for descriptions
-        elif "code" in field_name.lower() or "id" in field_name.lower():
-            return 50  # Reasonable length for codes/IDs
-        else:
-            return 255  # Default max length
-
-    # No max_length for other field types
-    return None
 
 
 def handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:

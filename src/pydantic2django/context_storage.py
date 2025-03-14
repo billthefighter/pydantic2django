@@ -169,23 +169,31 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
     Returns:
         A ModelContext object containing context information for the model
     """
+    from .field_type_resolver import is_serializable_type
+
     context = ModelContext(model_name=django_model.__name__, pydantic_class=pydantic_model)
 
     # Analyze fields and add context information
-    for context_field in django_model._meta.get_fields():
-        if getattr(context_field, "is_relationship", False):
-            # Get the original Pydantic field type
-            pydantic_field = pydantic_model.model_fields.get(context_field.name)
-            if pydantic_field and isinstance(pydantic_field, FieldInfo):
-                field_type = pydantic_field.annotation
-                if field_type is not None:
-                    context.add_field(
-                        field_name=context_field.name,
-                        field_type=field_type,
-                        is_optional=not pydantic_field.is_required(),
-                        is_list=getattr(context_field, "is_list", False),
-                        additional_metadata={"field_info": pydantic_field.json_schema_extra or {}},
-                    )
+    for field_name, pydantic_field in pydantic_model.model_fields.items():
+        if not isinstance(pydantic_field, FieldInfo):
+            continue
+
+        field_type = pydantic_field.annotation
+        if field_type is None:
+            continue
+
+        # Skip if the type is serializable (can be stored in the database)
+        if is_serializable_type(field_type):
+            continue
+
+        # If we get here, the type needs context
+        context.add_field(
+            field_name=field_name,
+            field_type=field_type,
+            is_optional=not pydantic_field.is_required(),
+            is_list=getattr(pydantic_field, "is_list", False),
+            additional_metadata={"field_info": pydantic_field.json_schema_extra or {}},
+        )
 
     # Register the context
     ContextRegistry.register_context(django_model.__name__, context)

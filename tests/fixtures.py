@@ -228,15 +228,12 @@ class ComplexHandler:
         return data
 
 
-class SerializableType:
+class SerializableType(BaseModel):
     """A type that can be serialized to JSON."""
 
-    def __init__(self, value: str):
-        self.value = value
+    value: str
 
-    def __get_pydantic_core_schema__(self, _source_type: Any, _handler: Any) -> Any:
-        """Make this type serializable by Pydantic."""
-        return {"type": "str", "serialization": lambda x: x.value}
+    model_config = ConfigDict(json_schema_extra={"examples": [{"value": "example"}]})
 
 
 @pytest.fixture
@@ -267,7 +264,7 @@ def context_with_data():
     return {
         "name": "test",
         "value": 42,
-        "serializable": SerializableType("can_serialize"),
+        "serializable": SerializableType(value="can_serialize"),
         "handler": ComplexHandler(),
         "processor": lambda x: x.upper(),
         "unserializable": UnserializableType("needs_context"),

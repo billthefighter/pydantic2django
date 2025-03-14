@@ -59,47 +59,6 @@ def handle_id_field(field_name: str, field_info: FieldInfo) -> Optional[models.F
     return None
 
 
-class FieldConverter:
-    """
-    Converts Pydantic fields to Django model fields.
-    """
-
-    def __init__(self, app_label: str = "django_llm"):
-        """
-        Initialize the field converter.
-
-        Args:
-            app_label: The Django app label to use for model registration
-        """
-        self.app_label = app_label
-
-    def convert_field(self, field_name: str, field_info: FieldInfo) -> models.Field:
-        """
-        Convert a Pydantic field to a Django model field.
-
-        Args:
-            field_name: The name of the field
-            field_info: The Pydantic field info
-
-        Returns:
-            A Django model field instance
-        """
-        # Handle potential ID field naming conflicts
-        id_field = handle_id_field(field_name, field_info)
-        if id_field:
-            return id_field
-
-        # Get the field type and attributes from the resolver
-        field_type = field_info.annotation
-        field_class, field_kwargs = FieldTypeResolver.resolve_field_type(field_type)
-
-        # Create field kwargs
-        field_kwargs.update(FieldAttributeHandler.get_field_kwargs(field_info))
-
-        # Create the field instance
-        return field_class(**field_kwargs)
-
-
 def convert_field(
     field_name: str,
     field_info: FieldInfo,

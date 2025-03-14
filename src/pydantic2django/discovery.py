@@ -11,24 +11,18 @@ from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional, Union, cast, get_args, get_origin
+from typing import Any, Optional, cast, get_args, get_origin
 
 from django.apps import apps
 from django.db import models
 from django.db.models import Model as DjangoModel
 from django.db.models.fields import Field as DjangoField
 from pydantic import BaseModel
-from pydantic.fields import FieldInfo
 
 from .base_django_model import Pydantic2DjangoBaseClass
 from .core import make_django_model
 from .factory import DjangoModelFactory
-from .field_type_resolver import is_pydantic_model, is_serializable_type
-from .field_utils import (
-    FieldAttributeHandler,
-    RelationshipFieldHandler,
-)
-from .fields import handle_id_field
+from .field_type_resolver import is_pydantic_model
 from .types import T
 
 logger = logging.getLogger(__name__)
@@ -916,97 +910,3 @@ def get_django_model(pydantic_model: type[T], app_label: str = "django_llm") -> 
         Django model class with proper type hints
     """
     return discovery.get_django_model(pydantic_model, app_label)
-
-
-class FieldConverter:
-    """
-    Converts Pydantic fields to Django model fields.
-    """
-
-    def __init__(self, app_label: str = "django_llm"):
-        """
-        Initialize the field converter.
-
-        Args:
-            app_label: The Django app label to use for model registration
-        """
-        self.app_label = app_label
-
-    def _resolve_field_type(self, field_type: Any) -> tuple[type[models.Field], bool]:
-        """
-        Resolve the Django field type for a given Pydantic field type.
-
-        Args:
-            field_type: The Pydantic field type
-
-        Returns:
-            Tuple of (Django field class, is_relationship)
-        """
-        # First check if it's a relationship field
-        relationship_field = RelationshipFieldHandler.detect_relationship_type(field_type)
-        if relationship_field:
-            return relationship_field, True
-
-        # Handle Optional types
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-
-        if origin is Union and type(None) in args:
-            # This is an Optional type, get the actual type
-            field_type = next(arg for arg in args if arg is not type(None))
-            # Recursively resolve the inner type
-            inner_field, is_rel = self._resolve_field_type(field_type)
-            return inner_field, is_rel
-
-        # Handle basic types
-        if field_type is str:
-            return models.CharField, False
-        elif field_type is int:
-            return models.IntegerField, False
-        elif field_type is float:
-            return models.FloatField, False
-        elif field_type is bool:
-            return models.BooleanField, False
-        elif field_type is dict or origin is dict:
-            return models.JSONField, False
-        elif field_type is list or origin is list:
-            return models.JSONField, False
-
-        # Check if the type is serializable
-        if is_serializable_type(field_type):
-            return models.JSONField, False
-        else:
-            # For non-serializable types, use TextField with is_relationship=True
-            return models.TextField, True
-
-    def convert_field(self, field_name: str, field_info: FieldInfo) -> models.Field:
-        """
-        Convert a Pydantic field to a Django model field.
-
-        Args:
-            field_name: The name of the field
-            field_info: The Pydantic field info
-
-        Returns:
-            A Django model field instance
-        """
-        # Handle potential ID field naming conflicts
-        id_field = handle_id_field(field_name, field_info)
-        if id_field:
-            return id_field
-
-        # Get the field type and whether it's a relationship
-        field_type = field_info.annotation
-        field_class, is_relationship = self._resolve_field_type(field_type)
-
-        # Create field kwargs
-        field_kwargs = FieldAttributeHandler.get_field_kwargs(field_info)
-
-        # Add is_relationship flag for non-serializable fields
-        if is_relationship:
-            field_kwargs["is_relationship"] = True
-
-        # Create the field instance
-        field = field_class(**field_kwargs)
-
-        return field

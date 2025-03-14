@@ -5,7 +5,8 @@ from typing import Callable
 
 import pytest
 from django.db import models
-from pydantic import EmailStr
+from pydantic import EmailStr, BaseModel, Field, ConfigDict
+from pydantic_core import PydanticSerializationError
 
 from .fixtures import ComplexHandler, UnserializableType
 
@@ -172,10 +173,11 @@ def test_context_pydantic_model(context_pydantic_model, context_with_data):
 
     # Test serialization behavior
     model_dict = model.model_dump()
-    # Serializable type should convert to string
-    assert isinstance(model_dict["serializable"], str)
+    # Serializable type should be a dict with value field
+    assert isinstance(model_dict["serializable"], dict)
+    assert model_dict["serializable"]["value"] == "can_serialize"
     # Non-serializable types should raise errors
-    with pytest.raises(TypeError):
+    with pytest.raises(PydanticSerializationError):
         model.model_dump_json()
 
 
