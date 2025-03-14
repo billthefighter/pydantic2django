@@ -11,7 +11,7 @@ from django.db import models
 from pydantic import BaseModel
 
 from .context_storage import ModelContext, create_context_for_model
-from .fields import convert_field
+from .field_converter import convert_field
 from .methods import copy_methods_to_django_model
 
 T = TypeVar("T", bound=BaseModel)
