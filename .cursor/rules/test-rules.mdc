@@ -1,0 +1,120 @@
+---
+description:
+globs: "tests/**/*.py"
+alwaysApply: false
+---
+name: test_standards
+description: Standards for writing and running tests in the pydantic2django project
+
+actions:
+  - type: suggest
+    message: |
+      # Test Standards for pydantic2django Project
+
+      ## Core Testing Rules
+      - Always run tests in a poetry context
+      - Use pytest over unittest
+      - Add docstrings to explain test purpose and behavior
+      - Run tests after writing them
+      - Place test files in folders logical to the module (e.g., tests/test_core/ for core module)
+
+      ## Test Structure and Organization
+      - Each test should verify ONE specific behavior or outcome
+      - Use descriptive test names that clearly indicate what is being tested
+      - Use pytest.mark.parametrize for testing multiple cases
+      - Avoid large blocks of assertions - break them down into parameterized tests
+      - Use dataclasses or named tuples to structure test parameters
+      - Group related test parameters with clear identifiers using pytest.param
+      - Keep test cases focused and independent
+
+      ## Test Parameter Best Practices
+      - Use dataclasses to encapsulate test parameters
+      - Give each parameter set a clear ID using pytest.param's id parameter
+      - Structure parameters as expected:result pairs where possible
+      - Keep parameter sets readable and maintainable
+      - Document parameter meanings in the dataclass docstring
+
+      ## Django-specific Practices
+      - manage.py is located in the test directory
+
+      ## Test Quality Practices
+      - Focus on testing behavior, not implementation
+      - Cover both success and failure paths
+      - Keep test data minimal and focused
+      - Ensure tests are independent and don't rely on state from other tests
+      - Use pytest.raises for exception testing
+
+       ## Test Debugging and Logging
+      - Add descriptive logging statements to help debug test failures
+      - Use pytest's caplog fixture to verify log messages when relevant
+      - Include relevant variable values in log messages
+      - Log at appropriate levels:
+          * DEBUG: Detailed information for debugging
+          * INFO: General information about test progress
+          * WARNING: Unexpected but handled conditions
+          * ERROR: Test failures and errors
+      - Example logging setup:
+        ```python
+        import logging
+        logger = logging.getLogger(__name__)
+
+        def test_something(caplog, params: TestParams):
+            caplog.set_level(logging.DEBUG)
+            logger.debug(f"Testing with parameters: {params}")
+            result = function_under_test(params.input_value)
+            logger.debug(f"Got result: {result}, expected: {params.expected_result}")
+            assert result == params.expected_result
+        ```
+
+      ## Running Tests
+      ```bash
+      # Run tests
+      poetry run pytest {file}
+
+      # Run tests with verbosity
+      poetry run pytest {file} -v
+
+      # Run tests with coverage
+      poetry run pytest {file} --cov
+      ```
+
+      ## Fixture Guidelines (conftest.py)
+      - Keep fixtures focused and minimal
+      - Document fixture purpose with docstrings
+      - Use fixture factories when data variations are needed
+      - Share fixtures across test modules when appropriate
+      - Use appropriate scope for fixtures (function, class, module, session)
+
+      ## Creating New Test Modules
+      1. Create test directory matching the module name (tests/test_{module_name}/)
+      2. Add a conftest.py for module-specific fixtures
+      3. Follow the same structure as the module being tested
+      4. Include __init__.py file in the test directory
+
+      ## Example Test Structure
+      ```python
+      @dataclass
+      class TestParams:
+          """Document what these parameters represent."""
+          input_value: Any
+          expected_result: Any
+          # Add other relevant fields
+
+      @pytest.mark.parametrize(
+          "params",
+          [
+              pytest.param(
+                  TestParams(input_value=1, expected_result=2),
+                  id="descriptive_test_case_name"
+              ),
+              # Add more test cases
+          ]
+      )
+      def test_something(params: TestParams):
+          result = function_under_test(params.input_value)
+          assert result == params.expected_result
+      ```
+
+metadata:
+  priority: high
+  version: 1.0

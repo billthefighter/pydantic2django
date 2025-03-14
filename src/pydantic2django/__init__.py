@@ -16,7 +16,7 @@ from .admin import (
     register_model_admins,
 )
 from .base_django_model import Pydantic2DjangoBaseClass
-from .core import clear_model_registry, make_django_model
+from .core import clear_model_registry
 from .discovery import (
     ModelDiscovery,
     register_django_model,

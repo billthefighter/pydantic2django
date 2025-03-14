@@ -1,17 +1,15 @@
-from collections.abc import Callable
 from typing import Any, Generic, Optional, cast
 
 from django.db import models
 
 from .base_django_model import Pydantic2DjangoBaseClass
 
-# Remove direct import from core to avoid circular import
-# from .core import make_django_model
-from .types import T
-
 # Forward reference to make_django_model to be imported at runtime
 from .core import make_django_model
 
+# Remove direct import from core to avoid circular import
+# from .core import make_django_model
+from .types import T
 
 
 class DjangoModelFactory(Generic[T]):
@@ -81,7 +79,7 @@ class DjangoModelFactory(Generic[T]):
         class_name = pydantic_model.__name__
         fully_qualified_name = f"{module_name}.{class_name}"
         if hasattr(django_model, "object_type"):
-        # Set the object_type field
+            # Set the object_type field
             django_model.object_type = fully_qualified_name
 
         # Ensure the model is not abstract by setting Meta attributes
@@ -99,5 +97,3 @@ class DjangoModelFactory(Generic[T]):
 
         # Cast to proper type for IDE support
         return cast(type[Pydantic2DjangoBaseClass[T]], django_model), field_updates
-
-

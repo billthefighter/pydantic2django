@@ -11,7 +11,7 @@ from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional, cast, get_args, get_origin
+from typing import Any, Optional, get_args, get_origin
 
 from django.apps import apps
 from django.db import models
@@ -19,9 +19,8 @@ from django.db.models import Model as DjangoModel
 from django.db.models.fields import Field as DjangoField
 from pydantic import BaseModel
 
-from .base_django_model import Pydantic2DjangoBaseClass
 from .factory import DjangoModelFactory
-from .types import T, is_pydantic_model
+from .types import is_pydantic_model
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +47,6 @@ def normalize_model_reference(model_ref: str | type[models.Model]) -> str:
         model_name = f"Django{model_name}"
 
     return model_name
-
-
-
 
 
 def validate_model_references(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
@@ -564,9 +560,9 @@ class ModelDiscovery:
 
         return dict(app_deps)
 
-    def get_model_dependencies_recursive(self,
-    model: type[models.Model], app_label: str, visited: set[str] | None = None
-) -> set[str]:
+    def get_model_dependencies_recursive(
+        self, model: type[models.Model], app_label: str, visited: set[str] | None = None
+    ) -> set[str]:
         """
         Get all dependencies for a model recursively.
 

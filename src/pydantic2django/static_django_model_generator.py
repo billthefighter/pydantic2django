@@ -12,10 +12,7 @@ from pydantic import BaseModel
 from pydantic2django.context_storage import ModelContext
 
 # Import the base class for Django models
-from pydantic2django.discovery import (
-    discover_models,
-    get_discovered_models,
-)
+from pydantic2django.discovery import ModelDiscovery
 from pydantic2django.field_utils import FieldAttributeHandler
 
 # Configure logging
@@ -37,6 +34,7 @@ class StaticDjangoModelGenerator:
         app_label: str = "django_app",
         filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
         verbose: bool = False,
+        discovery_module: Optional[ModelDiscovery] = None,
     ):
         """
         Initialize the generator.
@@ -47,12 +45,14 @@ class StaticDjangoModelGenerator:
             app_label: Django app label to use for the models
             filter_function: Optional function to filter which models to include
             verbose: Print verbose output
+            discovery_module: Optional ModelDiscovery instance to use
         """
         self.output_path = output_path
         self.packages = packages or ["pydantic_models"]
         self.app_label = app_label
         self.filter_function = filter_function
         self.verbose = verbose
+        self.discovery = discovery_module or ModelDiscovery()
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory
@@ -79,14 +79,14 @@ class StaticDjangoModelGenerator:
             logger.info(f"Discovering models from packages: {self.packages}")
 
         # Use the discovery module to find models
-        discover_models(
+        self.discovery.discover_models(
             self.packages,
             app_label=self.app_label,
             filter_function=self.filter_function,
         )
 
         # Get the discovered models
-        discovered_models = get_discovered_models()
+        discovered_models = self.discovery.get_discovered_models()
 
         if self.verbose:
             logger.info(f"Discovered {len(discovered_models)} models")
@@ -105,10 +105,7 @@ class StaticDjangoModelGenerator:
         if self.verbose:
             logger.info("Setting up Django models...")
 
-        # Use the discovery module to set up Django models
-        from pydantic2django.discovery import discovery
-
-        django_models = discovery.setup_dynamic_models(app_label=self.app_label)
+        django_models = self.discovery.setup_dynamic_models(app_label=self.app_label)
 
         if self.verbose:
             logger.info(f"Set up {len(django_models)} Django models")
@@ -236,13 +233,10 @@ class StaticDjangoModelGenerator:
         self.discover_models()
         django_models = self.setup_django_models()
 
-        # Get the discovery instance and analyze dependencies
-        from pydantic2django.discovery import discovery
-
-        discovery.analyze_dependencies(self.app_label)
+        self.discovery.analyze_dependencies(self.app_label)
 
         # Get registration order
-        registration_order = discovery.get_registration_order()
+        registration_order = self.discovery.get_registration_order()
 
         # Generate model definitions and context classes in dependency order
         model_definitions = []
@@ -264,12 +258,6 @@ class StaticDjangoModelGenerator:
                 model_def = self.generate_model_definition(model)
                 model_definitions.append(model_def)
                 model_names.append(f"'{model.__name__}'")
-
-                # Generate context class if needed
-                model_context = discovery.get_model_context(model)
-                if model_context and model_context.required_context_keys:
-                    context_def = self.generate_context_class(model, model_context)
-                    context_definitions.append(context_def)
 
             except Exception as e:
                 logger.error(f"Error generating model definition for {full_name}: {e}")
