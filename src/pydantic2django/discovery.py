@@ -20,7 +20,6 @@ from django.db.models.fields import Field as DjangoField
 from pydantic import BaseModel
 
 from .base_django_model import Pydantic2DjangoBaseClass
-from .core import make_django_model
 from .factory import DjangoModelFactory
 from .types import T, is_pydantic_model
 
@@ -51,69 +50,7 @@ def normalize_model_reference(model_ref: str | type[models.Model]) -> str:
     return model_name
 
 
-def get_model_dependencies_recursive(
-    model: type[models.Model], app_label: str, visited: set[str] | None = None
-) -> set[str]:
-    """
-    Get all dependencies for a model recursively.
 
-    Args:
-        model: The Django model to analyze
-        app_label: The app label to use for model references
-        visited: Set of already visited models to prevent infinite recursion
-
-    Returns:
-        Set of model names that this model depends on
-    """
-    deps = set()
-    if visited is None:
-        visited = set()
-
-    model_name = normalize_model_reference(model.__name__)
-    if model_name in visited:
-        return deps
-
-    visited.add(model_name)
-
-    # Get all fields from the model
-    for field in model._meta.get_fields():
-        # Handle foreign key and many-to-many relationships
-        if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
-            related_model = field.remote_field.model
-            related_name = normalize_model_reference(related_model.__name__)
-            deps.add(related_name)
-            # Recursively get dependencies of the related model
-            deps.update(get_model_dependencies_recursive(related_model, app_label, visited))
-
-        # Handle context-based dependencies (non-serializable fields)
-        elif isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
-            # Get the original Pydantic model class
-            pydantic_class = None
-            if model._meta.model_name:
-                model_name_lower = model._meta.model_name.lower()
-                for model_name, pydantic_model in discovery.normalized_models.items():
-                    if model_name_lower == model_name.lower():
-                        pydantic_class = pydantic_model
-                        break
-
-            if pydantic_class:
-                # Check the Pydantic field's type annotation
-                field_info = pydantic_class.model_fields.get(field.name)
-                if field_info and field_info.annotation:
-                    annotation = field_info.annotation
-                    # Handle direct model references
-                    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                        deps.add(normalize_model_reference(annotation.__name__))
-                    # Handle generic types (List, Dict, etc.)
-                    elif hasattr(annotation, "__origin__"):
-                        origin = get_origin(annotation)
-                        args = get_args(annotation)
-                        if origin in (list, dict):
-                            for arg in args:
-                                if inspect.isclass(arg) and issubclass(arg, BaseModel):
-                                    deps.add(normalize_model_reference(arg.__name__))
-
-    return deps
 
 
 def validate_model_references(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
@@ -300,10 +237,6 @@ class ModelDiscovery:
 
         # Set up Django models
         django_models = discovery.setup_dynamic_models(app_label="your_app")
-
-        # Get a specific Django model with proper type hints
-        UserDjango = discovery.get_django_model(UserPydantic)
-        user = UserDjango(name="John")
     """
 
     def __init__(self):
@@ -540,42 +473,6 @@ class ModelDiscovery:
 
         return self.django_models
 
-    def setup_models(self, app_label: str = "django_llm", skip_admin: bool = False) -> dict[str, type[models.Model]]:
-        """
-        Set up all discovered models with proper relationships.
-
-        Args:
-            app_label: The Django app label to use for model registration
-            skip_admin: Whether to skip registering models with the Django admin interface
-
-        Returns:
-            Dict mapping model names to Django model classes
-        """
-        logger.info(f"Setting up models for app {app_label}")
-        logger.info("Discovered models:")
-        for name, model in self.discovered_models.items():
-            logger.info(f"  - {name}: {model}")
-
-        # Create Django models for each discovered model
-        for model_name, pydantic_model in self.discovered_models.items():
-            logger.info(f"Creating Django model for {model_name}")
-            try:
-                django_model, _ = DjangoModelFactory[Any].create_model(pydantic_model, app_label=app_label)
-                self.django_models[model_name] = django_model
-                logger.info(f"Successfully created Django model: {django_model}")
-
-                # Register the model with Django's app registry
-                register_django_model(django_model, app_label)
-                logger.info(f"Registered model with Django app registry: {django_model._meta.model_name}")
-            except Exception as e:
-                logger.error(f"Error creating Django model for {model_name}: {e}")
-
-        logger.info("Final Django models:")
-        for name, model in self.django_models.items():
-            logger.info(f"  - {name}: {model}")
-
-        return self.django_models
-
     def analyze_dependencies(self, app_label: str) -> None:
         """
         Analyze dependencies between models.
@@ -612,7 +509,7 @@ class ModelDiscovery:
         # Then analyze dependencies from Django models if they exist
         for model_name, django_model in self.django_models.items():
             try:
-                deps = get_model_dependencies_recursive(django_model, app_label)
+                deps = self.get_model_dependencies_recursive(django_model, app_label)
                 self.dependencies[model_name].update(deps)
             except Exception as e:
                 logger.error(f"Error analyzing dependencies for {model_name}: {e}")
@@ -648,47 +545,6 @@ class ModelDiscovery:
             self._registration_order = [f"{self.app_label}.{model_name}" for model_name in raw_order]
         return self._registration_order
 
-    def register_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
-        """
-        Register all discovered models in dependency order.
-
-        Args:
-            app_label: The Django app label to use for registration
-
-        Returns:
-            Dict mapping model names to registered Django model classes
-        """
-        # Get registration order
-        ordered_models = self.get_registration_order()
-
-        # Register models in order
-        for full_name in ordered_models:
-            try:
-                _, model_name = full_name.split(".")
-                if model_name not in self.normalized_models:
-                    continue
-
-                pydantic_model = self.normalized_models[model_name]
-
-                # Create and register Django model
-                django_model, _ = make_django_model(
-                    pydantic_model,
-                    app_label=app_label,
-                    db_table=f"{app_label}_{model_name.lower()}",
-                    check_migrations=False,
-                )
-                self.django_models[model_name] = django_model
-                register_django_model(django_model, app_label)
-
-            except Exception as e:
-                logger.error(f"Error registering model {full_name}: {e}")
-                continue
-
-        # Analyze dependencies after all models are registered
-        self.analyze_dependencies(app_label)
-
-        return self.django_models
-
     def get_app_dependencies(self) -> dict[str, set[str]]:
         """
         Get a mapping of app dependencies based on model relationships.
@@ -708,31 +564,68 @@ class ModelDiscovery:
 
         return dict(app_deps)
 
-    def get_model_dependencies(self, model: type[BaseModel]) -> set[str]:
+    def get_model_dependencies_recursive(self,
+    model: type[models.Model], app_label: str, visited: set[str] | None = None
+) -> set[str]:
         """
-        Get dependencies for a single Pydantic model.
+        Get all dependencies for a model recursively.
 
         Args:
-            model: The Pydantic model to analyze
+            model: The Django model to analyze
+            app_label: The app label to use for model references
+            visited: Set of already visited models to prevent infinite recursion
 
         Returns:
             Set of model names that this model depends on
         """
         deps = set()
-        for field in model.model_fields.values():
-            annotation = field.annotation
-            if annotation is not None:
-                # Check for List/Dict types containing Pydantic models
-                if hasattr(annotation, "__origin__"):
-                    origin = get_origin(annotation)
-                    args = get_args(annotation)
-                    if origin in (list, dict):
-                        for arg in args:
-                            if inspect.isclass(arg) and issubclass(arg, BaseModel):
-                                deps.add(arg.__name__)
-                # Check for direct Pydantic model references
-                elif inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                    deps.add(annotation.__name__)
+        if visited is None:
+            visited = set()
+
+        model_name = normalize_model_reference(model.__name__)
+        if model_name in visited:
+            return deps
+
+        visited.add(model_name)
+
+        # Get all fields from the model
+        for field in model._meta.get_fields():
+            # Handle foreign key and many-to-many relationships
+            if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
+                related_model = field.remote_field.model
+                related_name = normalize_model_reference(related_model.__name__)
+                deps.add(related_name)
+                # Recursively get dependencies of the related model
+                deps.update(self.get_model_dependencies_recursive(related_model, app_label, visited))
+
+            # Handle context-based dependencies (non-serializable fields)
+            elif isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+                # Get the original Pydantic model class
+                pydantic_class = None
+                if model._meta.model_name:
+                    model_name_lower = model._meta.model_name.lower()
+                    for model_name, pydantic_model in self.normalized_models.items():
+                        if model_name_lower == model_name.lower():
+                            pydantic_class = pydantic_model
+                            break
+
+                if pydantic_class:
+                    # Check the Pydantic field's type annotation
+                    field_info = pydantic_class.model_fields.get(field.name)
+                    if field_info and field_info.annotation:
+                        annotation = field_info.annotation
+                        # Handle direct model references
+                        if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                            deps.add(normalize_model_reference(annotation.__name__))
+                        # Handle generic types (List, Dict, etc.)
+                        elif hasattr(annotation, "__origin__"):
+                            origin = get_origin(annotation)
+                            args = get_args(annotation)
+                            if origin in (list, dict):
+                                for arg in args:
+                                    if inspect.isclass(arg) and issubclass(arg, BaseModel):
+                                        deps.add(normalize_model_reference(arg.__name__))
+
         return deps
 
     def get_discovered_models(self) -> dict[str, type[BaseModel]]:
@@ -743,50 +636,6 @@ class ModelDiscovery:
         """Get all registered Django models for the given app label."""
         return self.django_models
 
-    def get_django_model(
-        self, pydantic_model: type[T] | type[type[T]], app_label: str = "django_llm"
-    ) -> type[Pydantic2DjangoBaseClass[T]]:
-        """
-        Get a Django model with proper type hints for a given Pydantic model.
-
-        Args:
-            pydantic_model: The Pydantic model class or a callable that returns the model class
-            app_label: The Django app label to use for model registration
-
-        Example:
-            from your_package.models import UserPydantic
-
-            UserDjango = discovery.get_django_model(UserPydantic)
-            user = UserDjango(name="John")
-            user.get_display_name()  # IDE completion works!
-        """
-        # Handle both direct type and callable returning type
-        if callable(pydantic_model) and not isinstance(pydantic_model, type):
-            # If it's a fixture function, call it to get the actual model
-            actual_model = cast(type[T], pydantic_model())
-        else:
-            # If it's already a type, use it directly
-            actual_model = cast(type[T], pydantic_model)
-
-        # Set up models for the specified app_label if not already done
-        if not self.django_models:
-            self.setup_models(app_label=app_label)
-
-        # Get the fully qualified name of the Pydantic model
-        module_name = actual_model.__module__
-        class_name = actual_model.__name__
-        fully_qualified_name = f"{module_name}.{class_name}"
-
-        # Look for the model in the registry by checking the object_type field
-        for model in self.django_models.values():
-            if getattr(model, "object_type", None) == fully_qualified_name:
-                return cast(type[Pydantic2DjangoBaseClass[T]], model)
-
-        # If not found, try to create it
-        django_model, _ = DjangoModelFactory[T].create_model(actual_model, app_label=app_label)
-
-        return django_model
-
     def clear(self) -> None:
         """Clear the registry, removing all discovered and registered models."""
         self.discovered_models.clear()
@@ -794,118 +643,3 @@ class ModelDiscovery:
         self.dependencies.clear()
         self.django_models.clear()
         self._registration_order = None
-
-
-# Create a singleton instance for convenience
-discovery = ModelDiscovery()
-
-
-# Convenience functions that use the singleton instance
-def discover_models(
-    package_names: list[str],
-    app_label: str = "django_llm",
-    filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
-) -> None:
-    """
-    Discover and analyze Pydantic models from specified packages.
-
-    This is a convenience function that uses the singleton ModelDiscovery instance.
-
-    Args:
-        package_names: List of package names to search for models
-        app_label: The Django app label to use for model registration
-        filter_function: Optional function to filter discovered models.
-                         Takes model_name and model_class as arguments and returns
-                         True if the model should be included, False otherwise.
-                         Use the provided helper functions like `always_include`,
-                         `include_models`, `exclude_models`, or `has_field`.
-
-    Example:
-        ```python
-        # Using the helper functions
-        from pydantic2django.discovery import has_field, exclude_models, include_models
-
-        # Only include models with a specific field
-        discover_models(['my_package'], filter_function=has_field('email'))
-
-        # Exclude specific models
-        discover_models(['my_package'], filter_function=exclude_models(['InternalConfig', 'PrivateData']))
-
-        # Include only specific models
-        discover_models(['my_package'], filter_function=include_models(['User', 'Product']))
-
-        # Or with a lambda for custom logic
-        discover_models(['my_package'], filter_function=lambda name, _: not name.startswith('Internal'))
-
-        # Using the provided stub function for more complex filtering
-        from pydantic2django.discovery import always_include
-
-        def custom_filter(model_name: str, model_class: type[BaseModel]) -> bool:
-            # Add your custom filtering logic here
-            if model_name in ['PrivateModel', 'InternalConfig']:
-                return False
-            return always_include(model_name, model_class)
-
-        discover_models(['my_package'], filter_function=custom_filter)
-        ```
-    """
-    discovery.discover_models(package_names, app_label, filter_function)
-
-
-def setup_dynamic_models(app_label: str = "django_llm", skip_admin: bool = False) -> dict[str, type[models.Model]]:
-    """
-    Set up dynamic models from discovered Pydantic models.
-
-    This is a convenience function that uses the singleton ModelDiscovery instance.
-
-    Args:
-        app_label: The Django app label to use for model registration
-        skip_admin: Whether to skip registering models with the Django admin interface
-
-    Returns:
-        Dict mapping model names to Django model classes
-    """
-    return discovery.setup_dynamic_models(app_label)
-
-
-def get_discovered_models() -> dict[str, type[BaseModel]]:
-    """
-    Get all discovered Pydantic models.
-
-    This is a convenience function that uses the singleton ModelDiscovery instance.
-
-    Returns:
-        Dict of discovered Pydantic models
-    """
-    return discovery.get_discovered_models()
-
-
-def get_django_models(app_label: str = "django_llm") -> dict[str, type[models.Model]]:
-    """
-    Get all registered Django models for the given app label.
-
-    This is a convenience function that uses the singleton ModelDiscovery instance.
-
-    Args:
-        app_label: The Django app label to use for model registration
-
-    Returns:
-        Dict of registered Django models
-    """
-    return discovery.get_django_models(app_label)
-
-
-def get_django_model(pydantic_model: type[T], app_label: str = "django_llm") -> type[Pydantic2DjangoBaseClass[T]]:
-    """
-    Get a Django model with proper type hints for a given Pydantic model.
-
-    This is a convenience function that uses the singleton ModelDiscovery instance.
-
-    Args:
-        pydantic_model: The Pydantic model class
-        app_label: The Django app label to use for model registration
-
-    Returns:
-        Django model class with proper type hints
-    """
-    return discovery.get_django_model(pydantic_model, app_label)

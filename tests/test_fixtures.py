@@ -8,7 +8,7 @@ from django.db import models
 from pydantic import EmailStr, BaseModel, Field, ConfigDict
 from pydantic_core import PydanticSerializationError
 
-from .fixtures import ComplexHandler, UnserializableType
+from .fixtures.fixtures import ComplexHandler, UnserializableType
 
 
 def test_basic_pydantic_model(basic_pydantic_model):

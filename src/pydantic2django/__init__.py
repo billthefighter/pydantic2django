@@ -19,13 +19,7 @@ from .base_django_model import Pydantic2DjangoBaseClass
 from .core import clear_model_registry, make_django_model
 from .discovery import (
     ModelDiscovery,
-    discover_models,
-    get_discovered_models,
-    get_django_model,
-    get_django_models,
-    get_model_dependencies_recursive,
     register_django_model,
-    setup_dynamic_models,
     topological_sort,
     validate_model_references,
 )
@@ -41,20 +35,13 @@ __all__ = [
     "Pydantic2DjangoBaseClass",
     "DjangoModelFactory",
     # Core model conversion
-    "make_django_model",
     "clear_model_registry",
     # Registry and dependency management
-    "get_model_dependencies_recursive",
     "validate_model_references",
     "topological_sort",
     "register_django_model",
     # Model discovery
     "ModelDiscovery",
-    "discover_models",
-    "setup_dynamic_models",
-    "get_discovered_models",
-    "get_django_models",
-    "get_django_model",
     # Admin interface
     "DynamicModelAdmin",
     "register_model_admin",

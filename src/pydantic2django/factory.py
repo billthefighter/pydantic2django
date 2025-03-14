@@ -10,20 +10,8 @@ from .base_django_model import Pydantic2DjangoBaseClass
 from .types import T
 
 # Forward reference to make_django_model to be imported at runtime
-make_django_model: Optional[Callable] = None
+from .core import make_django_model
 
-
-def _init_imports():
-    """Initialize imports that might cause circular imports."""
-    global make_django_model
-    # Import at runtime to avoid circular imports
-    from pydantic2django import make_django_model as _make_django_model
-
-    make_django_model = _make_django_model
-
-
-# Initialize imports at module level
-_init_imports()
 
 
 class DjangoModelFactory(Generic[T]):
@@ -57,12 +45,6 @@ class DjangoModelFactory(Generic[T]):
         Returns:
             A tuple of (django_model, field_updates) where django_model has proper type hints
         """
-        # Ensure imports are initialized
-        if make_django_model is None:
-            _init_imports()
-            if make_django_model is None:
-                raise ImportError("Failed to import make_django_model")
-
         # Ensure Pydantic2DjangoBaseClass is in the inheritance chain
         if base_django_model:
             if not issubclass(base_django_model, Pydantic2DjangoBaseClass):
@@ -84,7 +66,7 @@ class DjangoModelFactory(Generic[T]):
                 )
 
         # Call the original make_django_model
-        django_model, field_updates = make_django_model(
+        django_model, field_updates, context = make_django_model(
             pydantic_model=pydantic_model,
             base_django_model=base_django_model or Pydantic2DjangoBaseClass,
             check_migrations=check_migrations,
@@ -98,9 +80,9 @@ class DjangoModelFactory(Generic[T]):
         module_name = pydantic_model.__module__
         class_name = pydantic_model.__name__
         fully_qualified_name = f"{module_name}.{class_name}"
-
+        if hasattr(django_model, "object_type"):
         # Set the object_type field
-        django_model.object_type = fully_qualified_name
+            django_model.object_type = fully_qualified_name
 
         # Ensure the model is not abstract by setting Meta attributes
         meta_attrs = {
@@ -118,46 +100,4 @@ class DjangoModelFactory(Generic[T]):
         # Cast to proper type for IDE support
         return cast(type[Pydantic2DjangoBaseClass[T]], django_model), field_updates
 
-    @classmethod
-    def create_abstract_model(
-        cls,
-        pydantic_model: type[T],
-        **kwargs: Any,
-    ) -> type[Pydantic2DjangoBaseClass[T]]:
-        """
-        Create an abstract Django model from a Pydantic model.
 
-        Args:
-            pydantic_model: The Pydantic model to convert
-            **kwargs: Additional options for model creation
-
-        Returns:
-            An abstract Django model class with proper type hints
-        """
-        # Ensure imports are initialized
-        if make_django_model is None:
-            _init_imports()
-            if make_django_model is None:
-                raise ImportError("Failed to import make_django_model")
-
-        # Set abstract=True in Meta options
-        kwargs["abstract"] = True
-
-        # Create the model
-        django_model, _ = make_django_model(
-            pydantic_model=pydantic_model,
-            base_django_model=Pydantic2DjangoBaseClass,
-            check_migrations=False,
-            **kwargs,
-        )
-
-        # Store reference to the Pydantic model in the object_type field
-        # Use fully qualified module path
-        module_name = pydantic_model.__module__
-        class_name = pydantic_model.__name__
-        fully_qualified_name = f"{module_name}.{class_name}"
-
-        # Set the object_type field
-        django_model.object_type = fully_qualified_name
-
-        return django_model

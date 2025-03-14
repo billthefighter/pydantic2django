@@ -141,7 +141,7 @@ class TypeMappingDefinition(BaseModel):
 # Define all type mappings as TypeMappingDefinition instances
 TYPE_MAPPINGS: list[TypeMappingDefinition] = [
     # Basic Python types
-    TypeMappingDefinition(python_type=str, django_field=models.CharField, max_length=255),
+    TypeMappingDefinition(python_type=str, django_field=models.TextField),
     TypeMappingDefinition(python_type=int, django_field=models.IntegerField),
     TypeMappingDefinition(python_type=float, django_field=models.FloatField),
     TypeMappingDefinition(python_type=bool, django_field=models.BooleanField),

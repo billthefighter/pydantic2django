@@ -11,7 +11,7 @@ import pytest
 from django.conf import settings
 
 # Import all fixtures
-from .fixtures import (
+from .fixtures.fixtures import (
     basic_pydantic_model,
     datetime_pydantic_model,
     optional_fields_model,

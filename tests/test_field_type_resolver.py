@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union
 from pydantic import BaseModel
 
 from pydantic2django.field_type_resolver import is_serializable_type
-from .fixtures import SerializableType, UnserializableType
+from .fixtures.fixtures import SerializableType, UnserializableType
 
 
 class SimpleEnum(Enum):
