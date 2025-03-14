@@ -79,7 +79,7 @@ def get_model_dependencies_recursive(
     # Get all fields from the model
     for field in model._meta.get_fields():
         # Handle foreign key and many-to-many relationships
-        if isinstance(field, (models.ForeignKey, models.ManyToManyField)):
+        if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
             related_model = field.remote_field.model
             related_name = normalize_model_reference(related_model.__name__)
             deps.add(related_name)
@@ -593,7 +593,7 @@ class ModelDiscovery:
         # First analyze dependencies from Pydantic models
         for model_name, pydantic_model in self.discovered_models.items():
             self.dependencies[model_name] = set()
-            for field_name, field in pydantic_model.model_fields.items():
+            for _, field in pydantic_model.model_fields.items():
                 annotation = field.annotation
                 if annotation is not None:
                     # Handle direct model references
