@@ -10,6 +10,7 @@ from typing import Any, Optional, TypeVar, cast
 from django.db import models
 from pydantic import BaseModel
 
+from .context_storage import ModelContext, create_context_for_model
 from .fields import convert_field
 from .methods import copy_methods_to_django_model
 
@@ -38,7 +39,7 @@ def make_django_model(
     class_name_prefix: str = "Django",
     strict: bool = False,
     **options: Any,
-) -> tuple[type[models.Model], Optional[dict[str, models.Field]]]:
+) -> tuple[type[models.Model], Optional[dict[str, models.Field]], Optional[ModelContext]]:
     """
     Convert a Pydantic model to a Django model, with optional base Django model inheritance.
 
@@ -53,9 +54,10 @@ def make_django_model(
         **options: Additional options for customizing the conversion
 
     Returns:
-        A tuple of (django_model, field_updates) where:
+        A tuple of (django_model, field_updates, model_context) where:
         - django_model is the Django model class that corresponds to the Pydantic model
         - field_updates is a dict of fields that need to be added to an existing model, or None
+        - model_context is the ModelContext object containing context information, or None if not needed
 
     Raises:
         ValueError: If app_label is not provided in options or if field type cannot be mapped
@@ -71,7 +73,7 @@ def make_django_model(
     model_key = f"{pydantic_model.__module__}.{pydantic_model.__name__}"
     if model_key in _converted_models and not existing_model:
         logger.debug(f"Returning cached model for {model_key}")
-        return _converted_models[model_key], None
+        return _converted_models[model_key], None, None
 
     # Get all fields from the Pydantic model
     pydantic_fields = pydantic_model.model_fields
@@ -105,7 +107,7 @@ def make_django_model(
                     # Store relationship fields for later
                     relationship_fields[field_name] = django_field
                     continue
-            
+
             django_fields[field_name] = django_field
 
         except (ValueError, TypeError) as e:
@@ -123,12 +125,12 @@ def make_django_model(
     # If we're updating an existing model, return only the relationship fields
     if existing_model:
         logger.debug(f"Returning relationship fields for existing model {existing_model.__name__}")
-        return existing_model, relationship_fields
+        return existing_model, relationship_fields, None
 
     # Check for field collisions if a base Django model is provided
     if base_django_model:
         # Use hasattr to safely check for _meta
-        if hasattr(base_django_model, '_meta'):
+        if hasattr(base_django_model, "_meta"):
             base_fields = base_django_model._meta.get_fields()
             base_field_names = {field.name for field in base_fields}
             logger.debug(f"Checking field collisions with base model {base_django_model.__name__}")
@@ -177,7 +179,11 @@ def make_django_model(
 
     # If inheriting from an abstract model, we still need to set app_label
     # to avoid Django's error about missing app_label
-    if base_django_model and hasattr(base_django_model, '_meta') and getattr(base_django_model._meta, "abstract", False):
+    if (
+        base_django_model
+        and hasattr(base_django_model, "_meta")
+        and getattr(base_django_model._meta, "abstract", False)
+    ):
         # Keep app_label even for abstract base models
         logger.debug("Keeping app_label for model with abstract base")
 
@@ -221,6 +227,11 @@ def make_django_model(
         return_pydantic_model=False,
     )
 
+    # Create context object if needed
+    model_context = None
+    if any(getattr(field, "is_relationship", False) for field in django_fields.values()):
+        model_context = create_context_for_model(django_model, pydantic_model)
+
     logger.debug(f"Created Django model {model_name}")
 
     # Register the model with Django if it has a Meta class with app_label
@@ -240,4 +251,4 @@ def make_django_model(
         _converted_models[model_key] = django_model
         logger.debug(f"Cached model {model_key}")
 
-    return django_model, relationship_fields
+    return django_model, relationship_fields, model_context

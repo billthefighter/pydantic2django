@@ -24,7 +24,6 @@ from .discovery import (
     get_django_model,
     get_django_models,
     get_model_dependencies_recursive,
-    normalize_model_name,
     register_django_model,
     setup_dynamic_models,
     topological_sort,
@@ -45,7 +44,6 @@ __all__ = [
     "make_django_model",
     "clear_model_registry",
     # Registry and dependency management
-    "normalize_model_name",
     "get_model_dependencies_recursive",
     "validate_model_references",
     "topological_sort",

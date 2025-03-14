@@ -1,10 +1,11 @@
 import importlib
 import uuid
-from typing import Any, ClassVar, Generic, TypeVar, cast
+from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
 
 from django.db import models
 from pydantic import BaseModel
 
+from .context_storage import ContextRegistry
 from .serialization import serialize_value
 
 # Type variable for BaseModel subclasses
@@ -202,78 +203,60 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
 
         return instance
 
-    def to_pydantic(self) -> Any:
+    def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> Any:
         """
         Convert the stored data back to a Pydantic object.
 
+        Args:
+            context: Optional dictionary containing context values for non-serializable fields
+
         Returns:
             The reconstructed Pydantic object
+
+        Raises:
+            ValueError: If required context is missing for non-serializable fields
         """
         pydantic_class = self._get_pydantic_class()
+
+        # Get the model context if it exists
+        model_context = ContextRegistry.get_context(self.__class__.__name__)
+
+        # If we have context fields, validate the provided context
+        if model_context and model_context.required_context_keys:
+            if not context:
+                raise ValueError(
+                    f"This model has non-serializable fields that require context: "
+                    f"{', '.join(model_context.required_context_keys)}. "
+                    "Please provide the context dictionary when calling to_pydantic()."
+                )
+            model_context.validate_context(context)
 
         # Get data with database field overrides
         data = self._get_data_with_db_overrides(pydantic_class)
 
+        # If we have context, update the data with context values
+        if context:
+            data.update(context)
+
         # Reconstruct the object
         return pydantic_class.model_validate(data)
 
-    def _get_data_with_db_overrides(self, pydantic_class: Any) -> dict[str, Any]:
-        """
-        Get the JSON data with database field overrides.
-
-        This method checks if any database fields match fields in the Pydantic model
-        and if they do, it uses the database field value instead of the JSON value.
-
-        Args:
-            pydantic_class: The Pydantic class to check fields against
-
-        Returns:
-            The data dictionary with database field overrides
-        """
-        # Start with a copy of the stored JSON data
-        data = self.data.copy()
-
-        # Get all fields from the Pydantic model - we'll use the data keys as a fallback
-        pydantic_field_names = set(data.keys())
-
-        # Try to get field information from the Pydantic class
-        try:
-            # For Pydantic v2
-            if hasattr(pydantic_class, "model_fields") and isinstance(pydantic_class.model_fields, dict):
-                pydantic_field_names.update(pydantic_class.model_fields.keys())
-            # For Pydantic v1
-            elif hasattr(pydantic_class, "__fields__") and isinstance(pydantic_class.__fields__, dict):
-                pydantic_field_names.update(pydantic_class.__fields__.keys())
-        except Exception:
-            # If we can't get the fields, just use what we have from the data
-            pass
-
-        # Get all fields from the Django model
-        django_fields = {field.name: field for field in self._meta.fields}
-
-        # Exclude these fields from consideration
-        exclude_fields = {
-            "id",
-            "name",
-            "object_type",
-            "data",
-            "created_at",
-            "updated_at",
-        }
-
-        # Check each Django field to see if it matches a Pydantic field
-        for field_name, _ in django_fields.items():
-            if field_name in exclude_fields:
+    def _get_data_with_db_overrides(self, pydantic_class: type[BaseModel]) -> dict:
+        """Get model data with any database field overrides applied."""
+        data = {}
+        for field in self._meta.fields:
+            field_name = field.name
+            if field_name == "id":
                 continue
 
-            # Check if this field exists in the Pydantic model or data
-            if field_name in pydantic_field_names:
-                # Get the value from the Django model
-                value = getattr(self, field_name)
+            value = getattr(self, field_name)
 
-                # Only override if the value is not None (unless the field in data is also None)
-                if value is not None or (field_name in data and data[field_name] is None):
-                    data[field_name] = value
+            # Handle relationship fields
+            if getattr(field, "is_relationship", False):
+                # Skip if the value will come from context
+                continue
+
+            data[field_name] = value
 
         return data
 
@@ -467,7 +450,7 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
                 # Set the Django field value
                 setattr(self, field_name, serialized_value)
 
-    def to_pydantic(self, context: dict[str, Any] | None = None) -> T:
+    def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> T:
         """
         Convert this Django model to a Pydantic object.
 
