@@ -23,8 +23,9 @@ from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 # Import shared utilities
 from pydantic2django.field_utils import (
     get_default_max_length,
-    is_serializable_type,
 )
+
+from .field_type_resolver import is_serializable_type
 
 logger = getLogger(__name__)
 
@@ -380,7 +381,7 @@ def get_django_field_type(
     Returns:
         The Django field type
     """
-    # Check if the type is serializable
+    # First check if the type is serializable
     if not is_serializable_type(python_type):
         # Non-serializable types are stored as TextField with is_relationship=True
         return models.TextField
@@ -446,7 +447,9 @@ def get_field_kwargs(
 
     # Handle relationship fields
     if isinstance(python_type, type) and issubclass(python_type, BaseModel):
-        if field_info and field_info.get("relationship_type") == "many_to_many":
+        if not is_serializable_type(python_type):
+            kwargs["is_relationship"] = True
+        elif field_info and field_info.get("relationship_type") == "many_to_many":
             kwargs["related_name"] = field_info.get("related_name")
             if "through" in field_info:
                 kwargs["through"] = field_info["through"]

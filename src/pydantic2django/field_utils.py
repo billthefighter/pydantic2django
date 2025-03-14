@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
-from .serialization import is_serializable
+from .field_type_resolver import FieldTypeResolver
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.field_utils")
@@ -57,39 +57,6 @@ def process_default_value(value: Any) -> Any:
     if not is_valid_default_value(value):
         return models.NOT_PROVIDED
     return value
-
-
-def is_pydantic_model(obj: Any) -> bool:
-    """
-    Check if an object is a Pydantic model class.
-
-    Args:
-        obj: The object to check
-
-    Returns:
-        True if the object is a Pydantic model class, False otherwise
-    """
-    if not inspect_is_class_or_type(obj):
-        return False
-
-    # Check if it's a subclass of BaseModel
-    try:
-        return issubclass(obj, BaseModel)
-    except TypeError:
-        return False
-
-
-def inspect_is_class_or_type(obj: Any) -> bool:
-    """
-    Check if an object is a class or type.
-
-    Args:
-        obj: The object to check
-
-    Returns:
-        True if the object is a class or type, False otherwise
-    """
-    return inspect.isclass(obj)
 
 
 def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
@@ -463,33 +430,7 @@ class RelationshipFieldHandler:
         Returns:
             Django field type if it's a relationship, None otherwise
         """
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-
-        # Handle Optional[...]
-        if origin is Union and type(None) in args:
-            # Get the non-None type
-            inner_type = next(arg for arg in args if arg is not type(None))
-            # Only recurse if the inner type might be a relationship
-            if is_pydantic_model(inner_type) or (
-                get_origin(inner_type) in (list, dict) and any(is_pydantic_model(arg) for arg in get_args(inner_type))
-            ):
-                return RelationshipFieldHandler.detect_relationship_type(inner_type)
-            return None
-
-        # Handle List[Model]
-        if origin is list and args and is_pydantic_model(args[0]):
-            return models.ManyToManyField
-
-        # Handle Dict[str, Model] or Dict[Any, Model]
-        if origin is dict and len(args) == 2 and is_pydantic_model(args[1]):
-            return models.ManyToManyField
-
-        # Handle direct Model reference
-        if is_pydantic_model(field_type):
-            return models.ForeignKey
-
-        return None
+        return FieldTypeResolver.get_relationship_type(field_type)
 
     @staticmethod
     def create_relationship_field(
@@ -512,30 +453,20 @@ class RelationshipFieldHandler:
         Returns:
             A Django relationship field or None if the field type is not a relationship
         """
-        # First detect if this is a relationship field
-        field_class = RelationshipFieldHandler.detect_relationship_type(field_type)
-        if not field_class:
+        # Get the field type and attributes from the resolver
+        field_class, field_kwargs = FieldTypeResolver.resolve_field_type(field_type)
+
+        # If it's not a relationship field, return None
+        if not FieldTypeResolver.is_relationship_field(field_type):
             return None
 
         # Get field attributes
         kwargs = FieldAttributeHandler.handle_field_attributes(field_info)
-
-        # Get the origin and args for type analysis
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-
-        # Handle Optional types
-        if origin is Union and type(None) in args:
-            # For Optional fields, ensure they're nullable
-            kwargs["null"] = True
-            kwargs["blank"] = True
-            # Get the actual type (not None)
-            field_type = next(arg for arg in args if arg is not type(None))
-            # Update origin and args for the actual type
-            origin = get_origin(field_type)
-            args = get_args(field_type)
+        kwargs.update(field_kwargs)
 
         # Get the model class based on the field type
+        origin = get_origin(field_type)
+        args = get_args(field_type)
         if origin is list and args:
             model_class = args[0]
         elif origin is dict and len(args) == 2:
@@ -569,13 +500,13 @@ class RelationshipFieldHandler:
                 **kwargs,
             )
         elif field_class is models.ForeignKey:
-            # For ForeignKey, we need on_delete
-            kwargs["on_delete"] = models.CASCADE  # Default to CASCADE
             return models.ForeignKey(
                 to=f"{app_label}.{target_model_name}",
                 related_name=related_name,
                 **kwargs,
             )
+        elif field_class is models.TextField and kwargs.get("is_relationship"):
+            return models.TextField(**kwargs)
 
         return None
 
@@ -697,54 +628,3 @@ def sanitize_string(value: Union[str, Promise, Any]) -> str:
     str_value = str_value.replace("\r", "\\r")
 
     return str_value
-
-
-def is_serializable_type(field_type: Any) -> bool:
-    """
-    Check if a type is serializable (can be stored in the database).
-
-    Args:
-        field_type: The type to check
-
-    Returns:
-        True if the type is serializable, False otherwise
-    """
-    # Handle Optional types
-    origin = get_origin(field_type)
-    args = get_args(field_type)
-
-    if origin is Union and type(None) in args:
-        # For Optional types, check the inner type
-        inner_type = next(arg for arg in args if arg is not type(None))
-        return is_serializable_type(inner_type)
-
-    # Basic Python types that are always serializable
-    basic_types = (str, int, float, bool, dict, list, set)
-    if field_type in basic_types:
-        return True
-
-    # Handle collection types
-    if origin in (list, dict, set):
-        # For collections, check if all type arguments are serializable
-        return all(is_serializable_type(arg) for arg in args)
-
-    # Handle Pydantic models (they can be serialized to JSON)
-    if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
-        return True
-
-    # Handle Enums (they can be serialized)
-    if inspect.isclass(field_type) and issubclass(field_type, Enum):
-        return True
-
-    # For class types, check if they have a serialization method
-    if inspect.isclass(field_type):
-        # Create a dummy instance to test serialization
-        try:
-            instance = object.__new__(field_type)
-            return is_serializable(instance)
-        except Exception:
-            # If we can't create an instance, assume it's not serializable
-            return False
-
-    # If none of the above conditions are met, it's not serializable
-    return False
