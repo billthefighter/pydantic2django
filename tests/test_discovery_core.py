@@ -9,12 +9,11 @@ from django.db import models
 from pydantic import BaseModel, Field
 
 from pydantic2django.discovery import (
-    is_pydantic_model,
-    normalize_model_name,
     topological_sort,
     validate_model_references,
 )
-
+from pydantic2django.utils import normalize_model_name
+from pydantic2django.field_type_resolver import is_pydantic_model
 
 def test_is_pydantic_model():
     """Test the is_pydantic_model function."""

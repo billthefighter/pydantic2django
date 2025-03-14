@@ -14,10 +14,11 @@ from pydantic.fields import FieldInfo
 from pydantic2django.fields import (
     FieldConverter,
     convert_field,
-    is_pydantic_model,
-    sanitize_related_name,
     handle_id_field,
 )
+
+from pydantic2django.utils import normalize_model_name
+from pydantic2django.field_type_resolver import is_pydantic_model
 from pydantic2django.field_utils import FieldAttributeHandler
 from pydantic2django.field_type_mapping import TypeMapper
 
