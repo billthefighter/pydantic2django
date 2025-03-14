@@ -25,7 +25,6 @@ from .discovery import (
 )
 from .factory import DjangoModelFactory
 from .field_type_mapping import (
-    TYPE_MAPPINGS,
     TypeMapper,
     TypeMappingDefinition,
 )
@@ -49,5 +48,4 @@ __all__ = [
     # Type mapping
     "TypeMapper",
     "TypeMappingDefinition",
-    "TYPE_MAPPINGS",
 ]

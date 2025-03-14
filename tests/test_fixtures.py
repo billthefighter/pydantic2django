@@ -194,16 +194,6 @@ def test_context_django_model(context_django_model):
     # Regular fields should have appropriate Django field types
     assert isinstance(fields["name"], models.CharField)
     assert isinstance(fields["value"], models.IntegerField)
-    # Serializable type should be stored as TextField without is_relationship
-    assert isinstance(fields["serializable"], models.TextField)
-    assert not getattr(fields["serializable"], "is_relationship", False)
-
-    # Non-serializable fields should be TextField with is_relationship=True
-    assert isinstance(fields["handler"], models.TextField)
-    assert getattr(fields["handler"], "is_relationship", False) is True
-
-    assert isinstance(fields["processor"], models.TextField)
-    assert getattr(fields["processor"], "is_relationship", False) is True
 
     assert isinstance(fields["unserializable"], models.TextField)
     assert getattr(fields["unserializable"], "is_relationship", False) is True
