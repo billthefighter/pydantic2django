@@ -1,9 +1,13 @@
 """Tests for ensuring all fixtures can be instantiated and work correctly."""
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from typing import Callable
 
 import pytest
+from django.db import models
 from pydantic import EmailStr
+
+from .fixtures import ComplexHandler, UnserializableType
 
 
 def test_basic_pydantic_model(basic_pydantic_model):
@@ -148,3 +152,123 @@ def test_factory_model(factory_model):
     assert product3.name == "Simple Product"
     assert product3.price == Decimal("0.99")
     assert product3.description == "A basic product"
+
+
+def test_context_pydantic_model(context_pydantic_model, context_with_data):
+    """Test that context_pydantic_model can be instantiated with valid data."""
+    # Create model instance
+    model = context_pydantic_model(**context_with_data)
+
+    # Verify regular fields
+    assert model.name == "test"
+    assert model.value == 42
+    assert model.serializable.value == "can_serialize"
+
+    # Verify fields needing context
+    assert isinstance(model.handler, ComplexHandler)
+    assert callable(model.processor)
+    assert isinstance(model.unserializable, UnserializableType)
+    assert model.unserializable.value == "needs_context"
+
+    # Test serialization behavior
+    model_dict = model.model_dump()
+    # Serializable type should convert to string
+    assert isinstance(model_dict["serializable"], str)
+    # Non-serializable types should raise errors
+    with pytest.raises(TypeError):
+        model.model_dump_json()
+
+
+def test_context_django_model(context_django_model):
+    """Test that context_django_model was generated correctly."""
+    # Check model attributes
+    assert hasattr(context_django_model, "name")
+    assert hasattr(context_django_model, "value")
+    assert hasattr(context_django_model, "serializable")
+
+    # Get all fields
+    fields = {f.name: f for f in context_django_model._meta.get_fields()}
+
+    # Regular fields should have appropriate Django field types
+    assert isinstance(fields["name"], models.CharField)
+    assert isinstance(fields["value"], models.IntegerField)
+    # Serializable type should be stored as TextField without is_relationship
+    assert isinstance(fields["serializable"], models.TextField)
+    assert not getattr(fields["serializable"], "is_relationship", False)
+
+    # Non-serializable fields should be TextField with is_relationship=True
+    assert isinstance(fields["handler"], models.TextField)
+    assert getattr(fields["handler"], "is_relationship", False) is True
+
+    assert isinstance(fields["processor"], models.TextField)
+    assert getattr(fields["processor"], "is_relationship", False) is True
+
+    assert isinstance(fields["unserializable"], models.TextField)
+    assert getattr(fields["unserializable"], "is_relationship", False) is True
+
+
+def test_context_model_context(context_model_context):
+    """Test that context_model_context was created correctly."""
+    # Check basic attributes
+    assert context_model_context.model_name == "DjangoContextTestModel"
+    assert context_model_context.pydantic_class.__name__ == "ContextTestModel"
+
+    # Regular and serializable fields should not be in context
+    assert "name" not in context_model_context.required_context_keys
+    assert "value" not in context_model_context.required_context_keys
+    assert "serializable" not in context_model_context.required_context_keys
+
+    # Only non-serializable fields should be tracked
+    assert "handler" in context_model_context.required_context_keys
+    assert "processor" in context_model_context.required_context_keys
+    assert "unserializable" in context_model_context.required_context_keys
+
+    # Check field contexts
+    handler_context = context_model_context.context_fields["handler"]
+    assert handler_context.field_type == ComplexHandler
+    assert not handler_context.is_optional
+    assert not handler_context.is_list
+
+    processor_context = context_model_context.context_fields["processor"]
+    assert processor_context.field_type == Callable
+    assert not processor_context.is_optional
+    assert not processor_context.is_list
+
+    unserializable_context = context_model_context.context_fields["unserializable"]
+    assert unserializable_context.field_type == UnserializableType
+    assert not unserializable_context.is_optional
+    assert not unserializable_context.is_list
+
+
+def test_context_temp_file(context_temp_file):
+    """Test that the generated context class file has the expected content."""
+    # Read the generated file
+    content = context_temp_file.read_text()
+
+    # Check for key components
+    assert "class DjangoContextTestModelContext(ModelContext):" in content
+    assert 'model_name: str = "DjangoContextTestModel"' in content
+    assert "pydantic_class: Type = ContextTestModel" in content
+
+    # Regular fields should not be in context
+    assert "name:" not in content
+    assert "value:" not in content
+    assert "serializable:" not in content
+
+    # Only non-serializable fields should be in context
+    assert "handler: ComplexHandler" in content
+    assert "processor: Callable" in content
+    assert "unserializable: UnserializableType" in content
+
+    # Check for required imports
+    assert "from typing import" in content
+    assert "from dataclasses import dataclass, field" in content
+    assert (
+        "from pydantic2django.context_storage import ModelContext, FieldContext"
+        in content
+    )
+
+    # Check for create method
+    assert "@classmethod" in content
+    assert "def create(cls" in content
+    assert "def to_dict(self)" in content

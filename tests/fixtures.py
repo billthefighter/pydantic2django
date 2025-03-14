@@ -3,12 +3,12 @@ Common test fixtures for pydantic2django tests.
 """
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional
 from uuid import UUID
 
 import pytest
 from django.db import models
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 @pytest.fixture
@@ -212,3 +212,113 @@ def user_django_model():
 def get_model_fields(django_model):
     """Helper function to get fields from a Django model."""
     return {f.name: f for f in django_model._meta.get_fields()}
+
+
+class UnserializableType:
+    """A type that can't be serialized to JSON."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+
+class ComplexHandler:
+    """A complex handler that can't be serialized."""
+
+    def process(self, data: Any) -> Any:
+        return data
+
+
+class SerializableType:
+    """A type that can be serialized to JSON."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def __get_pydantic_core_schema__(self, _source_type: Any, _handler: Any) -> Any:
+        """Make this type serializable by Pydantic."""
+        return {"type": "str", "serialization": lambda x: x.value}
+
+
+@pytest.fixture
+def context_pydantic_model():
+    """Fixture providing a Pydantic model with both serializable and non-serializable fields."""
+
+    class ContextTestModel(BaseModel):
+        """Test model with various field types that may need context."""
+
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+
+        # Regular fields (no context needed)
+        name: str
+        value: int
+        serializable: SerializableType  # Has schema, no context needed
+
+        # Fields needing context
+        handler: ComplexHandler  # Arbitrary type, needs context
+        processor: Callable[[str], str]  # Function type, needs context
+        unserializable: UnserializableType  # Arbitrary type, needs context
+
+    return ContextTestModel
+
+
+@pytest.fixture
+def context_with_data():
+    """Fixture providing test data for context testing."""
+    return {
+        "name": "test",
+        "value": 42,
+        "serializable": SerializableType("can_serialize"),
+        "handler": ComplexHandler(),
+        "processor": lambda x: x.upper(),
+        "unserializable": UnserializableType("needs_context"),
+    }
+
+
+@pytest.fixture
+def context_django_model(context_pydantic_model):
+    """Fixture providing a Django model generated from the context test Pydantic model."""
+    from pydantic2django.core import make_django_model
+
+    django_model, _, _ = make_django_model(
+        pydantic_model=context_pydantic_model,
+        app_label="tests",
+    )
+    return django_model
+
+
+@pytest.fixture
+def context_model_context(context_django_model, context_pydantic_model):
+    """Fixture providing a ModelContext for the context test model."""
+    from pydantic2django.context_storage import create_context_for_model
+
+    return create_context_for_model(
+        django_model=context_django_model,
+        pydantic_model=context_pydantic_model,
+    )
+
+
+@pytest.fixture
+def context_temp_file(context_django_model, context_model_context, tmp_path):
+    """Fixture providing a temporary file with the generated context class."""
+    from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
+    import os
+
+    # Create generator instance
+    generator = StaticDjangoModelGenerator(
+        output_path=str(tmp_path / "generated_models.py"),
+        packages=["tests"],
+        app_label="tests",
+    )
+
+    # Generate the context class
+    context_def = generator.generate_context_class(
+        model=context_django_model,
+        model_context=context_model_context,
+    )
+
+    # Write to temporary file
+    output_file = tmp_path / "context_class.py"
+    with open(output_file, "w") as f:
+        f.write(context_def)
+
+    return output_file
