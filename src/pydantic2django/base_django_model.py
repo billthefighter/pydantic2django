@@ -1,3 +1,4 @@
+"""Base Django model class with Pydantic conversion capabilities."""
 import importlib
 import uuid
 from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
@@ -5,7 +6,7 @@ from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
 from django.db import models
 from pydantic import BaseModel
 
-from .context_storage import ContextRegistry
+from .context_storage import ContextRegistry, ModelContext
 from .serialization import serialize_value
 
 # Type variable for BaseModel subclasses
@@ -450,12 +451,12 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
                 # Set the Django field value
                 setattr(self, field_name, serialized_value)
 
-    def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> T:
+    def to_pydantic(self, context: Optional[ModelContext] = None) -> T:
         """
         Convert this Django model to a Pydantic object.
 
         Args:
-            context: Optional dictionary containing values for non-serializable fields.
+            context: Optional ModelContext instance containing values for non-serializable fields.
                     Required if the model has any non-serializable fields.
 
         Returns:
@@ -476,16 +477,12 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
             if not context:
                 raise ValueError(
                     f"This model has non-serializable fields that require context: {', '.join(required_context)}. "
-                    "Please provide the context dictionary when calling to_pydantic()."
+                    "Please provide a context instance when calling to_pydantic()."
                 )
 
-            # Verify all required fields are in the context
-            missing_fields = [field for field in required_context if field not in context]
-            if missing_fields:
-                raise ValueError(f"Missing required context fields: {', '.join(missing_fields)}")
-
-            # Add context values to data
-            data.update({field: context[field] for field in required_context})
+            # Validate and use the context
+            context.validate_context(context.to_dict())
+            data.update(context.to_dict())
 
         # Reconstruct the object and cast to the correct type
         result = pydantic_class.model_validate(data)

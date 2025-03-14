@@ -1,0 +1,72 @@
+"""
+Context class for {{ model_name }}.
+Generated automatically by pydantic2django.
+"""
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Type
+
+from pydantic2django.context_storage import ModelContext, FieldContext
+from {{ pydantic_module }} import {{ pydantic_class }}
+
+
+@dataclass
+class {{ model_name }}Context(ModelContext):
+    """
+    Context class for {{ model_name }}.
+    Contains all non-serializable fields that need to be provided when converting from Django to Pydantic.
+    """
+    model_name: str = "{{ model_name }}"
+    pydantic_class: Type = {{ pydantic_class }}
+    context_fields: Dict[str, FieldContext] = field(default_factory=dict)
+    required_context_keys: set[str] = field(default_factory=lambda: {
+        {%- for field in field_definitions %}
+        "{{ field.name }}",
+        {%- endfor %}
+    })
+
+    def __post_init__(self):
+        """Initialize context fields after instance creation."""
+        {% for field in field_definitions %}
+        self.context_fields["{{ field.name }}"] = FieldContext(
+            field_name="{{ field.name }}",
+            field_type={{ field.type }},
+            is_optional={{ field.is_optional }},
+            is_list={{ field.is_list }},
+            additional_metadata={{ field.metadata }}
+        )
+        {% endfor %}
+
+    @classmethod
+    def create(cls, {% for field in field_definitions %}
+        {{ field.name }}: {% if field.is_optional %}Optional[{% endif %}{% if field.is_list %}List[{% endif %}{{ field.type }}{% if field.is_list %}]{% endif %}{% if field.is_optional %}]{% endif %},
+        {%- endfor %}
+    ) -> "{{ model_name }}Context":
+        """
+        Create a context instance with the required fields.
+
+        Args:
+            {% for field in field_definitions %}
+            {{ field.name }}: {{ field.type }} for {{ field.name }} field
+            {%- endfor %}
+
+        Returns:
+            A context instance with all required fields set
+        """
+        context = cls()
+        {% for field in field_definitions %}
+        context.context_fields["{{ field.name }}"].value = {{ field.name }}
+        {%- endfor %}
+        return context
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert context to a dictionary format suitable for to_pydantic().
+
+        Returns:
+            Dictionary containing all context values
+        """
+        return {
+            field_name: field.value
+            for field_name, field in self.context_fields.items()
+            if hasattr(field, "value")
+        }

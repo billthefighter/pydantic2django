@@ -9,6 +9,8 @@ import jinja2
 from django.db import models
 from pydantic import BaseModel
 
+from pydantic2django.context_storage import ModelContext
+
 # Import the base class for Django models
 from pydantic2django.discovery import (
     discover_models,
@@ -25,7 +27,7 @@ T = TypeVar("T", bound=BaseModel)
 
 class StaticDjangoModelGenerator:
     """
-    Generates Django models from Pydantic models.
+    Generates Django models and their context classes from Pydantic models.
     """
 
     def __init__(
@@ -191,6 +193,38 @@ class StaticDjangoModelGenerator:
             original_name=original_name,
         )
 
+    def generate_context_class(self, model: type[models.Model], model_context: ModelContext) -> str:
+        """
+        Generate a context class for a Django model.
+
+        Args:
+            model: The Django model class
+            model_context: The ModelContext instance for the model
+
+        Returns:
+            String representation of the context class
+        """
+        template = self.jinja_env.get_template("context_class.py.j2")
+
+        # Prepare field definitions
+        field_definitions = []
+        for field_name, field_context in model_context.context_fields.items():
+            field_def = {
+                "name": field_name,
+                "type": field_context.field_type.__name__,
+                "is_optional": field_context.is_optional,
+                "is_list": field_context.is_list,
+                "metadata": field_context.additional_metadata,
+            }
+            field_definitions.append(field_def)
+
+        return template.render(
+            model_name=model.__name__,
+            pydantic_class=model_context.pydantic_class.__name__,
+            pydantic_module=model_context.pydantic_class.__module__,
+            field_definitions=field_definitions,
+        )
+
     def generate_models_file(self) -> str:
         """
         Generate the complete models.py file content.
@@ -210,8 +244,9 @@ class StaticDjangoModelGenerator:
         # Get registration order
         registration_order = discovery.get_registration_order()
 
-        # Generate model definitions in dependency order
+        # Generate model definitions and context classes in dependency order
         model_definitions = []
+        context_definitions = []
         model_names = []
 
         # Process models in registration order
@@ -229,6 +264,13 @@ class StaticDjangoModelGenerator:
                 model_def = self.generate_model_definition(model)
                 model_definitions.append(model_def)
                 model_names.append(f"'{model.__name__}'")
+
+                # Generate context class if needed
+                model_context = discovery.get_model_context(model)
+                if model_context and model_context.required_context_keys:
+                    context_def = self.generate_context_class(model, model_context)
+                    context_definitions.append(context_def)
+
             except Exception as e:
                 logger.error(f"Error generating model definition for {full_name}: {e}")
 
@@ -236,7 +278,9 @@ class StaticDjangoModelGenerator:
         imports = [
             "import uuid",
             "import importlib",
-            "from typing import Any, Dict, List, Optional, Union",
+            "from typing import Any, Dict, List, Optional, Union, TypeVar",
+            "from dataclasses import dataclass, field",
+            "from pydantic2django.context_storage import ModelContext, FieldContext",
         ]
 
         # Render the models file template
@@ -244,6 +288,7 @@ class StaticDjangoModelGenerator:
         return template.render(
             generation_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             imports=imports,
+            context_definitions=context_definitions,
             model_definitions=model_definitions,
             all_models=", ".join(model_names),
         )

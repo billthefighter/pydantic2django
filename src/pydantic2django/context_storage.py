@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, TypeVar
 
 from django.db import models
-from pydantic import BaseModel, FieldInfo
+from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 T = TypeVar("T", bound=BaseModel)
@@ -26,17 +26,19 @@ class FieldContext:
     is_optional: bool = False
     is_list: bool = False
     additional_metadata: dict[str, Any] = field(default_factory=dict)
+    value: Optional[Any] = None
 
 
 @dataclass
 class ModelContext:
     """
+    Base class for model context classes.
     Stores context information for a Django model's fields that require special handling
     during conversion back to Pydantic objects.
     """
 
-    model_name: str
-    pydantic_class: type[BaseModel]
+    model_name: str = ""
+    pydantic_class: type[BaseModel] = BaseModel
     context_fields: dict[str, FieldContext] = field(default_factory=dict)
     required_context_keys: set[str] = field(default_factory=set)
 
@@ -78,6 +80,44 @@ class ModelContext:
         """
         if field_name in self.context_fields:
             return self.context_fields[field_name].field_type
+        return None
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert context to a dictionary format suitable for to_pydantic().
+
+        Returns:
+            Dictionary containing all context values
+        """
+        return {field_name: field.value for field_name, field in self.context_fields.items() if field.value is not None}
+
+    def set_value(self, field_name: str, value: Any) -> None:
+        """
+        Set the value for a context field.
+
+        Args:
+            field_name: Name of the field
+            value: Value to set
+
+        Raises:
+            ValueError: If the field doesn't exist in the context
+        """
+        if field_name not in self.context_fields:
+            raise ValueError(f"Field {field_name} not found in context")
+        self.context_fields[field_name].value = value
+
+    def get_value(self, field_name: str) -> Optional[Any]:
+        """
+        Get the value of a context field.
+
+        Args:
+            field_name: Name of the field
+
+        Returns:
+            The field value if it exists and has been set, None otherwise
+        """
+        if field_name in self.context_fields:
+            return self.context_fields[field_name].value
         return None
 
 
@@ -132,18 +172,18 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
     context = ModelContext(model_name=django_model.__name__, pydantic_class=pydantic_model)
 
     # Analyze fields and add context information
-    for field in django_model._meta.get_fields():
-        if getattr(field, "is_relationship", False):
+    for context_field in django_model._meta.get_fields():
+        if getattr(context_field, "is_relationship", False):
             # Get the original Pydantic field type
-            pydantic_field = pydantic_model.model_fields.get(field.name)
+            pydantic_field = pydantic_model.model_fields.get(context_field.name)
             if pydantic_field and isinstance(pydantic_field, FieldInfo):
                 field_type = pydantic_field.annotation
                 if field_type is not None:
                     context.add_field(
-                        field_name=field.name,
+                        field_name=context_field.name,
                         field_type=field_type,
                         is_optional=not pydantic_field.is_required(),
-                        is_list=getattr(field, "is_list", False),
+                        is_list=getattr(context_field, "is_list", False),
                         additional_metadata={"field_info": pydantic_field.json_schema_extra or {}},
                     )
 
