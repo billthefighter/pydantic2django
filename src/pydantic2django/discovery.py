@@ -22,102 +22,103 @@ from .core import make_django_model
 from .factory import DjangoModelFactory
 from .field_utils import is_pydantic_model
 from .types import T
-from .utils import normalize_model_name
 
 logger = logging.getLogger(__name__)
 
 
+def normalize_model_reference(model_ref: str | type[models.Model]) -> str:
+    """
+    Normalize a model reference to a consistent format.
+
+    Args:
+        model_ref: Either a string reference ('app.Model' or 'Model') or a model class
+
+    Returns:
+        Normalized model name in the format 'DjangoModelName'
+    """
+    if isinstance(model_ref, str):
+        # Extract just the model name if it includes app_label
+        model_name = model_ref.split(".")[-1]
+    else:
+        # Get the name from the class
+        model_name = model_ref.__name__
+
+    # Ensure Django prefix
+    if not model_name.startswith("Django"):
+        model_name = f"Django{model_name}"
+
+    return model_name
+
+
 def get_model_dependencies_recursive(model: type[models.Model], app_label: str) -> set[str]:
     """
-    Get all dependencies for a model recursively.
+    Get all dependencies for a model recursively, including both direct relationships
+    and context-based dependencies.
 
     Args:
         model: The Django model to analyze
         app_label: The app label to use for model registration
 
     Returns:
-        Set of model names that this model depends on
+        Set of normalized model names that this model depends on
     """
     deps = set()
 
     for field in model._meta.get_fields():
+        # Handle direct relationships (ForeignKey, OneToOne)
         if hasattr(field, "remote_field") and field.remote_field:
             target = field.remote_field.model
-            # Skip if target is None or not a valid model reference
-            if target is None:
-                continue
+            if target is not None:
+                deps.add(normalize_model_reference(target))
 
-            if isinstance(target, str):
-                # If it's a string reference, ensure it has Django prefix
-                if "." in target:
-                    # If it has a dot, extract just the model name
-                    target_name = target.split(".")[-1]
-                else:
-                    target_name = target
-                if not target_name.startswith("Django"):
-                    target_name = f"Django{target_name}"
-                deps.add(target_name)
-            elif inspect.isclass(target):
-                # If it's a class reference, get its name and ensure Django prefix
-                target_name = target.__name__
-                if not target_name.startswith("Django"):
-                    target_name = f"Django{target_name}"
-                deps.add(target_name)
-
-        # Check through relationships for ManyToManyField
+        # Handle ManyToMany relationships
         if isinstance(field, models.ManyToManyField):
             remote_field = field.remote_field
             if isinstance(remote_field, models.ManyToManyRel):
-                # Add the target model as a dependency
+                # Add the target model
                 target = remote_field.model
-                # Skip if target is None or not a valid model reference
-                if target is None:
-                    continue
-
-                if isinstance(target, str):
-                    # If it's a string reference, ensure it has Django prefix
-                    if "." in target:
-                        # If it has a dot, extract just the model name
-                        target_name = target.split(".")[-1]
-                    else:
-                        target_name = target
-                    if not target_name.startswith("Django"):
-                        target_name = f"Django{target_name}"
-                    deps.add(target_name)
-                elif inspect.isclass(target):
-                    # If it's a class reference, get its name and ensure Django prefix
-                    target_name = target.__name__
-                    if not target_name.startswith("Django"):
-                        target_name = f"Django{target_name}"
-                    deps.add(target_name)
+                if target is not None:
+                    deps.add(normalize_model_reference(target))
 
                 # Handle through model if specified
                 through = remote_field.through
-                # Only add explicit through models, not auto-generated ones
+                # Only add explicit through models, not auto-created ones
                 if through and through is not models.ManyToManyRel and not remote_field.auto_created:
-                    if isinstance(through, str):
-                        # If it's a string reference, ensure it has Django prefix
-                        if "." in through:
-                            # If it has a dot, extract just the model name
-                            through_name = through.split(".")[-1]
-                        else:
-                            through_name = through
-                        if not through_name.startswith("Django"):
-                            through_name = f"Django{through_name}"
-                        deps.add(through_name)
-                    elif inspect.isclass(through):
-                        # If it's a class reference, get its name and ensure Django prefix
-                        through_name = through.__name__
-                        if not through_name.startswith("Django"):
-                            through_name = f"Django{through_name}"
-                        deps.add(through_name)
+                    deps.add(normalize_model_reference(through))
+
+        # Handle context-based dependencies (non-serializable fields)
+        if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
+            # Get the original Pydantic model class
+            pydantic_class = None
+            model_name_lower = model._meta.model_name.lower() if model._meta.model_name else ""
+            for model_name, pydantic_model in discovery.normalized_models.items():
+                if model_name_lower == model_name.lower():
+                    pydantic_class = pydantic_model
+                    break
+
+            if pydantic_class:
+                # Check the Pydantic field's type annotation
+                field_info = pydantic_class.model_fields.get(field.name)
+                if field_info and field_info.annotation:
+                    annotation = field_info.annotation
+                    # Handle direct model references
+                    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                        deps.add(normalize_model_reference(annotation.__name__))
+                    # Handle generic types (List, Dict, etc.)
+                    elif hasattr(annotation, "__origin__"):
+                        origin = get_origin(annotation)
+                        args = get_args(annotation)
+                        if origin in (list, dict):
+                            for arg in args:
+                                if inspect.isclass(arg) and issubclass(arg, BaseModel):
+                                    deps.add(normalize_model_reference(arg.__name__))
 
     return deps
 
 
 def validate_model_references(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
     """
-    Validate that all model references exist.
+    Validate that all model references exist, including context-based dependencies.
 
     Args:
         models: Dict mapping normalized model names to their classes
@@ -132,19 +133,26 @@ def validate_model_references(models: dict[str, type], dependencies: dict[str, s
             if dep == "self":
                 continue
 
-            # Extract just the model name if it includes app_label
-            if "." in dep:
-                dep_model_name = dep.split(".")[-1]
-            else:
-                dep_model_name = dep
-
-            # Ensure Django prefix
-            if not dep_model_name.startswith("Django"):
-                dep_model_name = f"Django{dep_model_name}"
-
-            # Check if the model exists in the normalized models
-            if dep_model_name not in models:
-                errors.append(f"Model '{model_name}' references non-existent model '{dep_model_name}'")
+            normalized_dep = normalize_model_reference(dep)
+            if normalized_dep not in models:
+                # Check if this is a context-based dependency
+                pydantic_model = discovery.normalized_models.get(model_name)
+                if pydantic_model:
+                    for field in pydantic_model.model_fields.values():
+                        if (
+                            field.annotation
+                            and inspect.isclass(field.annotation)
+                            and issubclass(field.annotation, BaseModel)
+                        ):
+                            field_model_name = normalize_model_reference(field.annotation.__name__)
+                            if field_model_name == normalized_dep:
+                                # This is a context-based dependency, so we'll skip the error
+                                logger.info(f"Model '{model_name}' has context-based dependency on '{normalized_dep}'")
+                                break
+                    else:
+                        errors.append(f"Model '{model_name}' references non-existent model '{normalized_dep}'")
+                else:
+                    errors.append(f"Model '{model_name}' references non-existent model '{normalized_dep}'")
     return errors
 
 
@@ -424,7 +432,7 @@ class ModelDiscovery:
                     logger.info(f"Inspecting {name}: {obj}")
                     if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
                         logger.info(f"Found Pydantic model: {name}")
-                        model_name = f"Django{name}"  # Ensure Django prefix
+                        model_name = normalize_model_reference(name)
                         discovered_models[model_name] = obj
                     else:
                         if inspect.isclass(obj):
@@ -458,9 +466,7 @@ class ModelDiscovery:
                     # Find all Pydantic models in the module
                     for name, obj in inspect.getmembers(module):
                         if is_pydantic_model(obj) and self._should_convert_to_django_model(obj):
-                            model_name = normalize_model_name(name)
-                            if not model_name.startswith("Django"):
-                                model_name = f"Django{model_name}"
+                            model_name = normalize_model_reference(name)
                             discovered_models[model_name] = obj
 
                 except Exception as e:
