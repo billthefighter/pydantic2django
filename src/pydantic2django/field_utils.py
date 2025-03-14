@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
-from pydantic2django.field_type_resolver import is_pydantic_model, is_serializable_type
+from pydantic2django.types import is_pydantic_model, is_serializable_type
 
 # Type aliases for relationship field types
 RelationshipFieldType: TypeAlias = Optional[
@@ -537,7 +537,10 @@ class RelationshipFieldHandler:
             The name of the related model or None if not found
         """
         try:
-            if isinstance(field, (models.ForeignKey | models.ManyToManyField | models.OneToOneField)):
+            if isinstance(
+                field,
+                (models.ForeignKey | models.ManyToManyField | models.OneToOneField),
+            ):
                 remote_field = field.remote_field
                 if remote_field and remote_field.model:
                     if isinstance(remote_field.model, str):

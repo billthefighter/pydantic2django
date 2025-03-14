@@ -95,9 +95,7 @@ def convert_field(
     if FieldTypeResolver.is_relationship_field(field_type):
         if skip_relationships:
             return None
-        return RelationshipFieldHandler.create_relationship_field(
-            field_name, field_info, field_type, app_label, model_name
-        )
+        return RelationshipFieldHandler.create_field(field_name, field_info, field_type, app_label, model_name)
 
     # For non-relationship fields, merge field attributes
     kwargs = FieldAttributeHandler.get_field_kwargs(field_info)

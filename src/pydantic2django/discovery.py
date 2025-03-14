@@ -22,8 +22,7 @@ from pydantic import BaseModel
 from .base_django_model import Pydantic2DjangoBaseClass
 from .core import make_django_model
 from .factory import DjangoModelFactory
-from .field_type_resolver import is_pydantic_model
-from .types import T
+from .types import T, is_pydantic_model
 
 logger = logging.getLogger(__name__)
 

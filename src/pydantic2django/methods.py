@@ -12,7 +12,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from pydantic import BaseModel
 
-from .field_type_resolver import is_pydantic_model
+from .types import is_pydantic_model
 from .utils import normalize_model_name
 
 logger = logging.getLogger(__name__)
