@@ -13,7 +13,7 @@ from pydantic2django.context_storage import ModelContext
 
 # Import the base class for Django models
 from pydantic2django.discovery import ModelDiscovery
-from pydantic2django.field_utils import FieldAttributeHandler
+from pydantic2django.field_utils import FieldAttributeHandler, RelationshipFieldHandler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -53,6 +53,8 @@ class StaticDjangoModelGenerator:
         self.filter_function = filter_function
         self.verbose = verbose
         self.discovery = discovery_module or ModelDiscovery()
+        self.discovered_models: dict[str, type[BaseModel]] = {}
+        self.relationship_field_handler = RelationshipFieldHandler()
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory
@@ -86,14 +88,14 @@ class StaticDjangoModelGenerator:
         )
 
         # Get the discovered models
-        discovered_models = self.discovery.get_discovered_models()
+        self.discovered_models = self.discovery.get_discovered_models()
 
         if self.verbose:
-            logger.info(f"Discovered {len(discovered_models)} models")
-            for name, model in discovered_models.items():
+            logger.info(f"Discovered {len(self.discovered_models)} models")
+            for name, model in self.discovered_models.items():
                 logger.info(f"  - {name}: {model}")
 
-        return discovered_models
+        return self.discovered_models
 
     def setup_django_models(self) -> dict[str, type[models.Model]]:
         """

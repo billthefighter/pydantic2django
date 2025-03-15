@@ -377,41 +377,6 @@ class TypeMapper:
         return cls.TYPE_MAPPINGS
 
     @classmethod
-    def get_django_field_for_type(cls, python_type: Any, strict: bool = True) -> type[models.Field]:
-        """
-        Get the Django field type for a Python type.
-
-        Args:
-            python_type: The Python type to find a Django field for
-            strict: If True, raises UnsupportedTypeError when type is not supported
-
-        Returns:
-            Django field type if found
-
-        Raises:
-            UnsupportedTypeError: If strict=True and the type is not supported
-        """
-        # Handle Optional types first
-        origin = get_origin(python_type)
-        args = get_args(python_type)
-
-        if origin is Union and type(None) in args:
-            # Get the non-None type
-            python_type = next(arg for arg in args if arg is not type(None))
-
-        # Look for an existing type mapping
-        mapping = cls.get_mapping_for_type(python_type)
-        if mapping:
-            return mapping.django_field
-
-        if strict:
-            raise cls.UnsupportedTypeError(f"No Django field mapping found for Python type: {python_type}")
-
-        # Default to JSONField as a fallback if not strict
-        logger.warning(f"No mapping found for {python_type}, defaulting to JSONField")
-        return models.JSONField
-
-    @classmethod
     def get_field_attributes(cls, python_type: Any) -> dict[str, Any]:
         """
         Get the field attributes (like max_length) for a Python type.
@@ -443,20 +408,6 @@ class TypeMapper:
                 field_kwargs["on_delete"] = mapping.on_delete
 
         return field_kwargs
-
-    @classmethod
-    def python_to_django_field(cls, python_type: Any) -> type[models.Field]:
-        """
-        Get the Django field type for a Python type.
-        Alias for get_django_field_for_type with strict=False.
-
-        Args:
-            python_type: The Python type to find a Django field for
-
-        Returns:
-            Django field type, defaulting to JSONField if not found
-        """
-        return cls.get_django_field_for_type(python_type, strict=False)
 
     @classmethod
     def get_max_length(cls, field_name: str, field_type: type[models.Field]) -> Optional[int]:

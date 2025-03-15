@@ -8,7 +8,7 @@ code duplication and improve maintainability.
 import inspect
 import logging
 import re
-from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Optional,
@@ -18,12 +18,10 @@ from typing import (
     get_origin,
 )
 
-from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticUndefined
 
 from pydantic2django.types import is_pydantic_model, is_serializable_type
 
@@ -36,34 +34,6 @@ RelationshipFieldDetectionResult: TypeAlias = tuple[RelationshipFieldType, Relat
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.field_utils")
-
-
-def is_valid_default_value(value: Any) -> bool:
-    """
-    Check if a value is a valid default value for a Django field.
-
-    Args:
-        value: The value to check
-
-    Returns:
-        True if the value is valid as a default, False otherwise
-    """
-    return value is not None and value != Ellipsis and value != PydanticUndefined and value != models.NOT_PROVIDED
-
-
-def process_default_value(value: Any) -> Any:
-    """
-    Process a default value for use in a Django field.
-
-    Args:
-        value: The default value to process
-
-    Returns:
-        The processed default value, or models.NOT_PROVIDED if the value is invalid
-    """
-    if not is_valid_default_value(value):
-        return models.NOT_PROVIDED
-    return value
 
 
 def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
@@ -100,73 +70,9 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
 
 class FieldAttributeHandler:
     """
-    Handles extraction and processing of field attributes from Pydantic field info.
+    Handles extraction and processing of field attributes into string form
+    from Pydantic field info.
     """
-
-    @staticmethod
-    def handle_field_attributes(
-        field_info: FieldInfo,
-        extra: Optional[Union[dict[str, Any], Callable[[FieldInfo], dict[str, Any]]]] = None,
-    ) -> dict[str, Any]:
-        """
-        Extract and process field attributes from Pydantic field info.
-
-        Args:
-            field_info: The Pydantic field info
-            extra: Optional extra attributes or callable to get extra attributes
-
-        Returns:
-            A dictionary of field attributes
-        """
-        kwargs = {}
-
-        # Handle null/blank based on whether the field is optional
-        is_optional = not field_info.is_required
-        kwargs["null"] = is_optional
-        kwargs["blank"] = is_optional
-
-        # Handle default value using the standardized function
-        default_value = process_default_value(field_info.default)
-        if default_value is not models.NOT_PROVIDED:
-            kwargs["default"] = default_value
-
-        # Handle description as help_text
-        if field_info.description:
-            kwargs["help_text"] = field_info.description
-
-        # Handle title as verbose_name
-        if field_info.title:
-            kwargs["verbose_name"] = field_info.title
-
-        # Handle validators from field constraints
-        # In Pydantic v2, constraints are stored in the field's metadata
-        metadata = field_info.metadata
-        if isinstance(metadata, dict):
-            gt = metadata.get("gt")
-            if gt is not None:
-                kwargs.setdefault("validators", []).append(MinValueValidator(limit_value=gt))
-
-            ge = metadata.get("ge")
-            if ge is not None:
-                kwargs.setdefault("validators", []).append(MinValueValidator(limit_value=ge))
-
-            lt = metadata.get("lt")
-            if lt is not None:
-                kwargs.setdefault("validators", []).append(MaxValueValidator(limit_value=lt))
-
-            le = metadata.get("le")
-            if le is not None:
-                kwargs.setdefault("validators", []).append(MaxValueValidator(limit_value=le))
-
-        # Process extra attributes
-        if extra:
-            if callable(extra):
-                extra_kwargs = extra(field_info)
-                kwargs.update(extra_kwargs)
-            else:
-                kwargs.update(extra)
-
-        return kwargs
 
     @staticmethod
     def serialize_field_attributes(field: models.Field) -> list[str]:
@@ -194,17 +100,16 @@ class FieldAttributeHandler:
         if hasattr(field, "blank") and field.blank:
             params.append(f"blank={field.blank}")
 
-        # Handle default value using the standardized function
-        # Only include default if it was explicitly set (not models.NOT_PROVIDED)
-        if hasattr(field, "default") and field.default != models.NOT_PROVIDED:
+        # Only include default if it was explicitly set (None)
+        if hasattr(field, "default") and field.default is not None:
             # Check if this is a Django-provided default or one we explicitly set
             if not isinstance(field, (models.AutoField | models.BigAutoField)):
-                default_value = process_default_value(field.default)
-                if default_value is not models.NOT_PROVIDED:
-                    if isinstance(default_value, str):
-                        params.append(f"default='{sanitize_string(default_value)}'")
-                    else:
-                        params.append(f"default={default_value}")
+                # if it's a string, we need to make sure it can be safely converted to a string in our template
+                if isinstance(field.default, str):
+                    params.append(f"default='{sanitize_string(field.default)}'")
+                # if it's not a string, we pass the default value as is
+                else:
+                    params.append(f"default={field.default}")
 
         # Field-specific parameters
         if isinstance(field, models.CharField) and hasattr(field, "max_length"):
@@ -304,44 +209,12 @@ class FieldAttributeHandler:
         # Join parameters and return definition
         return f"models.{field_type}({', '.join(params)})"
 
-    @staticmethod
-    def get_field_kwargs(field_info: FieldInfo) -> dict[str, Any]:
-        """
-        Get field kwargs from Pydantic field info.
 
-        Args:
-            field_info: The Pydantic field info
-
-        Returns:
-            Dict of field kwargs
-        """
-        kwargs = {}
-
-        # Handle null/blank based on whether the field is required
-        kwargs["null"] = not field_info.is_required()
-        kwargs["blank"] = not field_info.is_required()
-
-        # Add description as help_text if available
-        if field_info.description:
-            kwargs["help_text"] = field_info.description
-
-        # Add default if available and valid
-        if is_valid_default_value(field_info.default):
-            kwargs["default"] = process_default_value(field_info.default)
-
-        # Add max_length for CharField if available in field metadata
-        if hasattr(field_info, "metadata") and isinstance(field_info.metadata, dict):
-            max_length = field_info.metadata.get("max_length")
-            if max_length is not None:
-                kwargs["max_length"] = max_length
-        elif isinstance(field_info.annotation, type) and field_info.annotation == str:
-            kwargs["max_length"] = 255  # Default max_length for strings
-
-        return kwargs
-
-
+@dataclass
 class RelationshipFieldHandler:
     """Handles relationship fields between Django models."""
+
+    available_relationships: dict[str, type[BaseModel]] = field(default_factory=dict)
 
     @staticmethod
     def detect_field_type(
@@ -368,21 +241,28 @@ class RelationshipFieldHandler:
             origin = get_origin(field_type)
             args = get_args(field_type)
 
-        # Direct Pydantic model reference (ForeignKey)
+        # Detect pydantic models
         if is_pydantic_model(field_type):
-            field_kwargs["on_delete"] = models.CASCADE
-            return models.ForeignKey, field_kwargs
+            # If field type is in available relationships, it should be converted into a relationship
+            if field_type in RelationshipFieldHandler.available_relationships.values():
+                # Direct Pydantic model reference (ForeignKey)
+                if is_pydantic_model(field_type):
+                    field_kwargs["on_delete"] = models.CASCADE
+                    return models.ForeignKey, field_kwargs
 
-        # List of Pydantic models (ManyToManyField)
-        if origin is list and args and is_pydantic_model(args[0]):
-            return models.ManyToManyField, field_kwargs
+                # List of Pydantic models (ManyToManyField)
+                if origin is list and args and is_pydantic_model(args[0]):
+                    return models.ManyToManyField, field_kwargs
 
-        # Abstract base class or non-serializable type (ForeignKey)
-        if inspect.isabstract(field_type) or not is_serializable_type(field_type):
-            field_kwargs["on_delete"] = models.CASCADE
-            return models.ForeignKey, field_kwargs
+                # Abstract base class or non-serializable type (ForeignKey)
+                if inspect.isabstract(field_type) or not is_serializable_type(field_type):
+                    field_kwargs["on_delete"] = models.CASCADE
+                    return models.ForeignKey, field_kwargs
+            else:
+                # Field needs to be  added to context, return none
+                pass
 
-        return None, {}
+        return None, {"context_field": True}
 
     @staticmethod
     def create_field(

@@ -8,7 +8,6 @@ information needed for field reconstruction.
 from dataclasses import dataclass, field
 from typing import Any, Optional, TypeVar
 
-from django.db import models
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
@@ -123,7 +122,7 @@ class ModelContext:
         return None
 
 
-def create_context_for_model(django_model: type[models.Model], pydantic_model: type[BaseModel]) -> ModelContext:
+def create_context_for_model(pydantic_model: type[BaseModel]) -> ModelContext:
     """
     Create a context object for a Django model.
 
@@ -134,7 +133,7 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
     Returns:
         A ModelContext object containing context information for the model
     """
-    context = ModelContext(model_name=django_model.__name__, pydantic_class=pydantic_model)
+    context = ModelContext(model_name=pydantic_model.__name__, pydantic_class=pydantic_model)
 
     # Analyze fields and add context information
     for field_name, pydantic_field in pydantic_model.model_fields.items():

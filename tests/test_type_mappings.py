@@ -264,21 +264,6 @@ def test_optional_type_handling():
     assert attrs.get("blank") is True
 
 
-def test_unsupported_type_handling():
-    """Test handling of unsupported types."""
-
-    class UnsupportedType:
-        pass
-
-    # Test with strict=True
-    with pytest.raises(TypeMapper.UnsupportedTypeError):
-        TypeMapper.get_django_field_for_type(UnsupportedType, strict=True)
-
-    # Test with strict=False
-    field_type = TypeMapper.get_django_field_for_type(UnsupportedType, strict=False)
-    assert field_type == models.JSONField
-
-
 def test_type_mapping_definition_methods():
     """Test TypeMappingDefinition class methods."""
     # Test char_field classmethod
