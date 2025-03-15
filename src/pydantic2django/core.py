@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from .context_storage import ModelContext, create_context_for_model
 from .field_converter import convert_field
-from .methods import copy_methods_to_django_model
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -219,13 +218,6 @@ def make_django_model(
     # Create the model class
     model = type(model_name, bases, attrs)
     django_model = cast(type[models.Model], model)
-
-    # Copy methods and properties from the Pydantic model
-    django_model = copy_methods_to_django_model(
-        django_model=django_model,
-        pydantic_model=pydantic_model,
-        return_pydantic_model=False,
-    )
 
     # Create context object if needed
     model_context = None

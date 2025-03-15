@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
 from django.db import models
 from pydantic import BaseModel
 
-from .context_storage import ContextRegistry, ModelContext
+from .context_storage import ModelContext
 from .serialization import serialize_value
 
 # Type variable for BaseModel subclasses
@@ -219,9 +219,10 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         """
         pydantic_class = self._get_pydantic_class()
 
-        # Get the model context if it exists
-        model_context = ContextRegistry.get_context(self.__class__.__name__)
-
+        # TODO: This should be implemented
+        model_context = None
+        if not model_context:
+            raise NotImplementedError("You should fix this")
         # If we have context fields, validate the provided context
         if model_context and model_context.required_context_keys:
             if not context:

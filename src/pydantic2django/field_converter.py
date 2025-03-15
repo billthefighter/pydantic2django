@@ -2,7 +2,8 @@
 Field mapping between Pydantic and Django models.
 """
 import logging
-from typing import Optional, Union, get_args, get_origin
+from enum import Enum
+from typing import Any, Optional, Union, get_args, get_origin
 
 from django.db import models
 from pydantic.fields import FieldInfo
@@ -57,6 +58,43 @@ def handle_id_field(field_name: str, field_info: FieldInfo) -> Optional[models.F
     return None
 
 
+def handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:
+    """
+    Create a Django field for an Enum type.
+
+    Args:
+        field_type: The Enum type
+        kwargs: Additional field attributes
+
+    Returns:
+        A Django field for the Enum
+    """
+    # Get all enum values
+    enum_values = [item.value for item in field_type]
+
+    # Determine the type of the enum values
+    if all(isinstance(val, int) for val in enum_values):
+        # Integer enum
+        return models.IntegerField(
+            choices=[(item.value, item.name) for item in field_type],
+            **kwargs,
+        )
+    elif all(isinstance(val, (str, int)) for val in enum_values):
+        # String enum
+        max_length = max(len(val) for val in enum_values)
+        return models.CharField(
+            max_length=max_length,
+            choices=[(item.value, item.name) for item in field_type],
+            **kwargs,
+        )
+    else:
+        # Mixed type enum - use TextField with choices
+        return models.TextField(
+            choices=[(str(item.value), item.name) for item in field_type],
+            **kwargs,
+        )
+
+
 def convert_field(
     field_name: str,
     field_info: FieldInfo,
@@ -98,6 +136,15 @@ def convert_field(
             # This is an Optional type
             field_type = next(arg for arg in args if arg is not type(None))
             is_optional = True
+
+    # Handle Enum types before falling back to TypeMapper
+    if isinstance(field_type, type) and issubclass(field_type, Enum):
+        # Get field attributes from FieldAttributeHandler
+        kwargs = FieldAttributeHandler.handle_field_attributes(field_info)
+        if is_optional:
+            kwargs["null"] = True
+            kwargs["blank"] = True
+        return handle_enum_field(field_type, kwargs)
 
     # Get the field mapping from TypeMapper
     mapping = TypeMapper.get_mapping_for_type(field_type)

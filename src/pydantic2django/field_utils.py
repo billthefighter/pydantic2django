@@ -9,7 +9,6 @@ import inspect
 import logging
 import re
 from collections.abc import Callable
-from enum import Enum
 from typing import (
     Any,
     Optional,
@@ -550,43 +549,6 @@ class RelationshipFieldHandler:
         except Exception:
             pass
         return None
-
-
-def handle_enum_field(field_type: type[Enum], kwargs: dict[str, Any]) -> models.Field:
-    """
-    Create a Django field for an Enum type.
-
-    Args:
-        field_type: The Enum type
-        kwargs: Additional field attributes
-
-    Returns:
-        A Django field for the Enum
-    """
-    # Get all enum values
-    enum_values = [item.value for item in field_type]
-
-    # Determine the type of the enum values
-    if all(isinstance(val, int) for val in enum_values):
-        # Integer enum
-        return models.IntegerField(
-            choices=[(item.value, item.name) for item in field_type],
-            **kwargs,
-        )
-    elif all(isinstance(val | str) for val in enum_values):
-        # String enum
-        max_length = max(len(val) for val in enum_values)
-        return models.CharField(
-            max_length=max_length,
-            choices=[(item.value, item.name) for item in field_type],
-            **kwargs,
-        )
-    else:
-        # Mixed type enum - use TextField with choices
-        return models.TextField(
-            choices=[(str(item.value), item.name) for item in field_type],
-            **kwargs,
-        )
 
 
 def get_model_fields(model_class: type[BaseModel]) -> dict[str, FieldInfo]:

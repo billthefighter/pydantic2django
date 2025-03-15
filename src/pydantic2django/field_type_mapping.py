@@ -3,7 +3,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
-from enum import Enum
 from logging import getLogger
 from pathlib import Path
 from typing import (
@@ -253,7 +252,6 @@ class TypeMapper:
         TypeMappingDefinition.json_field(set),
         # Special types
         TypeMappingDefinition(python_type=Path, django_field=models.FilePathField),
-        TypeMappingDefinition.char_field(Enum),
         TypeMappingDefinition.char_field(type),
         TypeMappingDefinition(python_type=IPvAnyAddress, django_field=models.GenericIPAddressField),
         TypeMappingDefinition.json_field(Json),

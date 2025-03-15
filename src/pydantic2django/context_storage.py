@@ -12,6 +12,8 @@ from django.db import models
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
+from .field_type_mapping import TypeMapper
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -121,43 +123,6 @@ class ModelContext:
         return None
 
 
-class ContextRegistry:
-    """
-    Global registry for model contexts.
-    """
-
-    _contexts: dict[str, ModelContext] = {}
-
-    @classmethod
-    def register_context(cls, model_name: str, context: ModelContext) -> None:
-        """
-        Register a model context.
-
-        Args:
-            model_name: Name of the model
-            context: Context object for the model
-        """
-        cls._contexts[model_name] = context
-
-    @classmethod
-    def get_context(cls, model_name: str) -> Optional[ModelContext]:
-        """
-        Get a model's context.
-
-        Args:
-            model_name: Name of the model
-
-        Returns:
-            The model context if it exists, None otherwise
-        """
-        return cls._contexts.get(model_name)
-
-    @classmethod
-    def clear(cls) -> None:
-        """Clear all registered contexts."""
-        cls._contexts.clear()
-
-
 def create_context_for_model(django_model: type[models.Model], pydantic_model: type[BaseModel]) -> ModelContext:
     """
     Create a context object for a Django model.
@@ -169,8 +134,6 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
     Returns:
         A ModelContext object containing context information for the model
     """
-    from .field_type_resolver import is_serializable_type
-
     context = ModelContext(model_name=django_model.__name__, pydantic_class=pydantic_model)
 
     # Analyze fields and add context information
@@ -182,8 +145,8 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
         if field_type is None:
             continue
 
-        # Skip if the type is serializable (can be stored in the database)
-        if is_serializable_type(field_type):
+        # Skip if the type is supported by TypeMapper (can be stored in the database)
+        if TypeMapper.is_type_supported(field_type):
             continue
 
         # If we get here, the type needs context
@@ -195,6 +158,4 @@ def create_context_for_model(django_model: type[models.Model], pydantic_model: t
             additional_metadata={"field_info": pydantic_field.json_schema_extra or {}},
         )
 
-    # Register the context
-    ContextRegistry.register_context(django_model.__name__, context)
     return context
