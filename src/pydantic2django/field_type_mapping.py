@@ -21,6 +21,10 @@ from django.db import models
 # EmailStr and IPvAnyAddress are likely from pydantic
 from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 
+# Use absolute imports to avoid circular dependencies
+# Import field_utils functions that are needed
+from pydantic2django.field_utils import is_pydantic_model_field_optional
+
 logger = getLogger(__name__)
 
 # Type alias for python types that can be either a direct type or a collection type
@@ -199,11 +203,13 @@ class TypeMappingDefinition:
             elif origin in (list, dict, set):
                 # For parameterized collection types, match with the appropriate JSON field
                 if self.django_field == models.JSONField:
-                    if (origin is set and self.python_type is set) or \
-                       (origin is dict and self.python_type is dict) or \
-                       (origin is list and self.python_type is list):
+                    if (
+                        (origin is set and self.python_type is set)
+                        or (origin is dict and self.python_type is dict)
+                        or (origin is list and self.python_type is list)
+                    ):
                         return True
-                    
+
                 args = get_args(python_type)
                 # For relationship fields, check if the inner type matches
                 if self.is_relationship and args:
@@ -367,9 +373,45 @@ class TypeMapper:
         origin = get_origin(python_type)
         args = get_args(python_type)
 
-        if origin is Union and type(None) in args:
+        if is_pydantic_model_field_optional(python_type):
             # Get the non-None type
-            python_type = next(arg for arg in args if arg is not type(None))
+            inner_type = next(arg for arg in args if arg is not type(None))
+
+            # Check if the inner type is a relationship type
+            inner_origin = get_origin(inner_type)
+            inner_args = get_args(inner_type)
+
+            # Handle Optional[list[Model]] for many-to-many relationships
+            if inner_origin is list and inner_args:
+                model_type = inner_args[0]
+                if isinstance(model_type, type) and issubclass(model_type, BaseModel):
+                    return TypeMappingDefinition(
+                        python_type=inner_type,
+                        django_field=models.ManyToManyField,
+                        is_relationship=True,
+                    )
+
+            # Handle Optional[Dict[str, Model]] for many-to-many relationships
+            elif inner_origin is dict and len(inner_args) == 2:
+                model_type = inner_args[1]  # Second arg is the value type
+                if isinstance(model_type, type) and issubclass(model_type, BaseModel):
+                    return TypeMappingDefinition(
+                        python_type=inner_type,
+                        django_field=models.ManyToManyField,
+                        is_relationship=True,
+                    )
+
+            # Handle Optional[Model] for foreign key relationships
+            elif isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
+                return TypeMappingDefinition(
+                    python_type=inner_type,
+                    django_field=models.ForeignKey,
+                    is_relationship=True,
+                    on_delete=models.CASCADE,
+                )
+
+            # For other Optional types, continue with the inner type
+            python_type = inner_type
 
         # Handle list[BaseModel] and dict[str, BaseModel] for many-to-many relationships
         if origin in (list, dict) and args:
@@ -451,12 +493,9 @@ class TypeMapper:
         field_kwargs = {}
 
         # Handle Optional types first
-        origin = get_origin(python_type)
-        args = get_args(python_type)
-
-        if origin is Union and type(None) in args:
+        if is_pydantic_model_field_optional(python_type):
             # Get the non-None type
-            python_type = next(arg for arg in args if arg is not type(None))
+            python_type = next(arg for arg in get_args(python_type) if arg is not type(None))
             field_kwargs["null"] = True
             field_kwargs["blank"] = True
 

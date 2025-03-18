@@ -276,11 +276,18 @@ class DjangoFieldFactory:
             es2 = "mapping definition - something must have gone wrong."
             raise ValueError(f"{es1} {es2}")
 
-        # Get the model class based on the field type
-        origin = get_origin(field_type)
-        args = get_args(field_type)
+        # Handle Optional types (Union[Type, None]) using utility function
+        if is_pydantic_model_field_optional(field_type):
+            # Extract the non-None type from the Optional Union
+            field_type = next(arg for arg in get_args(field_type) if arg is not type(None))
+            # Reset origin and args for the actual type
+            origin = get_origin(field_type)
+            args = get_args(field_type)
+        else:
+            origin = get_origin(field_type)
+            args = get_args(field_type)
 
-        # Handle different relationship types based on origin
+        # Get the model class based on the field type
         if origin is list and args:
             # For list[Model] - many-to-many relationship
             model_class = args[0]

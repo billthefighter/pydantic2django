@@ -907,3 +907,73 @@ def test_error_handling_for_parameter_errors(monkeypatch):
 
     # Verify the error message mentions the missing argument
     assert "missing 1 required positional argument" in str(excinfo.value)
+
+
+def test_optional_relationship_fields():
+    """
+    Test handling of Optional relationship fields (Union[Type, None]).
+
+    This test verifies that fields with types like Optional[BaseModel] are properly
+    handled and converted to relationship fields with appropriate null/blank settings.
+    """
+
+    # Create model classes
+    class RelatedModel(BaseModel):
+        name: str
+
+    class TestModel(BaseModel):
+        # Optional ForeignKey relationship
+        optional_foreign: Optional[RelatedModel] = None
+        # Optional ManyToMany relationship
+        optional_many: Optional[list[RelatedModel]] = None
+
+    # Create relationship accessor
+    accessor = RelationshipConversionAccessor()
+
+    # Create fake Django model for RelatedModel
+    django_related = type(
+        "DjangoRelatedModel",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "test_app"})},
+    )
+
+    # Create model context
+    related_context = ModelContext(django_model=django_related, pydantic_class=RelatedModel)
+
+    # Add model to relationship accessor
+    accessor.available_relationships.append(RelationshipMapper(RelatedModel, django_related, related_context))
+
+    # Create field factory with relationships
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Test Optional ForeignKey relationship
+    foreign_field_info = TestModel.model_fields["optional_foreign"]
+    foreign_result = field_factory.convert_field(
+        field_name="optional_foreign",
+        field_info=foreign_field_info,
+        app_label="test_app",
+    )
+
+    # Verify the field is correctly converted to a ForeignKey with null=True
+    assert foreign_result.django_field is not None
+    assert isinstance(foreign_result.django_field, models.ForeignKey)
+    assert foreign_result.field_kwargs["null"] is True
+    assert foreign_result.field_kwargs["blank"] is True
+    assert "on_delete" in foreign_result.field_kwargs
+    assert foreign_result.field_kwargs["on_delete"] == models.CASCADE
+
+    # Test Optional ManyToMany relationship
+    many_field_info = TestModel.model_fields["optional_many"]
+    many_result = field_factory.convert_field(
+        field_name="optional_many",
+        field_info=many_field_info,
+        app_label="test_app",
+    )
+
+    # Verify the field is correctly converted to a ManyToManyField with null=True
+    assert many_result.django_field is not None
+    assert isinstance(many_result.django_field, models.ManyToManyField)
+    assert many_result.field_kwargs["null"] is True
+    assert many_result.field_kwargs["blank"] is True
+    # The key fix: ManyToManyField should NOT have on_delete
+    assert "on_delete" not in many_result.field_kwargs
