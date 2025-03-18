@@ -556,3 +556,160 @@ def test_convert_simple_field(field_factory):
     assert isinstance(result.django_field, models.TextField)
     assert result.field_kwargs["help_text"] == "User's name"
     assert result.field_kwargs["verbose_name"] == "Full Name"
+
+
+def test_relationship_field_to_parameter(field_factory, relationship_models):
+    """Test that the 'to' parameter of relationship fields is properly formatted as a string, not a tuple."""
+    # Extract test models
+    user_model = relationship_models["User"]
+
+    # Create a custom model to test each relationship type explicitly
+    class RelationshipTestModel(BaseModel):
+        # ForeignKey relationship
+        address: relationship_models["Address"]
+        # ManyToMany relationship
+        tags: list[relationship_models["Tag"]]
+
+    # Test ForeignKey relationship field
+    address_field_info = RelationshipTestModel.model_fields["address"]
+    address_result = field_factory.convert_field(
+        field_name="address",
+        field_info=address_field_info,
+        app_label="test_app",
+    )
+
+    # The field should be mapped as a relationship
+    assert address_result.type_mapping_definition is not None
+    assert address_result.type_mapping_definition.is_relationship is True
+
+    # Check that 'to' parameter is a string, not a tuple
+    # This is crucial for Django to create the field correctly
+    assert "to" in address_result.field_kwargs
+    to_value = address_result.field_kwargs["to"]
+    assert isinstance(to_value, str), f"Expected 'to' to be a string, got {type(to_value)}: {to_value}"
+    assert to_value == "test_app.Address"
+
+    # Test ManyToMany relationship field
+    tags_field_info = RelationshipTestModel.model_fields["tags"]
+    tags_result = field_factory.convert_field(
+        field_name="tags",
+        field_info=tags_field_info,
+        app_label="test_app",
+    )
+
+    # The field should be mapped as a relationship
+    assert tags_result.type_mapping_definition is not None
+    assert tags_result.type_mapping_definition.is_relationship is True
+
+    # Check that 'to' parameter is a string, not a tuple
+    assert "to" in tags_result.field_kwargs
+    to_value = tags_result.field_kwargs["to"]
+    assert isinstance(to_value, str), f"Expected 'to' to be a string, got {type(to_value)}: {to_value}"
+    assert to_value == "test_app.Tag"
+
+    # Test rendered field creation
+    if address_result.django_field is not None:
+        # This should not raise an exception if 'to' is correctly formatted
+        rendered_field = address_result.rendered_django_field
+        assert rendered_field is not None
+        assert isinstance(rendered_field, models.ForeignKey)
+
+    if tags_result.django_field is not None:
+        rendered_field = tags_result.rendered_django_field
+        assert rendered_field is not None
+        assert isinstance(rendered_field, models.ManyToManyField)
+
+
+def test_chain_relationship_fields():
+    """
+    Test that handles the specific error case from the logs where 'nodes' and 'edges' relationship fields
+    were failing because of incorrect 'to' parameter format.
+    """
+
+    # Create model classes similar to those mentioned in the error logs
+    class ChainNode(BaseModel):
+        name: str
+
+    class ChainEdge(BaseModel):
+        name: str
+
+    class Chain(BaseModel):
+        name: str
+        nodes: list[ChainNode]
+        edges: list[ChainEdge]
+
+    # Create a relationship accessor with the models
+    accessor = RelationshipConversionAccessor()
+
+    # Create fake Django models to pair with the Pydantic models
+    django_node_model = type(
+        "DjangoChainNode",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "django_llm"})},
+    )
+    django_edge_model = type(
+        "DjangoChainEdge",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "django_llm"})},
+    )
+
+    # Create model contexts
+    node_context = ModelContext(django_model=django_node_model, pydantic_class=ChainNode)
+    edge_context = ModelContext(django_model=django_edge_model, pydantic_class=ChainEdge)
+
+    # Add models to relationship accessor
+    accessor.available_relationships.append(RelationshipMapper(ChainNode, django_node_model, node_context))
+    accessor.available_relationships.append(RelationshipMapper(ChainEdge, django_edge_model, edge_context))
+
+    # Create field factory with relationships
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Test ManyToMany relationship for nodes field
+    nodes_field_info = Chain.model_fields["nodes"]
+    nodes_result = field_factory.convert_field(
+        field_name="nodes",
+        field_info=nodes_field_info,
+        app_label="django_llm",
+    )
+
+    # The field should be mapped as a relationship
+    assert nodes_result.type_mapping_definition is not None
+    assert nodes_result.type_mapping_definition.is_relationship is True
+    assert nodes_result.type_mapping_definition.django_field == models.ManyToManyField
+
+    # Check that 'to' parameter is a string, not a tuple
+    assert "to" in nodes_result.field_kwargs
+    to_value = nodes_result.field_kwargs["to"]
+    assert isinstance(to_value, str), f"Expected 'to' to be a string, got {type(to_value)}: {to_value}"
+    assert to_value == "django_llm.ChainNode"
+
+    # Test successful field creation
+    if nodes_result.django_field is not None:
+        rendered_field = nodes_result.rendered_django_field
+        assert rendered_field is not None
+        assert isinstance(rendered_field, models.ManyToManyField)
+
+    # Test ManyToMany relationship for edges field
+    edges_field_info = Chain.model_fields["edges"]
+    edges_result = field_factory.convert_field(
+        field_name="edges",
+        field_info=edges_field_info,
+        app_label="django_llm",
+    )
+
+    # Similar assertions for edges
+    assert edges_result.type_mapping_definition is not None
+    assert edges_result.type_mapping_definition.is_relationship is True
+    assert edges_result.type_mapping_definition.django_field == models.ManyToManyField
+
+    # Check that 'to' parameter is a string, not a tuple
+    assert "to" in edges_result.field_kwargs
+    to_value = edges_result.field_kwargs["to"]
+    assert isinstance(to_value, str), f"Expected 'to' to be a string, got {type(to_value)}: {to_value}"
+    assert to_value == "django_llm.ChainEdge"
+
+    # Test successful field creation
+    if edges_result.django_field is not None:
+        rendered_field = edges_result.rendered_django_field
+        assert rendered_field is not None
+        assert isinstance(rendered_field, models.ManyToManyField)

@@ -265,17 +265,22 @@ class DjangoFieldFactory:
         args = get_args(field_type)
         # If the field is a list, the model class is the first argument
         if origin is list and args:
+            # For list[Model] - many-to-many relationship
             model_class = args[0]
         # If the field is a dict, the model class is the second argument
         elif origin is dict and len(args) == 2:
+            # For dict[str, Model] - many-to-many with key
             model_class = args[1]
+        elif origin is None and inspect.isclass(field_type) and issubclass(field_type, BaseModel):
+            # Direct model reference - foreign key
+            model_class = field_type
         else:
             logger.warning(f"Invalid model class type for field {field_name}: {origin} {args}")
             result.error_str = f"Invalid model class type for field {field_name}: {origin} {args}"
             result.django_field = None
             return result
 
-        # Handle case  where model is not in relationship accessor
+        # Handle case where model is not in relationship accessor
         if model_class not in self.available_relationships.available_pydantic_models:
             logger.warning(f"Model {model_class} not in relationship accessor")
             result.django_field = None
@@ -287,7 +292,6 @@ class DjangoFieldFactory:
             target_model_name = model_class
         elif inspect.isclass(model_class):
             target_model_name = model_class.__name__
-
         else:
             logger.warning(f"Invalid model class type for field {field_name}: {type(model_class)}")
             result.django_field = None
@@ -305,8 +309,20 @@ class DjangoFieldFactory:
         # Handle on_delete behavior
         field_kwargs["on_delete"] = models.CASCADE
 
-        # Handle to_field behavior
-        field_kwargs["to"] = (f"{result.app_label}.{target_model_name}",)
+        # Handle to_field behavior - Fix: Use a string instead of a tuple
+        field_kwargs["to"] = f"{result.app_label}.{target_model_name}"
+
+        # Set the django_field directly from the type mapping definition's django_field class
+        if result.type_mapping_definition and result.type_mapping_definition.django_field:
+            try:
+                # First populate the field, then create it
+                result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
+            except Exception as e:
+                # Log and return error if field creation fails
+                logger.warning(f"Failed to create Django field for {field_name}: {e}")
+                result.error_str = f"Failed to create Django field for {field_name}: {e}"
+                result.django_field = None
+
         return result
 
     def process_field_attributes(
