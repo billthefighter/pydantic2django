@@ -8,20 +8,18 @@ code duplication and improve maintainability.
 import inspect
 import logging
 import re
-from dataclasses import dataclass, field
 from typing import (
     Any,
     Optional,
     TypeAlias,
     Union,
-    get_args,
-    get_origin,
 )
 
 from django.db import models
 from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
+from pydantic.typing import get_args, get_origin
 
 from pydantic2django.types import is_pydantic_model, is_serializable_type
 
@@ -142,7 +140,7 @@ class FieldSerializer:
         # Handle relationship fields
         if isinstance(field, models.ForeignKey):
             # Get the related model name safely
-            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
+            related_model_name = get_related_model_name(field)
             if related_model_name:
                 # Use direct class reference for type checking
                 if "." in related_model_name:
@@ -166,7 +164,7 @@ class FieldSerializer:
 
         if isinstance(field, models.ManyToManyField):
             # Get the related model name safely
-            related_model_name = RelationshipFieldHandler.get_related_model_name(field)
+            related_model_name = get_related_model_name(field)
             if related_model_name:
                 # Use direct class reference for type checking
                 if "." in related_model_name:
@@ -257,3 +255,64 @@ def sanitize_string(value: Union[str, Promise, Any]) -> str:
     str_value = str_value.replace("\r", "\\r")
 
     return str_value
+
+
+def get_relationship_metadata(field_type: Any) -> dict[str, Any]:
+    """
+    Extract relationship-specific metadata.
+
+    Args:
+        field_type: The field type to analyze
+
+    Returns:
+        Dictionary of relationship metadata
+    """
+    metadata = {}
+
+    # Handle Optional types
+    origin = get_origin(field_type)
+    args = get_args(field_type)
+    if origin is Union and type(None) in args:
+        field_type = next(arg for arg in args if arg is not type(None))
+        metadata["optional"] = True
+        origin = get_origin(field_type)
+        args = get_args(field_type)
+
+    # Determine relationship type
+    if origin is list and args and is_pydantic_model(args[0]):
+        metadata["type"] = "many_to_many"
+        metadata["model"] = args[0]
+    elif is_pydantic_model(field_type):
+        metadata["type"] = "foreign_key"
+        metadata["model"] = field_type
+    elif inspect.isabstract(field_type) or not is_serializable_type(field_type):
+        metadata["type"] = "foreign_key"
+        metadata["model"] = field_type
+
+    return metadata
+
+
+def get_related_model_name(field: models.Field) -> Optional[str]:
+    """
+    Get the name of the related model from a relationship field.
+
+    Args:
+        field: The Django model field
+
+    Returns:
+        The name of the related model or None if not found
+    """
+    try:
+        if isinstance(
+            field,
+            (models.ForeignKey | models.ManyToManyField | models.OneToOneField),
+        ):
+            remote_field = field.remote_field
+            if remote_field and remote_field.model:
+                if isinstance(remote_field.model, str):
+                    return remote_field.model
+                elif hasattr(remote_field.model, "__name__"):
+                    return remote_field.model.__name__
+    except Exception:
+        pass
+    return None
