@@ -316,3 +316,10 @@ def get_related_model_name(field: models.Field) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def is_pydantic_model_field_optional(field_type: Any) -> bool:
+    """
+    Check if a Pydantic model field is optional.
+    """
+    return get_origin(field_type) is Union and type(None) in get_args(field_type)

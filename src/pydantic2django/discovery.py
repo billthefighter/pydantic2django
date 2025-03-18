@@ -11,15 +11,13 @@ from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional, get_args, get_origin
+from typing import Optional, get_args, get_origin
 
-from django.apps import apps
 from django.db import models
 from django.db.models import Model as DjangoModel
 from django.db.models.fields import Field as DjangoField
 from pydantic import BaseModel
 
-from .factory import DjangoModelFactory
 from .types import is_pydantic_model
 
 logger = logging.getLogger(__name__)
@@ -136,31 +134,6 @@ def topological_sort(dependencies: dict[str, set[str]]) -> list[str]:
     return sorted_nodes
 
 
-def register_django_model(model: type[models.Model], app_label: str) -> None:
-    """
-    Register a Django model with the app registry.
-
-    Args:
-        model: The Django model to register
-        app_label: The app label to register under
-    """
-    model_name = model._meta.model_name
-    if not model_name:
-        return
-
-    try:
-        # Check if model is already registered
-        existing = apps.get_registered_model(app_label, model_name)
-        if existing is not model:
-            # Unregister existing model if it's different
-            apps.all_models[app_label].pop(model_name, None)
-            # Register the new model
-            apps.register_model(app_label, model)
-    except LookupError:
-        # Model not registered yet
-        apps.register_model(app_label, model)
-
-
 def exclude_models(model_names: list[str]) -> Callable[[str, type[BaseModel]], bool]:
     """
     Create a filter function that excludes models with specific names.
@@ -238,33 +211,12 @@ class ModelDiscovery:
     def __init__(self):
         """Initialize a new ModelDiscovery instance with its own registry."""
         self.discovered_models: dict[str, type[BaseModel]] = {}
+        self.filtered_models: dict[str, type[BaseModel]] = {}
         self.normalized_models: dict[str, type[BaseModel]] = {}
         self.dependencies: dict[str, set[str]] = {}
         self.django_models: dict[str, type[models.Model]] = {}
         self._registration_order: Optional[list[str]] = None
         self.app_label: Optional[str] = None
-
-    def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
-        """
-        Determine if a Pydantic model should be converted to a Django model.
-
-        Args:
-            model_class: The Pydantic model class to check
-
-        Returns:
-            True if the model should be converted, False otherwise
-        """
-        # Skip models that directly inherit from ABC
-        if ABC in model_class.__bases__:
-            logger.info(f"Skipping {model_class.__name__} because it directly inherits from ABC")
-            return False
-
-        # Skip models that are marked as abstract
-        if getattr(model_class, "__abstract__", False):
-            logger.info(f"Skipping {model_class.__name__} because it is marked as abstract")
-            return False
-
-        return True
 
     def discover_models(
         self,
@@ -323,27 +275,40 @@ class ModelDiscovery:
 
             # Apply filter function if provided
             if filter_function:
-                filtered_models = {}
                 filtered_out = []
 
                 for model_name, model_cls in discovered_models.items():
                     if filter_function(model_cls):
-                        filtered_models[model_name] = model_cls
+                        self.filtered_models[model_name] = model_cls
                     else:
                         filtered_out.append(model_name)
-
-                        # Remove from registry if it was added
-                        if model_name in self.discovered_models:
-                            del self.discovered_models[model_name]
-                        if model_name in self.normalized_models:
-                            del self.normalized_models[model_name]
-                        if model_name in self.dependencies:
-                            del self.dependencies[model_name]
 
                 if filtered_out:
                     logger.info(f"Filtered out {len(filtered_out)} models: {', '.join(filtered_out)}")
 
         logger.info(f"Discovered {len(self.discovered_models)} models")
+
+    def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
+        """
+        Determine if a Pydantic model should be converted to a Django model.
+
+        Args:
+            model_class: The Pydantic model class to check
+
+        Returns:
+            True if the model should be converted, False otherwise
+        """
+        # Skip models that directly inherit from ABC
+        if ABC in model_class.__bases__:
+            logger.info(f"Skipping {model_class.__name__} because it directly inherits from ABC")
+            return False
+
+        # Skip models that are marked as abstract
+        if getattr(model_class, "__abstract__", False):
+            logger.info(f"Skipping {model_class.__name__} because it is marked as abstract")
+            return False
+
+        return True
 
     def _discover_models_from_package(
         self, package_name: str, app_label: str = "django_llm"
@@ -425,49 +390,6 @@ class ModelDiscovery:
             self.dependencies[model_name] = set()  # Initialize empty dependencies
 
         return discovered_models
-
-    def setup_dynamic_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
-        """
-        Set up Django models for all discovered Pydantic models.
-
-        Args:
-            app_label: The Django app label to use for model registration
-
-        Returns:
-            Dict of Django models
-        """
-        logger.info(f"Setting up dynamic models for {app_label}...")
-
-        # Clear existing Django models
-        self.django_models.clear()
-
-        # Create Django models for each discovered model
-        for model_name, pydantic_model in self.discovered_models.items():
-            logger.info(f"Creating Django model for {model_name}")
-            try:
-                django_model, _ = DjangoModelFactory[Any].create_model(
-                    pydantic_model,
-                    app_label=app_label,
-                    db_table=f"{app_label}_{model_name.lower()}",
-                )
-                self.django_models[model_name] = django_model
-                logger.info(f"Successfully created Django model: {django_model}")
-
-                # Register the model with Django's app registry
-                register_django_model(django_model, app_label)
-                logger.info(f"Registered model with Django app registry: {django_model._meta.model_name}")
-            except Exception as e:
-                logger.error(f"Error creating Django model for {model_name}: {e}")
-                continue
-
-        # Analyze dependencies after all models are registered
-        self.analyze_dependencies(app_label)
-
-        logger.info("Final Django models:")
-        for name, model in self.django_models.items():
-            logger.info(f"  - {name}: {model}")
-
-        return self.django_models
 
     def analyze_dependencies(self, app_label: str) -> None:
         """
@@ -631,6 +553,10 @@ class ModelDiscovery:
     def get_django_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
         """Get all registered Django models for the given app label."""
         return self.django_models
+
+    def get_models_in_registration_order(self) -> list[type[BaseModel]]:
+        """Get all discovered Pydantic models in registration order."""
+        return [self.discovered_models[model_name] for model_name in self.get_registration_order()]
 
     def clear(self) -> None:
         """Clear the registry, removing all discovered and registered models."""

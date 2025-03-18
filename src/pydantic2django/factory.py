@@ -2,7 +2,7 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, Optional, Union, cast, get_args, get_origin
+from typing import Any, Optional, Union, cast, get_args, get_origin
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -15,8 +15,7 @@ from pydantic2django.relationships import RelationshipConversionAccessor
 
 from .base_django_model import Pydantic2DjangoBaseClass
 from .context_storage import ModelContext
-from .field_utils import sanitize_related_name
-from .types import T
+from .field_utils import is_pydantic_model_field_optional, sanitize_related_name
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +59,33 @@ class DjangoModelFactoryCarrier:
     def model_key(self):
         return f"{self.pydantic_model.__module__}.{self.pydantic_model.__name__}"
 
+    def build_model_context(self):
+        if not self.pydantic_model or not self.django_model:
+            logger.exception(
+                f"Model context cannot be built for {self.model_key} - missing pydantic_model or django_model"
+            )
+        else:
+            model_context = ModelContext(
+                django_model=self.django_model,
+                pydantic_class=self.pydantic_model,
+            )
+            for field_name, field_info in self.context_fields.items():
+                if field_info.annotation is None:
+                    logger.warning(f"Field {field_name} has no annotation, skipping")
+                    continue
+                else:
+                    optional = is_pydantic_model_field_optional(field_info.annotation)
+                    model_context.add_field(
+                        field_name=field_name, field_type=field_info.annotation, is_optional=optional
+                    )
+            self.model_context = model_context
+
+    def __str__(self):
+        if self.django_model:
+            return f"{self.pydantic_model.__name__} -> {self.django_model.__name__}"
+        else:
+            return f"{self.pydantic_model.__name__} -> None"
+
 
 # Cache for converted models to prevent duplicate conversions
 _converted_models: dict[str, DjangoModelFactoryCarrier] = {}
@@ -74,6 +100,7 @@ class FieldConversionResult:
     field_kwargs: dict[str, Any] = field(default_factory=dict)
     django_field: Optional[models.Field] = None
     context_field: Optional[FieldInfo] = None
+    error_str: Optional[str] = None
 
     @property
     def rendered_django_field(self) -> models.Field:
@@ -155,6 +182,7 @@ class DjangoFieldFactory:
             try:
                 # Try using asdict, which handles nested dataclasses
                 result_dict = asdict(result)
+                result_dict["error_str"] = str(e)
                 logger.error(f"Result: {result_dict}")
             except Exception as dict_err:
                 # Fallback to manually logging attributes
@@ -173,9 +201,7 @@ class DjangoFieldFactory:
         field_name = result.field_name
 
         # Get the django field class
-        if result.type_mapping_definition:
-            field_class = result.type_mapping_definition.get_django_field(field_kwargs)
-        else:
+        if not result.type_mapping_definition:
             es1 = "Relationship field should not be called without a type "
             es2 = "mapping definition - something must have gone wrong."
             raise ValueError(f"{es1} {es2}")
@@ -191,6 +217,7 @@ class DjangoFieldFactory:
             model_class = args[1]
         else:
             logger.warning(f"Invalid model class type for field {field_name}: {origin} {args}")
+            result.error_str = f"Invalid model class type for field {field_name}: {origin} {args}"
             result.django_field = None
             return result
 
@@ -198,6 +225,7 @@ class DjangoFieldFactory:
         if model_class not in self.available_relationships.available_pydantic_models:
             logger.warning(f"Model {model_class} not in relationship accessor")
             result.django_field = None
+            result.error_str = f"Model {model_class} not in relationship accessor"
             return result
 
         # Get the model name, handling both string and class references
@@ -357,7 +385,7 @@ class DjangoFieldFactory:
 
 
 @dataclass
-class DjangoModelFactory(Generic[T]):
+class DjangoModelFactory:
     """
     Factory for creating Django models with proper type hints and IDE support.
     """
@@ -370,6 +398,10 @@ class DjangoModelFactory(Generic[T]):
     ) -> DjangoModelFactoryCarrier:
         """
         Convert a Pydantic model to a Django model, with optional base Django model inheritance.
+
+        Important note: Relationship fields must be handled in order to be mapped correctly.
+        The discovery module has a registration order that can be used to ensure that relationship fields
+        are processed in the correct order.
 
         Returns:
             A tuple of (django_model, field_updates, model_context) where:
@@ -395,6 +427,7 @@ class DjangoModelFactory(Generic[T]):
         carrier = self.handle_field_collisions(carrier)
         carrier = self.handle_django_meta(carrier)
         carrier = self.assemble_django_model(carrier)
+        carrier.build_model_context()
         # TODO: Figure out what to do with existing_model
         # if existing_model:
         #    logger.debug(f"Returning relationship fields for existing model {existing_model.__name__}")
@@ -503,25 +536,22 @@ class DjangoModelFactory(Generic[T]):
                     continue
 
                 # Create the Django field
-                django_field = self.field_factory.convert_field(
+                conversion_result = self.field_factory.convert_field(
                     field_name=field_name,
                     field_info=field_info,
                     app_label=carrier.meta_app_label,
                 )
                 # Convert field returns none if it can't find a mapping
-                if not django_field:
-                    carrier.context_fields[field_name] = field_info
+                if conversion_result.context_field:
+                    carrier.context_fields[field_name] = conversion_result.context_field
                     continue
 
-                # Handle relationship fields differently based on skip_relationships
-                if isinstance(
-                    django_field,
-                    (models.ForeignKey, models.ManyToManyField, models.OneToOneField),
-                ):
-                    carrier.relationship_fields[field_name] = django_field
+                if conversion_result.django_field:
+                    carrier.django_fields[field_name] = conversion_result.django_field
+                else:
+                    logger.warning(f"Skipping field {field_name}: {conversion_result.error_str}")
+                    carrier.invalid_fields.append((field_name, conversion_result.error_str or "Unknown error"))
                     continue
-
-                carrier.django_fields[field_name] = django_field
 
             except (ValueError, TypeError) as e:
                 logger.warning(f"Skipping field {field_name}: {str(e)}")

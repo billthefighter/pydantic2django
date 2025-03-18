@@ -8,10 +8,8 @@ information needed for field reconstruction.
 from dataclasses import dataclass, field
 from typing import Any, Optional, TypeVar
 
+from django.db import models
 from pydantic import BaseModel
-from pydantic.fields import FieldInfo
-
-from .field_type_mapping import TypeMapper
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,10 +36,14 @@ class ModelContext:
     during conversion back to Pydantic objects.
     """
 
-    model_name: str = ""
-    pydantic_class: type[BaseModel] = BaseModel
-    context_fields: dict[str, FieldContext] = field(default_factory=dict)
-    required_context_keys: set[str] = field(default_factory=set)
+    django_model: type[models.Model]
+    pydantic_class: type[BaseModel]
+    context_fields: list[FieldContext] = field(default_factory=list)
+
+    @property
+    def required_context_keys(self) -> set[str]:
+        required_fields = {x.field_name for x in self.context_fields if not x.is_optional}
+        return required_fields
 
     def add_field(self, field_name: str, field_type: type[Any], **kwargs) -> None:
         """
@@ -52,8 +54,7 @@ class ModelContext:
             field_type: Type of the field
             **kwargs: Additional metadata for the field
         """
-        self.context_fields[field_name] = FieldContext(field_name=field_name, field_type=field_type, **kwargs)
-        self.required_context_keys.add(field_name)
+        self.context_fields.append(FieldContext(field_name=field_name, field_type=field_type, **kwargs))
 
     def validate_context(self, context: dict[str, Any]) -> None:
         """
@@ -65,6 +66,7 @@ class ModelContext:
         Raises:
             ValueError: If required context fields are missing
         """
+
         missing_fields = self.required_context_keys - set(context.keys())
         if missing_fields:
             raise ValueError(f"Missing required context fields: {', '.join(missing_fields)}")
@@ -120,41 +122,3 @@ class ModelContext:
         if field_name in self.context_fields:
             return self.context_fields[field_name].value
         return None
-
-
-def create_context_for_model(pydantic_model: type[BaseModel]) -> ModelContext:
-    """
-    Create a context object for a Django model.
-
-    Args:
-        django_model: The Django model class
-        pydantic_model: The corresponding Pydantic model class
-
-    Returns:
-        A ModelContext object containing context information for the model
-    """
-    context = ModelContext(model_name=pydantic_model.__name__, pydantic_class=pydantic_model)
-
-    # Analyze fields and add context information
-    for field_name, pydantic_field in pydantic_model.model_fields.items():
-        if not isinstance(pydantic_field, FieldInfo):
-            continue
-
-        field_type = pydantic_field.annotation
-        if field_type is None:
-            continue
-
-        # Skip if the type is supported by TypeMapper (can be stored in the database)
-        if TypeMapper.is_type_supported(field_type):
-            continue
-
-        # If we get here, the type needs context
-        context.add_field(
-            field_name=field_name,
-            field_type=field_type,
-            is_optional=not pydantic_field.is_required(),
-            is_list=getattr(pydantic_field, "is_list", False),
-            additional_metadata={"field_info": pydantic_field.json_schema_extra or {}},
-        )
-
-    return context
