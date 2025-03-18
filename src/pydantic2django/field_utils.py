@@ -68,10 +68,10 @@ def sanitize_related_name(name: str, model_name: str = "", field_name: str = "")
     return sanitized
 
 
-class FieldAttributeHandler:
+class FieldSerializer:
     """
     Handles extraction and processing of field attributes into string form
-    from Pydantic field info.
+    from Django model fields.
     """
 
     @staticmethod
@@ -121,6 +121,8 @@ class FieldAttributeHandler:
             if hasattr(field, "decimal_places"):
                 params.append(f"decimal_places={field.decimal_places}")
 
+        # TODO: Add support for relationship fields
+
         return params
 
     @staticmethod
@@ -135,7 +137,7 @@ class FieldAttributeHandler:
             String representation of the field
         """
         field_type = type(field).__name__
-        params = FieldAttributeHandler.serialize_field_attributes(field)
+        params = FieldSerializer.serialize_field_attributes(field)
 
         # Handle relationship fields
         if isinstance(field, models.ForeignKey):
@@ -208,227 +210,6 @@ class FieldAttributeHandler:
 
         # Join parameters and return definition
         return f"models.{field_type}({', '.join(params)})"
-
-
-@dataclass
-class RelationshipFieldHandler:
-    """Handles relationship fields between Django models."""
-
-    available_relationships: dict[str, type[BaseModel]] = field(default_factory=dict)
-
-    @staticmethod
-    def detect_field_type(
-        field_type: Any,
-    ) -> RelationshipFieldDetectionResult:
-        """
-        Single entry point for relationship type detection.
-
-        Args:
-            field_type: The field type to check
-
-        Returns:
-            Tuple of (Django field class, field attributes) or (None, {}) if not a relationship
-        """
-        # Handle Optional types
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-        field_kwargs = {}
-
-        if origin is Union and type(None) in args:
-            field_type = next(arg for arg in args if arg is not type(None))
-            field_kwargs["null"] = True
-            field_kwargs["blank"] = True
-            origin = get_origin(field_type)
-            args = get_args(field_type)
-
-        # Detect pydantic models
-        if is_pydantic_model(field_type):
-            # If field type is in available relationships, it should be converted into a relationship
-            if field_type in RelationshipFieldHandler.available_relationships.values():
-                # Direct Pydantic model reference (ForeignKey)
-                if is_pydantic_model(field_type):
-                    field_kwargs["on_delete"] = models.CASCADE
-                    return models.ForeignKey, field_kwargs
-
-                # List of Pydantic models (ManyToManyField)
-                if origin is list and args and is_pydantic_model(args[0]):
-                    return models.ManyToManyField, field_kwargs
-
-                # Abstract base class or non-serializable type (ForeignKey)
-                if inspect.isabstract(field_type) or not is_serializable_type(field_type):
-                    field_kwargs["on_delete"] = models.CASCADE
-                    return models.ForeignKey, field_kwargs
-            else:
-                # Field needs to be  added to context, return none
-                pass
-
-        return None, {"context_field": True}
-
-    @staticmethod
-    def create_field(
-        field_name: str,
-        field_info: FieldInfo,
-        field_type: Any,
-        app_label: str,
-        model_name: Optional[str] = None,
-    ) -> Optional[models.Field]:
-        """
-        Create a relationship field based on the field type.
-
-        Args:
-            field_name: The name of the field
-            field_info: The Pydantic field info
-            field_type: The field type
-            app_label: The Django app label
-            model_name: Optional model name for context
-
-        Returns:
-            A Django relationship field or None if the field type is not a relationship
-        """
-        # Get the field type and attributes
-        field_class, field_kwargs = RelationshipFieldHandler.detect_field_type(field_type)
-        if not field_class:
-            return None
-
-        # Get field attributes
-        kwargs = FieldAttributeHandler.handle_field_attributes(field_info)
-        kwargs.update(field_kwargs)
-
-        # Get the model class based on the field type
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-        if origin is list and args:
-            model_class = args[0]
-        elif origin is dict and len(args) == 2:
-            model_class = args[1]
-        else:
-            model_class = field_type
-
-        # Get the model name, handling both string and class references
-        if isinstance(model_class, str):
-            target_model_name = model_class
-        elif inspect.isclass(model_class):
-            target_model_name = model_class.__name__
-            if not target_model_name.startswith("Django"):
-                target_model_name = f"Django{target_model_name}"
-        else:
-            logger.warning(f"Invalid model class type for field {field_name}: {type(model_class)}")
-            return None
-
-        # Get the related name
-        related_name = sanitize_related_name(
-            getattr(field_info, "related_name", ""),
-            model_name or "",
-            field_name,
-        )
-
-        # Create the appropriate field type
-        if field_class is models.ManyToManyField:
-            return models.ManyToManyField(
-                to=f"{app_label}.{target_model_name}",
-                related_name=related_name,
-                **kwargs,
-            )
-        else:  # ForeignKey or OneToOneField
-            # Ensure field_class is a valid relationship field type that accepts 'to' and 'related_name'
-            if field_class in (models.ForeignKey, models.OneToOneField):
-                return field_class(
-                    to=f"{app_label}.{target_model_name}",
-                    related_name=related_name,
-                    **kwargs,
-                )
-            else:
-                logger.warning(f"Unexpected field class {field_class} for relationship field {field_name}")
-                return None
-
-    @staticmethod
-    def get_relationship_metadata(field_type: Any) -> dict[str, Any]:
-        """
-        Extract relationship-specific metadata.
-
-        Args:
-            field_type: The field type to analyze
-
-        Returns:
-            Dictionary of relationship metadata
-        """
-        metadata = {}
-
-        # Handle Optional types
-        origin = get_origin(field_type)
-        args = get_args(field_type)
-        if origin is Union and type(None) in args:
-            field_type = next(arg for arg in args if arg is not type(None))
-            metadata["optional"] = True
-            origin = get_origin(field_type)
-            args = get_args(field_type)
-
-        # Determine relationship type
-        if origin is list and args and is_pydantic_model(args[0]):
-            metadata["type"] = "many_to_many"
-            metadata["model"] = args[0]
-        elif is_pydantic_model(field_type):
-            metadata["type"] = "foreign_key"
-            metadata["model"] = field_type
-        elif inspect.isabstract(field_type) or not is_serializable_type(field_type):
-            metadata["type"] = "foreign_key"
-            metadata["model"] = field_type
-
-        return metadata
-
-    @staticmethod
-    def is_relationship_field(field_type: Any) -> bool:
-        """
-        Check if a field type represents a relationship.
-
-        Args:
-            field_type: The type to check
-
-        Returns:
-            True if the field type represents a relationship, False otherwise
-        """
-        field_class, _ = RelationshipFieldHandler.detect_field_type(field_type)
-        return field_class is not None
-
-    @staticmethod
-    def get_relationship_type(field_type: Any) -> RelationshipFieldType:
-        """
-        Get the specific type of relationship field.
-
-        Args:
-            field_type: The type to check
-
-        Returns:
-            The Django field class for the relationship, or None if not a relationship
-        """
-        field_class, _ = RelationshipFieldHandler.detect_field_type(field_type)
-        return field_class
-
-    @staticmethod
-    def get_related_model_name(field: models.Field) -> Optional[str]:
-        """
-        Get the name of the related model from a relationship field.
-
-        Args:
-            field: The Django model field
-
-        Returns:
-            The name of the related model or None if not found
-        """
-        try:
-            if isinstance(
-                field,
-                (models.ForeignKey | models.ManyToManyField | models.OneToOneField),
-            ):
-                remote_field = field.remote_field
-                if remote_field and remote_field.model:
-                    if isinstance(remote_field.model, str):
-                        return remote_field.model
-                    elif hasattr(remote_field.model, "__name__"):
-                        return remote_field.model.__name__
-        except Exception:
-            pass
-        return None
 
 
 def get_model_fields(model_class: type[BaseModel]) -> dict[str, FieldInfo]:

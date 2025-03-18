@@ -40,7 +40,6 @@ class TypeMappingDefinition:
     django_field: type[models.Field]
     max_length: Optional[int] = None
     is_relationship: bool = False
-    relationship_type: Optional[str] = None  # "foreign_key", "many_to_many", or "one_to_one"
     on_delete: Optional[Any] = None  # For ForeignKey relationships
     field_kwargs: dict[str, Any] = {}
 
@@ -56,6 +55,19 @@ class TypeMappingDefinition:
                 self.max_length = 255
 
     # Class methods for creating common field types
+
+    @property
+    def relationship_type(self) -> Optional[str]:
+        """
+        Get the relationship type for this mapping.
+        """
+        if self.django_field == models.ForeignKey:
+            return "foreign_key"
+        elif self.django_field == models.ManyToManyField:
+            return "many_to_many"
+        else:
+            return None
+
     @classmethod
     def char_field(cls, python_type: PythonType, max_length: int = 255) -> "TypeMappingDefinition":
         """Create a CharField mapping with the specified max_length."""
@@ -91,7 +103,6 @@ class TypeMappingDefinition:
             python_type=python_type,
             django_field=models.ForeignKey,
             is_relationship=True,
-            relationship_type="foreign_key",
             on_delete=models.CASCADE,
         )
 
@@ -102,18 +113,6 @@ class TypeMappingDefinition:
             python_type=python_type,
             django_field=models.ManyToManyField,
             is_relationship=True,
-            relationship_type="many_to_many",
-        )
-
-    @classmethod
-    def one_to_one(cls, python_type: PythonType) -> "TypeMappingDefinition":
-        """Create a OneToOneField mapping."""
-        return cls(
-            python_type=python_type,
-            django_field=models.OneToOneField,
-            is_relationship=True,
-            relationship_type="one_to_one",
-            on_delete=models.CASCADE,
         )
 
     @classmethod
@@ -325,26 +324,14 @@ class TypeMapper:
         TypeMappingDefinition.json_field(Json),
         TypeMappingDefinition.enum_field(Enum),
         # Relationship base types - these serve as templates for dynamic relationships
-        TypeMappingDefinition(
-            python_type=BaseModel,  # Base type for Pydantic models
-            django_field=models.ForeignKey,
-            is_relationship=True,
-            relationship_type="foreign_key",
-            on_delete=models.CASCADE,
-        ),
+        TypeMappingDefinition.foreign_key(BaseModel),
         # List-based many-to-many relationships
-        TypeMappingDefinition(
-            python_type=list[BaseModel],  # List[Model] type
-            django_field=models.ManyToManyField,
-            is_relationship=True,
-            relationship_type="many_to_many",
-        ),
+        TypeMappingDefinition.many_to_many(list[BaseModel]),
         # Dict-based many-to-many relationships (for named relationships)
         TypeMappingDefinition(
-            python_type=dict[str, BaseModel],  # Dict[str, Model] type
+            python_type=dict[str, BaseModel],
             django_field=models.ManyToManyField,
             is_relationship=True,
-            relationship_type="many_to_many",
         ),
     ]
 
@@ -390,7 +377,6 @@ class TypeMapper:
                                 python_type=python_type,
                                 django_field=models.ManyToManyField,
                                 is_relationship=True,
-                                relationship_type="many_to_many",
                             )
 
         # Look for an existing type mapping
@@ -402,7 +388,6 @@ class TypeMapper:
                         python_type=python_type,
                         django_field=mapping.django_field,
                         is_relationship=True,
-                        relationship_type=mapping.relationship_type,
                         on_delete=mapping.on_delete,
                     )
                 return mapping
