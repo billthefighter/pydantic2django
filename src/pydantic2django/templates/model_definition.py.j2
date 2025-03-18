@@ -54,7 +54,7 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
         abstract = False
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("object_type", "{{ module_path }}.{{ original_name }}")
+        kwargs.setdefault("object_type_field", "{{ module_path }}.{{ original_name }}")
         super().__init__(*args, **kwargs)
 
     {% if context_fields %}
