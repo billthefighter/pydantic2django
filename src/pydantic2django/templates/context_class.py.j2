@@ -18,18 +18,22 @@ class {{ model_name }}Context(ModelContext):
     model_name: str = "{{ model_name }}"
     pydantic_class: Type = {{ pydantic_class }}
     context_fields: Dict[str, FieldContext] = field(default_factory=dict)
+    {% if field_definitions %}
     required_context_keys: set[str] = field(default_factory=lambda: {
         {%- for field in field_definitions %}
         "{{ field.name }}",
         {%- endfor %}
     })
+    {% else %}
+    required_context_keys: set[str] = field(default_factory=set)
+    {% endif %}
 
     def __post_init__(self):
         """Initialize context fields after instance creation."""
         {% for field in field_definitions %}
         self.context_fields["{{ field.name }}"] = FieldContext(
             field_name="{{ field.name }}",
-            field_type={{ field.type }},
+            field_type=Any,  # {{ field.type }}
             is_optional={{ field.is_optional }},
             is_list={{ field.is_list }},
             additional_metadata={{ field.metadata }}
@@ -37,8 +41,9 @@ class {{ model_name }}Context(ModelContext):
         {% endfor %}
 
     @classmethod
-    def create(cls, {% for field in field_definitions %}
-        {{ field.name }}: {% if field.is_optional %}Optional[{% endif %}{% if field.is_list %}List[{% endif %}{{ field.type }}{% if field.is_list %}]{% endif %}{% if field.is_optional %}]{% endif %},
+    def create(cls,
+        {%- for field in field_definitions %}
+        {{ field.name }}: Any,  # {{ field.type }}{% if not loop.last %}, {% endif %}
         {%- endfor %}
     ) -> "{{ model_name }}Context":
         """
@@ -55,7 +60,7 @@ class {{ model_name }}Context(ModelContext):
         context = cls()
         {% for field in field_definitions %}
         context.context_fields["{{ field.name }}"].value = {{ field.name }}
-        {%- endfor %}
+        {% endfor %}
         return context
 
     def to_dict(self) -> Dict[str, Any]:
