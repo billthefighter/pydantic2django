@@ -141,6 +141,7 @@ class StaticDjangoModelGenerator:
         model_definitions = []
         context_definitions = []
         model_names = []
+        model_has_context = {}  # Track which models have context classes
 
         # Process models in registration order
         for pydantic_model in models_in_registration_order:
@@ -149,14 +150,22 @@ class StaticDjangoModelGenerator:
                 if carrier:
                     model_def, context_def = self.generate_definitions_from_carrier(carrier)
                     model_definitions.append(model_def)
-                    context_definitions.append(context_def)
-                    model_names.append(f"'{pydantic_model.__name__}'")
+                    model_name = pydantic_model.__name__
+                    model_names.append(f"'{model_name}'")
+                    
+                    # Track if this model has a context class
+                    has_context = bool(context_def.strip())
+                    model_has_context[model_name] = has_context
+                    
+                    if has_context:
+                        context_definitions.append(context_def)
                 else:
                     logger.warning(f"Skipping model {pydantic_model.__name__} due to errors")
 
             except Exception as e:
                 logger.error(f"Error generating model definition for {pydantic_model.__name__}: {e}")
-        # TODO: Need to go over generate definitions from carrier
+                raise
+                
         # Prepare imports
         imports = [
             "import uuid",
@@ -173,7 +182,8 @@ class StaticDjangoModelGenerator:
             imports=imports,
             context_definitions=context_definitions,
             model_definitions=model_definitions,
-            all_models=", ".join(model_names),
+            all_models=model_names,
+            model_has_context=model_has_context,
         )
 
     def discover_models(self) -> None:
@@ -210,41 +220,38 @@ class StaticDjangoModelGenerator:
 
         logger.info(f"Setting models for {self.app_label}...")
 
-        # Create Django models for each discovered model
-        for model_name, pydantic_model in self.discovery.filtered_models.items():
-            logger.info(f"Creating Django model for {model_name}")
-            # Define field carrier
-            factory_carrier = DjangoModelFactoryCarrier(
-                pydantic_model=pydantic_model,
-                meta_app_label=self.app_label,
+
+        factory_carrier = DjangoModelFactoryCarrier(
+            pydantic_model=pydantic_model,
+            meta_app_label=self.app_label,
+        )
+        try:
+            self.django_model_factory.make_django_model(
+                carrier=factory_carrier,
             )
-            try:
-                self.django_model_factory.make_django_model(
-                    carrier=factory_carrier,
+            if factory_carrier.django_model:
+                # Map relationships
+                self.relationship_accessor.map_relationship(
+                    pydantic_model=pydantic_model, django_model=factory_carrier.django_model
                 )
-                if factory_carrier.django_model:
-                    # Map relationships
-                    self.relationship_accessor.map_relationship(
-                        pydantic_model=pydantic_model, django_model=factory_carrier.django_model
-                    )
-                    logger.info(f"Successfully created Django model: {factory_carrier.django_model}")
-                    self.carriers.append(factory_carrier)
-                    return factory_carrier
-                else:
-                    logger.exception(f"Error creating Django model for {model_name}: {factory_carrier.invalid_fields}")
-                    return None
-            except Exception as e:
-                logger.error(f"Error creating Django model for {model_name}: {e}")
+                logger.info(f"Successfully created Django model: {factory_carrier.django_model}")
+                self.carriers.append(factory_carrier)
+                return factory_carrier
+            else:
+                logger.exception(f"Error creating Django model for {pydantic_model.__name__}: {factory_carrier.invalid_fields}")
+                return None
+        except Exception as e:
+            logger.error(f"Error creating Django model for {pydantic_model.__name__}: {e}")
 
     def generate_definitions_from_carrier(self, carrier: DjangoModelFactoryCarrier) -> tuple[str, str]:
         if carrier.django_model and carrier.model_context:
-            model_def = self.generate_model_definition(carrier.django_model)
+            model_def = self.generate_model_definition(carrier)
             context_def = self.generate_context_class(carrier.model_context)
             return model_def, context_def
         else:
             return "", ""
 
-    def generate_model_definition(self, model: type[models.Model]) -> str:
+    def generate_model_definition(self, carrier: DjangoModelFactoryCarrier) -> str:
         """
         Generate a string representation of a Django model.
 
@@ -254,15 +261,11 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the model
         """
-        model_name = model.__name__
-        original_name = model_name
-
-        if model_name.startswith("Django"):
-            original_name = model_name[6:]  # Remove "Django" prefix
+        model_name = carrier.django_model.__name__
 
         # Get fields from the model
         fields = []
-        for field in model._meta.fields:
+        for field in carrier.django_model._meta.fields:
             # Skip the fields from Pydantic2DjangoBaseClass
             if field.name in ["id", "name", "object_type", "created_at", "updated_at"]:
                 continue
@@ -272,8 +275,8 @@ class StaticDjangoModelGenerator:
 
         # Get many-to-many fields safely
         try:
-            if hasattr(model._meta, "many_to_many"):
-                many_to_many = getattr(model._meta, "many_to_many", [])
+            if hasattr(carrier.django_model._meta, "many_to_many"):
+                many_to_many = getattr(carrier.django_model._meta, "many_to_many", [])
                 for field in many_to_many:
                     field_definition = self.generate_field_definition(field)
                     fields.append((field.name, field_definition))
@@ -283,8 +286,8 @@ class StaticDjangoModelGenerator:
         # Get module path for the original Pydantic model
         module_path = ""
         try:
-            if hasattr(model, "object_type"):
-                object_type = getattr(model, "object_type", "")
+            if hasattr(carrier.django_model, "object_type"):
+                object_type = getattr(carrier.django_model, "object_type", "")
                 if object_type:
                     module_path = object_type.rsplit(".", 1)[0]
         except Exception as e:
@@ -292,20 +295,21 @@ class StaticDjangoModelGenerator:
 
         # Prepare meta information
         meta = {
-            "db_table": model._meta.db_table or f"{self.app_label}_{model_name.lower()}",
+            "db_table": carrier.django_model._meta.db_table or f"{self.app_label}_{model_name.lower()}",
             "app_label": self.app_label,
-            "verbose_name": model._meta.verbose_name or model_name,
-            "verbose_name_plural": model._meta.verbose_name_plural or f"{model_name}s",
+            "verbose_name": carrier.django_model._meta.verbose_name or model_name,
+            "verbose_name_plural": carrier.django_model._meta.verbose_name_plural or f"{model_name}s",
         }
 
         # Render the model definition template
+        pydantic_model_name = carrier.pydantic_model.__name__
         template = self.jinja_env.get_template("model_definition.py.j2")
         return template.render(
             model_name=model_name,
             fields=fields,
             meta=meta,
             module_path=module_path,
-            original_name=original_name,
+            original_name=pydantic_model_name,
         )
 
     def generate_field_definition(self, field: models.Field) -> str:

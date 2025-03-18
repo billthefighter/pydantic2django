@@ -19,7 +19,7 @@ from django.db import models
 from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from pydantic.typing import get_args, get_origin
+from typing import get_args, get_origin
 
 from pydantic2django.types import is_pydantic_model, is_serializable_type
 

@@ -7,15 +7,24 @@ from typing import Any, Optional, Union, cast, get_args, get_origin
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from pydantic import BaseModel
-from pydantic.errors import PydanticUndefined
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
-from pydantic2django.field_type_mapping import TypeMapper, TypeMappingDefinition
-from pydantic2django.relationships import RelationshipConversionAccessor
-
-from .base_django_model import Pydantic2DjangoBaseClass
-from .context_storage import ModelContext
-from .field_utils import is_pydantic_model_field_optional, sanitize_related_name
+# Use absolute imports for these dependencies
+try:
+    # Try relative imports first (normal case)
+    from .field_type_mapping import TypeMapper, TypeMappingDefinition
+    from .relationships import RelationshipConversionAccessor
+    from .base_django_model import Pydantic2DjangoBaseClass
+    from .context_storage import ModelContext
+    from .field_utils import is_pydantic_model_field_optional, sanitize_related_name
+except ImportError:
+    # Fall back to absolute imports (for direct module execution)
+    from pydantic2django.field_type_mapping import TypeMapper, TypeMappingDefinition
+    from pydantic2django.relationships import RelationshipConversionAccessor
+    from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
+    from pydantic2django.context_storage import ModelContext
+    from pydantic2django.field_utils import is_pydantic_model_field_optional, sanitize_related_name
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +123,9 @@ class FieldConversionResult:
                 errorstr += "type_mapping_definition is None"
             raise ValueError(errorstr)
 
+    def __str__(self):
+        return f"FieldConversionResult(field_name={self.field_name}, django_field={self.django_field}, context_field={self.context_field}, error_str={self.error_str})"
+
 
 @dataclass
 class DjangoFieldFactory:
@@ -164,17 +176,47 @@ class DjangoFieldFactory:
             # Get the field mapping from TypeMapper
             result.type_mapping_definition = TypeMapper.get_mapping_for_type(field_type)
             if not result.type_mapping_definition:
-                logger.warning(f"Could not map field type {field_type} to a Django field, must be contextual")
+                logger.warning(f"Could not map {field_name} of type {field_type} to a Django field, must be contextual")
+                # Mark this as a context field since we can't map it
+                result.context_field = field_info
+                return result
 
             # For relationship fields, use RelationshipFieldHandler
             if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
-                result.django_field = self.handle_relationship_field(result)
+                result = self.handle_relationship_field(result)
                 if not result.django_field:
                     logger.warning(f"Could not create relationship field for {field_name}, must be contextual")
-            # Create and return the field
+                    # Mark unmappable relationship fields as context fields
+                    result.context_field = field_info
+            
+            # Try to create a Django field from the mapping
+            if result.type_mapping_definition and not result.django_field:
+                try:
+                    # Instantiate the field class instead of just assigning the class itself
+                    result.django_field = result.type_mapping_definition.get_django_field(result.field_kwargs)
+                except Exception as e:
+                    logger.warning(f"Failed to create Django field for {field_name}: {e}")
+                    result.context_field = field_info
+                    
             return result
+            
         except Exception as e:
-            logger.error(f"Error converting field {field_name}: {e}")
+            # Create a more detailed error message
+            detailed_msg = f"Error converting field '{field_name}' of type '{field_info.annotation}': {e}"
+            
+            # Add context information
+            if result.type_mapping_definition:
+                detailed_msg += f"\nMapping found: {result.type_mapping_definition.django_field.__name__}"
+            else:
+                detailed_msg += "\nNo type mapping found in TypeMapper"
+                
+            # Add field details for debugging
+            detailed_msg += f"\nField info: {field_info}"
+            detailed_msg += f"\nField default: {field_info.default}"
+            detailed_msg += f"\nField metadata: {field_info.metadata}"
+            
+            # Log the detailed message
+            logger.error(detailed_msg)
             logger.error("Result dump:")
             # Convert dataclass to dict for safe logging
             from dataclasses import asdict
@@ -192,7 +234,12 @@ class DjangoFieldFactory:
                         logger.error(f"  {attr_name}: {attr_value}")
                     except Exception:
                         logger.error(f"  {attr_name}: <unprintable value>")
-            raise e
+            
+            # Include detailed error message with the exception
+            result.error_str = detailed_msg
+            # Instead of raising, mark as a context field and return
+            result.context_field = field_info
+            return result
 
     def handle_relationship_field(self, result: FieldConversionResult) -> FieldConversionResult:
         field_info = result.field_info
@@ -253,7 +300,6 @@ class DjangoFieldFactory:
 
         # Handle to_field behavior
         field_kwargs["to"] = (f"{result.app_label}.{target_model_name}",)
-        # TODO: Finish deleting relationships in field_utils
         return result
 
     def process_field_attributes(
@@ -300,7 +346,7 @@ class DjangoFieldFactory:
         if (
             field_info.default is not None
             and field_info.default != Ellipsis
-            and field_info.default != PydanticUndefined
+            and field_info.default is not PydanticUndefined
         ):
             kwargs["default"] = field_info.default
         else:
@@ -507,11 +553,14 @@ class DjangoModelFactory:
 
     def assemble_django_model(self, carrier: DjangoModelFactoryCarrier):
         # Create the model attributes
-        attrs = {
-            "__module__": carrier.pydantic_model.__module__,  # Use the Pydantic model's module
-            "Meta": carrier.django_meta_class,
-            **carrier.django_fields,
-        }
+        model_attrs = {**carrier.django_fields}
+        if carrier.django_meta_class:
+            model_attrs["Meta"] = carrier.django_meta_class
+        if carrier.pydantic_model.__module__:
+            model_attrs["__module__"] = carrier.pydantic_model.__module__
+        #Add  attribute that refers to the FQN
+        model_attrs["object_type"] = f"{carrier.pydantic_model.__module__}.{carrier.pydantic_model.__name__}"
+
 
         # Determine base classes
         base_classes = [carrier.base_django_model] if carrier.base_django_model else [models.Model]
@@ -524,7 +573,7 @@ class DjangoModelFactory:
         bases = tuple(base_classes)
 
         # Create the model class
-        carrier.django_model = cast(type[models.Model], type(model_name, bases, attrs))
+        carrier.django_model = cast(type[models.Model], type(model_name, bases, model_attrs))
 
         return carrier
 
@@ -541,20 +590,50 @@ class DjangoModelFactory:
                     field_info=field_info,
                     app_label=carrier.meta_app_label,
                 )
-                # Convert field returns none if it can't find a mapping
+                
+                # If the field is marked as a context field, add it to context_fields and continue
                 if conversion_result.context_field:
                     carrier.context_fields[field_name] = conversion_result.context_field
                     continue
 
-                if conversion_result.django_field:
-                    carrier.django_fields[field_name] = conversion_result.django_field
-                else:
-                    logger.warning(f"Skipping field {field_name}: {conversion_result.error_str}")
-                    carrier.invalid_fields.append((field_name, conversion_result.error_str or "Unknown error"))
+                # If we don't have a type mapping definition, mark this as a contextual field
+                if not conversion_result.type_mapping_definition:
+                    carrier.context_fields[field_name] = field_info
+                    logger.info(f"Field '{field_name}' of type '{field_info.annotation}' treated as contextual field")
                     continue
 
+                # Only try to render the Django field if we have a type mapping definition
+                try:
+                    django_field = conversion_result.rendered_django_field
+                    carrier.django_fields[field_name] = django_field
+                except ValueError as e:
+                    # If we can't render the field, treat it as contextual
+                    logger.warning(f"Could not render Django field for '{field_name}': {e}")
+                    carrier.context_fields[field_name] = field_info
+
             except (ValueError, TypeError) as e:
-                logger.warning(f"Skipping field {field_name}: {str(e)}")
-                carrier.invalid_fields.append((field_name, str(e)))
+                # Create a more detailed error message
+                detailed_msg = f"Error converting field '{field_name}' in model '{carrier.pydantic_model.__name__}':"
+                detailed_msg += f"\n  - Error type: {type(e).__name__}"
+                detailed_msg += f"\n  - Error message: {str(e)}"
+                detailed_msg += f"\n  - Field type: {field_info.annotation}"
+                
+                # Add information about the field
+                detailed_msg += f"\n  - Field is_required: {field_info.is_required}"
+                detailed_msg += f"\n  - Field has default: {'Yes' if field_info.default is not None else 'No'}"
+                
+                # Add information about available mappings
+                from .field_type_mapping import TypeMapper
+                mapping = TypeMapper.get_mapping_for_type(field_info.annotation)
+                if mapping:
+                    detailed_msg += f"\n  - Found mapping to: {mapping.django_field.__name__}"
+                else:
+                    detailed_msg += "\n  - No TypeMapper mapping available for this type"
+                    
+                # Log the error
+                logger.error(detailed_msg)
+                
+                # Add to invalid fields
+                carrier.invalid_fields.append((field_name, detailed_msg))
                 continue
         return carrier

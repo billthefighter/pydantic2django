@@ -31,7 +31,7 @@ def normalize_model_reference(model_ref: str | type[models.Model]) -> str:
         model_ref: Either a string reference ('app.Model' or 'Model') or a model class
 
     Returns:
-        Normalized model name in the format 'DjangoModelName'
+        Normalized model name in the format 'ModelName'
     """
     if isinstance(model_ref, str):
         # Extract just the model name if it includes app_label
@@ -40,14 +40,10 @@ def normalize_model_reference(model_ref: str | type[models.Model]) -> str:
         # Get the name from the class
         model_name = model_ref.__name__
 
-    # Ensure Django prefix
-    if not model_name.startswith("Django"):
-        model_name = f"Django{model_name}"
-
     return model_name
 
 
-def validate_model_references(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
+def find_missing_models(models: dict[str, type], dependencies: dict[str, set[str]]) -> list[str]:
     """
     Validate that all model references exist.
 
@@ -58,38 +54,23 @@ def validate_model_references(models: dict[str, type], dependencies: dict[str, s
     Returns:
         List of error messages for non-existent model references
     """
-    errors = []
+    missing_models = []
     normalized_models = {normalize_model_reference(name): cls for name, cls in models.items()}
-
-    # Track context-based dependencies
-    context_dependencies = set()
-    for model_name, model_class in models.items():
-        # Check if this is a Django model class
-        if isinstance(model_class, type) and issubclass(model_class, DjangoModel):
-            for field in model_class._meta.get_fields():
-                if isinstance(field, DjangoField) and getattr(field, "is_relationship", False):
-                    # Extract the referenced model name from the field
-                    field_type = field.help_text if hasattr(field, "help_text") else ""
-                    if field_type:
-                        context_dependencies.add((model_name, field_type))
 
     # Check each model's dependencies
     for model_name, deps in dependencies.items():
         for dep in deps:
-            # Skip validation for context-based dependencies
-            is_context_dep = any(
-                model_name == src and normalize_model_reference(dep) == normalize_model_reference(target)
-                for src, target in context_dependencies
-            )
-            if is_context_dep:
+            # Skip self-references
+            if dep == model_name or dep == "self":
                 continue
-
+                
             # Check if the dependency exists in normalized models
             normalized_dep = normalize_model_reference(dep)
             if normalized_dep not in normalized_models:
-                errors.append(f"Model '{model_name}' references non-existent model '{dep}'")
+                logger.warning(f"Model {model_name} references non-existent model {dep}")
+                missing_models.append(dep)
 
-    return errors
+    return missing_models
 
 
 def topological_sort(dependencies: dict[str, set[str]]) -> list[str]:
@@ -285,8 +266,11 @@ class ModelDiscovery:
 
                 if filtered_out:
                     logger.info(f"Filtered out {len(filtered_out)} models: {', '.join(filtered_out)}")
+            else:
+                self.filtered_models.update(discovered_models)
 
         logger.info(f"Discovered {len(self.discovered_models)} models")
+        logger.info(f"Filtered discovered models to {len(self.filtered_models)} models")
 
     def _should_convert_to_django_model(self, model_class: type[BaseModel]) -> bool:
         """
@@ -405,7 +389,7 @@ class ModelDiscovery:
         self.dependencies.clear()
 
         # First analyze dependencies from Pydantic models
-        for model_name, pydantic_model in self.discovered_models.items():
+        for model_name, pydantic_model in self.filtered_models.items():
             self.dependencies[model_name] = set()
             for _, field in pydantic_model.model_fields.items():
                 annotation = field.annotation
@@ -424,19 +408,6 @@ class ModelDiscovery:
                                     dep_name = normalize_model_reference(arg.__name__)
                                     self.dependencies[model_name].add(dep_name)
 
-        # Then analyze dependencies from Django models if they exist
-        for model_name, django_model in self.django_models.items():
-            try:
-                deps = self.get_model_dependencies_recursive(django_model, app_label)
-                self.dependencies[model_name].update(deps)
-            except Exception as e:
-                logger.error(f"Error analyzing dependencies for {model_name}: {e}")
-
-        logger.info("Dependencies analyzed:")
-        for model_name, deps in self.dependencies.items():
-            if deps:
-                logger.info(f"  - {model_name}: {deps}")
-
     def validate_dependencies(self) -> list[str]:
         """
         Validate that all model dependencies exist.
@@ -444,7 +415,8 @@ class ModelDiscovery:
         Returns:
             List of error messages for missing dependencies
         """
-        return validate_model_references(self.normalized_models, self.dependencies)
+
+        return find_missing_models(self.normalized_models, self.dependencies)
 
     def get_registration_order(self) -> list[str]:
         """
@@ -456,12 +428,48 @@ class ModelDiscovery:
         if self._registration_order is None:
             errors = self.validate_dependencies()
             if errors:
-                raise ValueError(f"Cannot determine registration order due to dependency errors: {errors}")
-            # Get the raw order from topological sort
-            raw_order = topological_sort(self.dependencies)
-            # Add app label to each model name
-            self._registration_order = [f"{self.app_label}.{model_name}" for model_name in raw_order]
+                logger.warning(f"The following models are referenced but not available: {errors}")
+                logger.warning("These will be appended to context. and removed from the dependency graph.")
+                #for error in errors:
+                #    del self.dependencies[error]
+                
+            # Create a copy of dependencies that only includes models that are in filtered_models
+            filtered_dependencies = {}
+            for model_name in self.dependencies:
+                # Only include dependencies for models that exist in filtered_models
+                if model_name in self.filtered_models:
+                    filtered_dependencies[model_name] = set()
+                    # Only include dependencies that exist in filtered_models
+                    for dep in self.dependencies[model_name]:
+                        if dep in self.filtered_models:
+                            filtered_dependencies[model_name].add(dep)
+            
+            # Get the raw order from topological sort using the filtered dependencies
+            raw_order = topological_sort(filtered_dependencies)
+            # Store the unqualified model names order
+            self._registration_order = raw_order
+            # Return with app label for logging purposes
+            registration_models = "\n".join([f"  - {model}" for model in raw_order])
+            logger.info(f"Registration order: \n{registration_models}")
         return self._registration_order
+
+    def get_qualified_registration_order(self) -> list[str]:
+        """
+        Get the fully qualified registration order (with app label).
+
+        Returns:
+            List of model names with app label prefix in dependency order
+        """
+        return [f"{self.app_label}.{model_name}" for model_name in self.get_registration_order()]
+
+    def get_models_in_registration_order(self) -> list[type[BaseModel]]:
+        """Get all discovered Pydantic models in registration order."""
+        try:
+            return [self.filtered_models[model_name] for model_name in self.get_registration_order()]
+        except KeyError as e:
+            logger.error(f"Model {e} not found in filtered models")
+            logger.error(f"Available models: {self.filtered_models.keys()}")
+            raise
 
     def get_app_dependencies(self) -> dict[str, set[str]]:
         """
@@ -483,13 +491,13 @@ class ModelDiscovery:
         return dict(app_deps)
 
     def get_model_dependencies_recursive(
-        self, model: type[models.Model], app_label: str, visited: set[str] | None = None
+        self, model: type[BaseModel], app_label: str, visited: set[str] | None = None
     ) -> set[str]:
         """
         Get all dependencies for a model recursively.
 
         Args:
-            model: The Django model to analyze
+            model: The Pydantic model to analyze
             app_label: The app label to use for model references
             visited: Set of already visited models to prevent infinite recursion
 
@@ -506,43 +514,24 @@ class ModelDiscovery:
 
         visited.add(model_name)
 
-        # Get all fields from the model
-        for field in model._meta.get_fields():
-            # Handle foreign key and many-to-many relationships
-            if isinstance(field, (models.ForeignKey | models.ManyToManyField)):
-                related_model = field.remote_field.model
-                related_name = normalize_model_reference(related_model.__name__)
-                deps.add(related_name)
-                # Recursively get dependencies of the related model
-                deps.update(self.get_model_dependencies_recursive(related_model, app_label, visited))
-
-            # Handle context-based dependencies (non-serializable fields)
-            elif isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
-                # Get the original Pydantic model class
-                pydantic_class = None
-                if model._meta.model_name:
-                    model_name_lower = model._meta.model_name.lower()
-                    for model_name, pydantic_model in self.normalized_models.items():
-                        if model_name_lower == model_name.lower():
-                            pydantic_class = pydantic_model
-                            break
-
-                if pydantic_class:
-                    # Check the Pydantic field's type annotation
-                    field_info = pydantic_class.model_fields.get(field.name)
-                    if field_info and field_info.annotation:
-                        annotation = field_info.annotation
-                        # Handle direct model references
-                        if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                            deps.add(normalize_model_reference(annotation.__name__))
-                        # Handle generic types (List, Dict, etc.)
-                        elif hasattr(annotation, "__origin__"):
-                            origin = get_origin(annotation)
-                            args = get_args(annotation)
-                            if origin in (list, dict):
-                                for arg in args:
-                                    if inspect.isclass(arg) and issubclass(arg, BaseModel):
-                                        deps.add(normalize_model_reference(arg.__name__))
+        # For Pydantic models, analyze field dependencies
+        if is_pydantic_model(model):
+            for field_name, field in model.model_fields.items():
+                annotation = field.annotation
+                if annotation is not None:
+                    # Handle direct model references
+                    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                        dep_name = normalize_model_reference(annotation.__name__)
+                        deps.add(dep_name)
+                    # Handle generic types (List, Dict, etc.)
+                    elif hasattr(annotation, "__origin__"):
+                        origin = get_origin(annotation)
+                        args = get_args(annotation)
+                        if origin in (list, dict):
+                            for arg in args:
+                                if inspect.isclass(arg) and issubclass(arg, BaseModel):
+                                    dep_name = normalize_model_reference(arg.__name__)
+                                    deps.add(dep_name)
 
         return deps
 
@@ -553,10 +542,6 @@ class ModelDiscovery:
     def get_django_models(self, app_label: str = "django_llm") -> dict[str, type[models.Model]]:
         """Get all registered Django models for the given app label."""
         return self.django_models
-
-    def get_models_in_registration_order(self) -> list[type[BaseModel]]:
-        """Get all discovered Pydantic models in registration order."""
-        return [self.discovered_models[model_name] for model_name in self.get_registration_order()]
 
     def clear(self) -> None:
         """Clear the registry, removing all discovered and registered models."""

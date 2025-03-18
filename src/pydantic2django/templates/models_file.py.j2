@@ -30,9 +30,9 @@ from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 # List of all generated models
 __all__ = [
     {% for model in all_models %}
-    "{{ model }}",
-    {% if model_has_context[model] %}
-    "{{ model }}Context",
+    {{ model }},
+    {% if model_has_context[model.strip("'")] %}
+    "{{ model.strip("'") }}Context",
     {% endif %}
     {% endfor %}
 ]

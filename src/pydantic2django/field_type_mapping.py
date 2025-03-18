@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -41,7 +41,7 @@ class TypeMappingDefinition:
     max_length: Optional[int] = None
     is_relationship: bool = False
     on_delete: Optional[Any] = None  # For ForeignKey relationships
-    field_kwargs: dict[str, Any] = {}
+    field_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """
@@ -197,6 +197,13 @@ class TypeMappingDefinition:
                     return True
             # For collection types, match with their base types
             elif origin in (list, dict, set):
+                # For parameterized collection types, match with the appropriate JSON field
+                if self.django_field == models.JSONField:
+                    if (origin is set and self.python_type is set) or \
+                       (origin is dict and self.python_type is dict) or \
+                       (origin is list and self.python_type is list):
+                        return True
+                    
                 args = get_args(python_type)
                 # For relationship fields, check if the inner type matches
                 if self.is_relationship and args:

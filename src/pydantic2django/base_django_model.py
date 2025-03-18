@@ -24,10 +24,7 @@ class Pydantic2DjangoBase(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
-    object_type = models.CharField(
-        max_length=255,
-        help_text="Fully qualified name of the Pydantic model class",
-    )
+    object_type = "" #Fully Qualified Name of the Pydantic model class
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
