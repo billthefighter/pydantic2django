@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
+from enum import Enum
 from logging import getLogger
 from pathlib import Path
 from typing import (
@@ -41,6 +42,7 @@ class TypeMappingDefinition:
     is_relationship: bool = False
     relationship_type: Optional[str] = None  # "foreign_key", "many_to_many", or "one_to_one"
     on_delete: Optional[Any] = None  # For ForeignKey relationships
+    field_kwargs: dict[str, Any] = {}
 
     # Class methods for creating common field types
     @classmethod
@@ -102,6 +104,39 @@ class TypeMappingDefinition:
             relationship_type="one_to_one",
             on_delete=models.CASCADE,
         )
+
+    @classmethod
+    def enum_field(cls, python_type: type[Enum]) -> "TypeMappingDefinition":
+        """Create an EnumField mapping."""
+        enum_values = [item.value for item in python_type]
+
+        # Determine the type of the enum values
+        if all(isinstance(val, int) for val in enum_values):
+            # Integer enum
+            return cls(
+                python_type=python_type,
+                django_field=models.IntegerField,
+                field_kwargs={"choices": [(item.value, item.name) for item in enum_values]},
+            )
+        elif all(isinstance(val, (str, int)) for val in enum_values):
+            # String enum
+            max_length = max(len(str(val)) for val in enum_values if isinstance(val, str))
+            return cls(
+                python_type=python_type,
+                django_field=models.CharField,
+                max_length=max_length,
+                field_kwargs={"choices": [(item.value, item.name) for item in enum_values]},
+            )
+        elif all(isinstance(val, (str, int, float)) for val in enum_values):
+            # Mixed type enum - use TextField with choices
+            return cls(
+                python_type=python_type,
+                django_field=models.TextField,
+                field_kwargs={"choices": [(str(item.value), item.name) for item in enum_values]},
+            )
+        # TODO: Add support for other enum types
+        else:
+            raise ValueError(f"Unsupported enum type: {python_type}")
 
     def matches_type(self, python_type: Any) -> bool:
         """Check if this definition matches the given Python type."""
@@ -246,6 +281,8 @@ class TypeMapper:
         TypeMappingDefinition(python_type=UUID, django_field=models.UUIDField),
         TypeMappingDefinition(python_type=EmailStr, django_field=models.EmailField, max_length=254),
         TypeMappingDefinition(python_type=bytes, django_field=models.BinaryField),
+        # Enum type
+        TypeMappingDefinition.enum_field(Enum),
         # Collection types
         TypeMappingDefinition.json_field(dict),
         TypeMappingDefinition.json_field(list),
@@ -255,6 +292,7 @@ class TypeMapper:
         TypeMappingDefinition.char_field(type),
         TypeMappingDefinition(python_type=IPvAnyAddress, django_field=models.GenericIPAddressField),
         TypeMappingDefinition.json_field(Json),
+        TypeMappingDefinition.enum_field(Enum),
         # Relationship base types - these serve as templates for dynamic relationships
         TypeMappingDefinition(
             python_type=BaseModel,  # Base type for Pydantic models
