@@ -200,9 +200,19 @@ class DjangoFieldFactory:
                     # Instantiate the field class instead of just assigning the class itself
                     result.django_field = result.type_mapping_definition.get_django_field(result.field_kwargs)
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert Django field for {field_name}: {e} - saving this result to context."
-                    )
+                    # Don't silently fall back to contextual fields for parameter errors
+                    # These indicate a bug that should be fixed
+                    error_msg = f"Failed to convert Django field for {field_name}: {e}"
+                    logger.warning(f"{error_msg} - saving this result to context.")
+
+                    # For parameter errors, raise an exception
+                    if "got an unexpected keyword argument" in str(
+                        e
+                    ) or "missing 1 required positional argument" in str(e):
+                        logger.error(f"Parameter error detected: {e}")
+                        raise ValueError(error_msg) from e
+
+                    # For other errors, still mark as contextual field
                     result.context_field = field_info
 
             return result
@@ -244,7 +254,13 @@ class DjangoFieldFactory:
 
             # Include detailed error message with the exception
             result.error_str = detailed_msg
-            # Instead of raising, mark as a context field and return
+
+            # Don't fall back to contextual fields for parameter errors
+            if "got an unexpected keyword argument" in str(e) or "missing 1 required positional argument" in str(e):
+                logger.error(f"Parameter error detected: {e}")
+                raise ValueError(detailed_msg) from e
+
+            # For other errors, still mark as contextual field and return
             result.context_field = field_info
             return result
 
@@ -263,11 +279,11 @@ class DjangoFieldFactory:
         # Get the model class based on the field type
         origin = get_origin(field_type)
         args = get_args(field_type)
-        # If the field is a list, the model class is the first argument
+
+        # Handle different relationship types based on origin
         if origin is list and args:
             # For list[Model] - many-to-many relationship
             model_class = args[0]
-        # If the field is a dict, the model class is the second argument
         elif origin is dict and len(args) == 2:
             # For dict[str, Model] - many-to-many with key
             model_class = args[1]
@@ -306,11 +322,13 @@ class DjangoFieldFactory:
 
         field_kwargs["related_name"] = related_name
 
-        # Handle on_delete behavior
-        field_kwargs["on_delete"] = models.CASCADE
-
         # Handle to_field behavior - Fix: Use a string instead of a tuple
         field_kwargs["to"] = f"{result.app_label}.{target_model_name}"
+
+        # Add on_delete only for ForeignKey and OneToOneField, not for ManyToManyField
+        django_field = result.type_mapping_definition.django_field
+        if django_field == models.ForeignKey or django_field == models.OneToOneField:
+            field_kwargs["on_delete"] = models.CASCADE
 
         # Set the django_field directly from the type mapping definition's django_field class
         if result.type_mapping_definition and result.type_mapping_definition.django_field:
@@ -318,9 +336,17 @@ class DjangoFieldFactory:
                 # First populate the field, then create it
                 result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
             except Exception as e:
-                # Log and return error if field creation fails
-                logger.warning(f"Failed to create Django field for {field_name}: {e}")
-                result.error_str = f"Failed to create Django field for {field_name}: {e}"
+                # Log the error
+                error_msg = f"Failed to create Django field for {field_name}: {e}"
+                logger.warning(error_msg)
+                result.error_str = error_msg
+
+                # Don't fall back to contextual fields for parameter errors - these indicate a bug
+                # that should be fixed rather than silently treating as contextual
+                if "got an unexpected keyword argument" in str(e) or "missing 1 required positional argument" in str(e):
+                    raise ValueError(error_msg) from e
+
+                # For other errors, still set as None to allow graceful fallback
                 result.django_field = None
 
         return result

@@ -280,12 +280,12 @@ def test_relationship_field_missing_model(empty_field_factory, relationship_mode
     # Test relationship fields with empty relationship accessor
     for field_name, field_info in user_model.model_fields.items():
         if field_name in ["address", "profile", "tags"]:
-            result = empty_field_factory.convert_field(field_name, field_info)
+            # Now we expect a ValueError for parameter issues like missing 'to'
+            with pytest.raises(ValueError) as excinfo:
+                result = empty_field_factory.convert_field(field_name, field_info)
 
-            # The relationship should fail and be marked as a context field
-            assert result.context_field is not None
-            assert result.django_field is None
-            assert result.error_str is not None  # Should have an error message
+            # Verify the error mentions the missing required parameter
+            assert "missing 1 required positional argument: 'to'" in str(excinfo.value)
 
 
 def test_handle_relationship_field_directly(field_factory, relationship_models):
@@ -713,3 +713,197 @@ def test_chain_relationship_fields():
         rendered_field = edges_result.rendered_django_field
         assert rendered_field is not None
         assert isinstance(rendered_field, models.ManyToManyField)
+
+
+def test_relationship_field_parameters():
+    """
+    Test that relationship fields have the correct parameters for their field type.
+    Specifically, on_delete should only be added to ForeignKey and not to ManyToManyField.
+    """
+
+    # Create model classes
+    class Node(BaseModel):
+        name: str
+
+    class TestModel(BaseModel):
+        # ForeignKey relationship
+        foreign: Node
+        # ManyToMany relationship
+        many: list[Node]
+
+    # Create a relationship accessor with the models
+    accessor = RelationshipConversionAccessor()
+
+    # Create fake Django model for Node
+    django_node = type(
+        "DjangoNode",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "test_app"})},
+    )
+
+    # Create model context
+    node_context = ModelContext(django_model=django_node, pydantic_class=Node)
+
+    # Add model to relationship accessor
+    accessor.available_relationships.append(RelationshipMapper(Node, django_node, node_context))
+
+    # Create field factory with relationships
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Test ForeignKey relationship - should have on_delete
+    foreign_field_info = TestModel.model_fields["foreign"]
+    foreign_result = field_factory.convert_field(
+        field_name="foreign",
+        field_info=foreign_field_info,
+        app_label="test_app",
+    )
+
+    # The field should be mapped as a relationship and include on_delete
+    assert foreign_result.type_mapping_definition is not None
+    assert foreign_result.type_mapping_definition.is_relationship is True
+    assert foreign_result.type_mapping_definition.django_field == models.ForeignKey
+    assert "on_delete" in foreign_result.field_kwargs
+    assert foreign_result.field_kwargs["on_delete"] == models.CASCADE
+
+    # Foreign key field should be created successfully
+    assert foreign_result.django_field is not None
+    assert isinstance(foreign_result.django_field, models.ForeignKey)
+
+    # Test ManyToMany relationship - should NOT have on_delete
+    many_field_info = TestModel.model_fields["many"]
+    many_result = field_factory.convert_field(
+        field_name="many",
+        field_info=many_field_info,
+        app_label="test_app",
+    )
+
+    # The field should be mapped as a relationship but exclude on_delete
+    assert many_result.type_mapping_definition is not None
+    assert many_result.type_mapping_definition.is_relationship is True
+    assert many_result.type_mapping_definition.django_field == models.ManyToManyField
+    # The key assertion: on_delete should not be in the field kwargs
+    assert "on_delete" not in many_result.field_kwargs
+
+    # ManyToMany field should be created successfully
+    assert many_result.django_field is not None
+    assert isinstance(many_result.django_field, models.ManyToManyField)
+
+
+def test_relationship_field_parameter_validation():
+    """
+    Test that verifies ManyToManyField doesn't include the on_delete parameter.
+
+    This test ensures that the fix for the error described in the logs works correctly:
+    "Failed to create Django field for nodes: Field.__init__() got an unexpected keyword argument 'on_delete'"
+    """
+
+    # Create model classes
+    class Node(BaseModel):
+        name: str
+
+    class TestModels(BaseModel):
+        # ForeignKey relationship - should have on_delete
+        single: Node
+        # ManyToMany relationship - should NOT have on_delete
+        many: list[Node]
+
+    # Create relationship accessor
+    accessor = RelationshipConversionAccessor()
+
+    # Create fake Django model for Node
+    django_node = type(
+        "DjangoNode",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "test_app"})},
+    )
+
+    # Create model context and add to accessor
+    node_context = ModelContext(django_model=django_node, pydantic_class=Node)
+    accessor.available_relationships.append(RelationshipMapper(Node, django_node, node_context))
+
+    # Create field factory
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Convert fields
+    single_result = field_factory.convert_field(
+        field_name="single",
+        field_info=TestModels.model_fields["single"],
+        app_label="test_app",
+    )
+
+    many_result = field_factory.convert_field(
+        field_name="many",
+        field_info=TestModels.model_fields["many"],
+        app_label="test_app",
+    )
+
+    # Verify ForeignKey has on_delete parameter
+    assert "on_delete" in single_result.field_kwargs
+    assert single_result.field_kwargs["on_delete"] == models.CASCADE
+
+    # Verify ManyToManyField does NOT have on_delete parameter
+    assert "on_delete" not in many_result.field_kwargs
+
+    # Verify both fields are created successfully
+    assert single_result.django_field is not None
+    assert isinstance(single_result.django_field, models.ForeignKey)
+
+    assert many_result.django_field is not None
+    assert isinstance(many_result.django_field, models.ManyToManyField)
+
+
+def test_error_handling_for_parameter_errors(monkeypatch):
+    """
+    Test that errors related to field parameters are properly raised rather than
+    silently converted to contextual fields.
+    """
+
+    # Create a simple model for testing
+    class SimpleModel(BaseModel):
+        name: str
+
+    # Get field info
+    field_info = SimpleModel.model_fields["name"]
+
+    # Create a field factory
+    field_factory = DjangoFieldFactory(available_relationships=RelationshipConversionAccessor())
+
+    # Monkey patch the TypeMappingDefinition.get_django_field method to raise a parameter error
+    original_get_field = TypeMappingDefinition.get_django_field
+
+    def mock_get_field(self, kwargs=None):
+        # Simulate a parameter error
+        raise TypeError("Field.__init__() got an unexpected keyword argument 'invalid_param'")
+
+    # Apply the monkey patch
+    monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field)
+
+    # The convert_field call should raise a ValueError
+    with pytest.raises(ValueError) as excinfo:
+        field_factory.convert_field(
+            field_name="name",
+            field_info=field_info,
+            app_label="test_app",
+        )
+
+    # Verify the error message mentions the parameter error
+    assert "unexpected keyword argument" in str(excinfo.value)
+
+    # Also test the missing required argument case
+    def mock_get_field_missing_arg(self, kwargs=None):
+        # Simulate a missing argument error
+        raise TypeError("Field.__init__() missing 1 required positional argument: 'to'")
+
+    # Apply the second monkey patch
+    monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field_missing_arg)
+
+    # This should also raise a ValueError
+    with pytest.raises(ValueError) as excinfo:
+        field_factory.convert_field(
+            field_name="name",
+            field_info=field_info,
+            app_label="test_app",
+        )
+
+    # Verify the error message mentions the missing argument
+    assert "missing 1 required positional argument" in str(excinfo.value)
