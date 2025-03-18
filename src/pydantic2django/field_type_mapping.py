@@ -44,6 +44,17 @@ class TypeMappingDefinition:
     on_delete: Optional[Any] = None  # For ForeignKey relationships
     field_kwargs: dict[str, Any] = {}
 
+    def __post_init__(self):
+        """
+        Post-initialization hook to set default values for max_length and field_kwargs.
+        """
+        if self.max_length is None and self.django_field == models.CharField:
+            if isinstance(self.python_type, type) and hasattr(self.python_type, "__name__"):
+                self.max_length = get_default_max_length(self.python_type.__name__, self.django_field)
+            else:
+                # Just assume 255 is fine for any CharField
+                self.max_length = 255
+
     # Class methods for creating common field types
     @classmethod
     def char_field(cls, python_type: PythonType, max_length: int = 255) -> "TypeMappingDefinition":
@@ -136,7 +147,27 @@ class TypeMappingDefinition:
             )
         # TODO: Add support for other enum types
         else:
-            raise ValueError(f"Unsupported enum type: {python_type}")
+            raise ValueError(f"Unsupported enum values: {enum_values}")
+
+    def get_django_field(self, kwargs: Optional[dict[str, Any]] = None) -> models.Field:
+        """
+        Get the Django field type with the given kwargs.
+        If this field has additional kwargs, they will be merged with the kwargs passed in.
+        This is the preferred way to access the field type.
+        Args:
+            kwargs: Additional kwargs for the field
+
+        Returns:
+            The Django field type
+        """
+        if kwargs is None:
+            kwargs = {}
+        # Merge the kwargs with the field_kwargs
+        kwargs.update(self.field_kwargs)
+        # If this is a CharField, set the max_length
+        if self.django_field == models.CharField and "max_length" not in kwargs and self.max_length is not None:
+            kwargs["max_length"] = self.max_length
+        return self.django_field(**kwargs)
 
     def matches_type(self, python_type: Any) -> bool:
         """Check if this definition matches the given Python type."""

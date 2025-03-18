@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Generic, Optional, Union, cast, get_args, get_origin
 
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -278,13 +277,6 @@ class DjangoFieldFactory:
         # Get unified field attributes
         kwargs = cls.process_field_attributes(field_info)
 
-        # Handle Enum types before falling back to TypeMapper
-        if isinstance(field_type, type) and issubclass(field_type, Enum):
-            return cls.handle_enum_field(field_type, kwargs)
-        # TODO: Got here saturday night. Need to consider the logic and flow.
-        # Enum handling and other weird handling is tricky. Maybe move all to
-        # TypeMapper.get_field_attributes?
-
         # Get the field mapping from TypeMapper
         mapping = TypeMapper.get_mapping_for_type(field_type)
         if not mapping:
@@ -302,7 +294,7 @@ class DjangoFieldFactory:
             )
 
         # Create and return the field
-        return mapping.django_field(**kwargs)
+        return mapping.get_django_field(kwargs)
 
     @classmethod
     def process_field_attributes(
@@ -430,41 +422,3 @@ class DjangoFieldFactory:
             return field_class(**field_kwargs)
 
         return None
-
-    @classmethod
-    def handle_enum_field(cls, enum_instance: type[Enum], kwargs: dict[str, Any]) -> models.Field:
-        # TODO: MOving this to TypeMappingDefinition.enum_field?
-        """
-        Create a Django field for an enum.
-
-        Args:
-            enum_instance: The Enum instance
-            kwargs: Additional field attributes
-
-        Returns:
-            A Django field for the Enum
-        """
-        # Get all enum values
-        enum_values = [item.value for item in enum_instance]
-
-        # Determine the type of the enum values
-        if all(isinstance(val, int) for val in enum_values):
-            # Integer enum
-            return models.IntegerField(
-                choices=[(item.value, item.name) for item in enum_instance],
-                **kwargs,
-            )
-        elif all(isinstance(val, (str, int)) for val in enum_values):
-            # String enum
-            max_length = max(len(str(val)) for val in enum_values if isinstance(val, str))
-            return models.CharField(
-                max_length=max_length,
-                choices=[(item.value, item.name) for item in enum_instance],
-                **kwargs,
-            )
-        else:
-            # Mixed type enum - use TextField with choices
-            return models.TextField(
-                choices=[(str(item.value), item.name) for item in enum_instance],
-                **kwargs,
-            )
