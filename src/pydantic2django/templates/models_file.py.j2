@@ -5,6 +5,9 @@ Generated at: {{ generation_timestamp }}
 
 # Django imports
 from django.db import models
+from pydantic import BaseModel
+from typing import Any, TypeVar, cast, TypedDict
+from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
 {% include 'imports_block.py.j2' %}
 

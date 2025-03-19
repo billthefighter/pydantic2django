@@ -21,5 +21,10 @@ from typing import {{ extra_type_imports|join(', ') }}
 {{ import_line }}
 {% endfor %}
 
+# Context class field type imports
+{% for import_line in context_class_imports %}
+{{ import_line }}
+{% endfor %}
+
 # Type variable for model classes
 T = TypeVar('T')

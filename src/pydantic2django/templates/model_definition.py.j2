@@ -5,9 +5,6 @@ from pydantic import BaseModel
 
 from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
-# Import the original Pydantic model for type hints
-from {{ module_path }} import {{ original_name }}
-
 """
 Django model for {{ original_name }}.
 """
@@ -56,10 +53,6 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
         verbose_name = """{{ meta.verbose_name.split('\n')[0] }}"""
         verbose_name_plural = """{{ meta.verbose_name_plural.split('\n')[0] }}"""
         abstract = False
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("object_type_field", "{{ module_path }}.{{ original_name }}")
-        super().__init__(*args, **kwargs)
 
     {% if context_fields %}
     def to_pydantic(self, context: "{{ model_name }}Context") -> {{ original_name }}:

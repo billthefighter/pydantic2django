@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -76,6 +77,7 @@ class StaticDjangoModelGenerator:
         # Track imports for models
         self.extra_type_imports: set[str] = set()
         self.pydantic_imports: set[str] = set()
+        self.context_class_imports: set[str] = set()
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory
@@ -144,6 +146,7 @@ class StaticDjangoModelGenerator:
         # Clear import collections
         self.extra_type_imports = set()
         self.pydantic_imports = set()
+        self.context_class_imports = set()
 
         # Get registration order
         models_in_registration_order = self.discovery.get_models_in_registration_order()
@@ -178,6 +181,26 @@ class StaticDjangoModelGenerator:
                         # Track any special type imports needed for context fields
                         for field_context in carrier.model_context.context_fields:
                             field_type_str = str(field_context.field_type)
+
+                            # Add import for context field type if it's a class
+                            try:
+                                if hasattr(field_context.field_type, "__module__") and hasattr(
+                                    field_context.field_type, "__name__"
+                                ):
+                                    type_module = field_context.field_type.__module__
+                                    type_name = field_context.field_type.__name__
+                                    if not type_module.startswith("typing") and type_name not in [
+                                        "str",
+                                        "int",
+                                        "float",
+                                        "bool",
+                                        "dict",
+                                        "list",
+                                    ]:
+                                        self.context_class_imports.add(f"from {type_module} import {type_name}")
+                            except (AttributeError, TypeError):
+                                pass
+
                             if "Optional[" in field_type_str or field_context.is_optional:
                                 self.extra_type_imports.add("Optional")
                             if "List[" in field_type_str or field_context.is_list:
@@ -193,16 +216,31 @@ class StaticDjangoModelGenerator:
                 logger.error(f"Error generating model definition for {pydantic_model.__name__}: {e}")
                 raise
 
+        # De-duplicate model definitions (remove repeated models like DjangoBaseGraph)
+        unique_model_definitions = []
+        seen_models = set()
+
+        for model_def in model_definitions:
+            match = re.search(r"class (\w+)\(", model_def)
+            if match:
+                model_class_name = match.group(1)
+                if model_class_name not in seen_models:
+                    seen_models.add(model_class_name)
+                    unique_model_definitions.append(model_def)
+            else:
+                unique_model_definitions.append(model_def)
+
         # Render the models file template
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(
             generation_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             context_definitions=context_definitions,
-            model_definitions=model_definitions,
+            model_definitions=unique_model_definitions,
             all_models=model_names,
             model_has_context=model_has_context,
             extra_type_imports=sorted(self.extra_type_imports),
             pydantic_imports=sorted(self.pydantic_imports),
+            context_class_imports=sorted(self.context_class_imports),
         )
 
     def discover_models(self) -> None:
@@ -292,6 +330,12 @@ class StaticDjangoModelGenerator:
 
         model_name = carrier.django_model.__name__
 
+        # Check if we're generating a parametrized generic model
+        # Skip these since they cause duplicates and errors
+        if "[" in model_name or "<" in model_name:
+            logger.warning(f"Skipping parametrized generic model: {model_name}")
+            return ""
+
         # Get fields from the model
         fields = []
         if hasattr(carrier.django_model, "_meta") and hasattr(carrier.django_model._meta, "fields"):
@@ -305,6 +349,8 @@ class StaticDjangoModelGenerator:
                 field_definition = field_definition.replace(
                     "default=<class 'django.db.models.fields.NOT_PROVIDED'>", "null=True"
                 )
+                # Handle default=True case that causes type errors
+                field_definition = field_definition.replace("default=True", "default=True")
                 fields.append((field.name, field_definition))
 
         # Get many-to-many fields safely
@@ -357,8 +403,12 @@ class StaticDjangoModelGenerator:
             or f"{model_name}s",
         }
 
-        # Render the model definition template
+        # Add import for the original Pydantic model
         pydantic_model_name = carrier.pydantic_model.__name__
+        module_path = carrier.pydantic_model.__module__
+        self.pydantic_imports.add(f"from {module_path} import {pydantic_model_name}")
+
+        # Render the model definition template
         template = self.jinja_env.get_template("model_definition.py.j2")
         return template.render(
             model_name=model_name,
@@ -383,6 +433,10 @@ class StaticDjangoModelGenerator:
         # Fix the "to" model references to include app_label
         if "to='" in field_def and f"to='{self.app_label}." not in field_def:
             field_def = field_def.replace("to='", f"to='{self.app_label}.")
+        # Fix double app_label prefixes
+        double_prefix = f"to='{self.app_label}.{self.app_label}."
+        if double_prefix in field_def:
+            field_def = field_def.replace(double_prefix, f"to='{self.app_label}.")
 
         return field_def
 
@@ -414,10 +468,19 @@ class StaticDjangoModelGenerator:
             for field_context in model_context.context_fields:
                 # Sanitize the type representation for display in comments
                 try:
-                    type_name = field_context.field_type.__name__
+                    if hasattr(field_context.field_type, "__name__"):
+                        type_name = field_context.field_type.__name__
+                    else:
+                        type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
+                        # Fix "Optional[Optional]" issues
+                        if "Optional[Optional]" in type_name:
+                            type_name = type_name.replace("Optional[Optional]", "Optional")
                 except (AttributeError, TypeError):
                     # Handle complex types or types without __name__
                     type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
+                    # Fix "Optional[Optional]" issues
+                    if "Optional[Optional]" in type_name:
+                        type_name = type_name.replace("Optional[Optional]", "Optional")
 
                 # Clean up any remaining angle brackets that could cause rendering issues
                 type_name = type_name.replace("<", "[").replace(">", "]")
