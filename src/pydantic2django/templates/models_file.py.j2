@@ -3,6 +3,9 @@ Generated Django models from Pydantic models.
 Generated at: {{ generation_timestamp }}
 """
 
+# Django imports
+from django.db import models
+
 {% include 'imports_block.py.j2' %}
 
 {% if context_definitions %}

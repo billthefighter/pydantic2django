@@ -45,8 +45,8 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
     """
 
     {% for field_name, field_definition in fields %}
-    {% if field_name != 'id' or not field_definition.startswith('models.BigAutoField') and not field_definition.startswith('models.UUIDField') %}
-    {{ field_name }} = {{ field_definition }}
+    {% if field_name != 'id' and field_name != 'object_type' and field_name != 'object_type_field' and not field_definition.startswith('models.BigAutoField') and not field_definition.startswith('models.UUIDField') %}
+    {{ field_name }} = {{ field_definition|replace('to=\'', 'to=\''~meta.app_label~'.')|replace('default=<class \'django.db.models.fields.NOT_PROVIDED\'>', 'null=True') }}
     {% endif %}
     {% endfor %}
 

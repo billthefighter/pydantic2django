@@ -168,7 +168,7 @@ class StaticDjangoModelGenerator:
                     module_path = pydantic_model.__module__
                     self.pydantic_imports.add(f"from {module_path} import {model_name}")
 
-                    # Track if this model has a context class
+                    # Check if this model has a non-empty context class
                     has_context = bool(context_def.strip())
                     model_has_context[model_name] = has_context
 
@@ -178,9 +178,9 @@ class StaticDjangoModelGenerator:
                         # Track any special type imports needed for context fields
                         for field_context in carrier.model_context.context_fields:
                             field_type_str = str(field_context.field_type)
-                            if "Optional[" in field_type_str:
+                            if "Optional[" in field_type_str or field_context.is_optional:
                                 self.extra_type_imports.add("Optional")
-                            if "List[" in field_type_str:
+                            if "List[" in field_type_str or field_context.is_list:
                                 self.extra_type_imports.add("List")
                             if "Dict[" in field_type_str:
                                 self.extra_type_imports.add("Dict")
@@ -267,8 +267,12 @@ class StaticDjangoModelGenerator:
     def generate_definitions_from_carrier(self, carrier: DjangoModelFactoryCarrier) -> tuple[str, str]:
         if carrier.django_model and carrier.model_context:
             model_def = self.generate_model_definition(carrier)
-            context_def = self.generate_context_class(carrier.model_context)
-            return model_def, context_def
+            # Only generate context class if there are context fields
+            if carrier.model_context.context_fields:
+                context_def = self.generate_context_class(carrier.model_context)
+                return model_def, context_def
+            else:
+                return model_def, ""
         else:
             return "", ""
 
@@ -293,10 +297,14 @@ class StaticDjangoModelGenerator:
         if hasattr(carrier.django_model, "_meta") and hasattr(carrier.django_model._meta, "fields"):
             for field in carrier.django_model._meta.fields:
                 # Skip the fields from Pydantic2DjangoBaseClass
-                if field.name in ["id", "name", "object_type", "created_at", "updated_at"]:
+                if field.name in ["id", "name", "object_type", "object_type_field", "created_at", "updated_at"]:
                     continue
 
                 field_definition = self.generate_field_definition(field)
+                # Replace NOT_PROVIDED with null=True
+                field_definition = field_definition.replace(
+                    "default=<class 'django.db.models.fields.NOT_PROVIDED'>", "null=True"
+                )
                 fields.append((field.name, field_definition))
 
         # Get many-to-many fields safely
@@ -308,6 +316,10 @@ class StaticDjangoModelGenerator:
                 if many_to_many:
                     for field in many_to_many:
                         field_definition = self.generate_field_definition(field)
+                        # Replace NOT_PROVIDED with null=True
+                        field_definition = field_definition.replace(
+                            "default=<class 'django.db.models.fields.NOT_PROVIDED'>", "null=True"
+                        )
                         fields.append((field.name, field_definition))
         except Exception as e:
             logger.exception(f"Error processing many-to-many fields for {model_name}: {e}")
@@ -366,7 +378,13 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the field
         """
-        return FieldSerializer.serialize_field(field)
+        field_def = FieldSerializer.serialize_field(field)
+
+        # Fix the "to" model references to include app_label
+        if "to='" in field_def and f"to='{self.app_label}." not in field_def:
+            field_def = field_def.replace("to='", f"to='{self.app_label}.")
+
+        return field_def
 
     def generate_context_class(self, model_context: ModelContext) -> str:
         """
@@ -381,6 +399,11 @@ class StaticDjangoModelGenerator:
         """
         if model_context is None or not hasattr(model_context, "django_model") or model_context.django_model is None:
             logger.warning("Cannot generate context class for None model_context or missing django_model")
+            return ""
+
+        # Skip generating context class if there are no context fields
+        if not model_context.context_fields:
+            logger.info(f"Skipping context class for {model_context.django_model.__name__} - no context fields")
             return ""
 
         template = self.jinja_env.get_template("context_class.py.j2")
