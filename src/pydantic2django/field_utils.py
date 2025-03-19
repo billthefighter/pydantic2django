@@ -13,13 +13,14 @@ from typing import (
     Optional,
     TypeAlias,
     Union,
+    get_args,
+    get_origin,
 )
 
 from django.db import models
 from django.utils.functional import Promise
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from typing import get_args, get_origin
 
 from pydantic2django.types import is_pydantic_model, is_serializable_type
 
@@ -145,6 +146,11 @@ class FieldSerializer:
                 # Use direct class reference for type checking
                 if "." in related_model_name:
                     # If it's a cross-app reference, keep it as a string
+                    # Avoid duplicate app labels (app_name.app_name.model_name)
+                    if "." in related_model_name and related_model_name.count(".") > 1:
+                        app_label, remainder = related_model_name.split(".", 1)
+                        if remainder.startswith(f"{app_label}."):
+                            related_model_name = f"{app_label}.{remainder.split('.', 1)[1]}"
                     params.append(f"to='{related_model_name}'")
                 else:
                     # Direct class reference for same-app models
@@ -169,6 +175,11 @@ class FieldSerializer:
                 # Use direct class reference for type checking
                 if "." in related_model_name:
                     # If it's a cross-app reference, keep it as a string
+                    # Avoid duplicate app labels (app_name.app_name.model_name)
+                    if "." in related_model_name and related_model_name.count(".") > 1:
+                        app_label, remainder = related_model_name.split(".", 1)
+                        if remainder.startswith(f"{app_label}."):
+                            related_model_name = f"{app_label}.{remainder.split('.', 1)[1]}"
                     params.append(f"to='{related_model_name}'")
                 else:
                     # Direct class reference for same-app models

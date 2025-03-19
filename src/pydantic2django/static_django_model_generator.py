@@ -433,7 +433,8 @@ class StaticDjangoModelGenerator:
         # Fix the "to" model references to include app_label
         if "to='" in field_def and f"to='{self.app_label}." not in field_def:
             field_def = field_def.replace("to='", f"to='{self.app_label}.")
-        # Fix double app_label prefixes
+
+        # Fix double app_label prefixes - e.g., 'django_llm.django_llm.' to just 'django_llm.'
         double_prefix = f"to='{self.app_label}.{self.app_label}."
         if double_prefix in field_def:
             field_def = field_def.replace(double_prefix, f"to='{self.app_label}.")
@@ -466,18 +467,38 @@ class StaticDjangoModelGenerator:
         field_definitions = []
         if hasattr(model_context, "context_fields"):
             for field_context in model_context.context_fields:
-                # Sanitize the type representation for display in comments
-                try:
-                    if hasattr(field_context.field_type, "__name__"):
-                        type_name = field_context.field_type.__name__
+                # Detect Callable types
+                type_str = str(field_context.field_type)
+
+                # Check for Callable types
+                if "Callable" in type_str or "typing.Callable" in type_str:
+                    type_name = "Callable"
+                    self.extra_type_imports.add("Callable")
+                # Handle Optional types better by examining the string representation
+                elif "Optional" in type_str and field_context.is_optional:
+                    # Extract what's inside Optional[...]
+                    inner_match = re.search(r"Optional\[(.*?)\]", type_str)
+                    if inner_match:
+                        inner_type = inner_match.group(1)
+                        # Remove any nested Optional
+                        if inner_type.startswith("Optional["):
+                            inner_match2 = re.search(r"Optional\[(.*?)\]", inner_type)
+                            if inner_match2:
+                                inner_type = inner_match2.group(1)
+                        type_name = inner_type
                     else:
-                        type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
-                        # Fix "Optional[Optional]" issues
-                        if "Optional[Optional]" in type_name:
-                            type_name = type_name.replace("Optional[Optional]", "Optional")
-                except (AttributeError, TypeError):
-                    # Handle complex types or types without __name__
-                    type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
+                        # Just use a simple type name if we can't parse it
+                        if hasattr(field_context.field_type, "__name__"):
+                            type_name = field_context.field_type.__name__
+                        else:
+                            type_name = "Any"
+                            self.extra_type_imports.add("Any")
+                # Default case - use the type's name if available
+                elif hasattr(field_context.field_type, "__name__"):
+                    type_name = field_context.field_type.__name__
+                # Last resort - use string representation
+                else:
+                    type_name = type_str.replace("<", "[").replace(">", "]")
                     # Fix "Optional[Optional]" issues
                     if "Optional[Optional]" in type_name:
                         type_name = type_name.replace("Optional[Optional]", "Optional")
