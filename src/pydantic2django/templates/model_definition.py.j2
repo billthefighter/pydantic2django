@@ -8,6 +8,10 @@ from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 # Import the original Pydantic model for type hints
 from {{ module_path }} import {{ original_name }}
 
+"""
+Django model for {{ original_name }}.
+"""
+
 {% if context_fields %}
 class {{ model_name }}Context(TypedDict):
     """Required context fields for converting {{ model_name }} back to {{ original_name }}."""
@@ -30,11 +34,11 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
     Example:
         ```python
         django_obj = {{ model_name }}.objects.get(...)
-        context: {{ model_name }}Context = {
+        context = {{ model_name }}Context.create(
             {% for field in context_fields %}
-            "{{ field }}": value,  # Required
+            {{ field }}=value,  # Required
             {% endfor %}
-        }
+        )
         pydantic_obj = django_obj.to_pydantic(context=context)
         ```
     {% endif %}
@@ -58,13 +62,13 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
         super().__init__(*args, **kwargs)
 
     {% if context_fields %}
-    def to_pydantic(self, context: {{ model_name }}Context) -> {{ original_name }}:
+    def to_pydantic(self, context: "{{ model_name }}Context") -> {{ original_name }}:
         """
         Convert this Django model to a Pydantic object.
 
         Args:
-            context: Dictionary containing values for non-serializable fields.
-                    Required fields are typed through {{ model_name }}Context.
+            context: Context instance containing values for non-serializable fields.
+                    Required for this model because it has non-serializable fields.
 
         Returns:
             The corresponding {{ original_name }} object

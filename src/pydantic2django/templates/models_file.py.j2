@@ -3,24 +3,14 @@ Generated Django models from Pydantic models.
 Generated at: {{ generation_timestamp }}
 """
 
-from typing import Any, TypeVar, cast, TypedDict
+{% include 'imports_block.py.j2' %}
 
-from django.db import models
-from pydantic import BaseModel
-from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
-
-
-{% if imports %}
-# Additional imports
-{% for import_line in imports %}
-{{ import_line }}
-{% endfor %}
-{% endif %}
-
+{% if context_definitions %}
 # Context classes for models with non-serializable fields
 {% for context_class in context_definitions %}
 {{ context_class }}
 {% endfor %}
+{% endif %}
 
 # Generated Django models
 {% for model_definition in model_definitions %}

@@ -72,6 +72,11 @@ class StaticDjangoModelGenerator:
         self.field_factory = DjangoFieldFactory(available_relationships=self.relationship_accessor)
         self.django_model_factory = DjangoModelFactory(field_factory=self.field_factory)
         self.carriers: list[DjangoModelFactoryCarrier] = []
+
+        # Track imports for models
+        self.extra_type_imports: set[str] = set()
+        self.pydantic_imports: set[str] = set()
+
         # Initialize Jinja2 environment
         # First look for templates in the package directory
         package_templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -136,6 +141,10 @@ class StaticDjangoModelGenerator:
         self.discover_models()
         self.discovery.analyze_dependencies(self.app_label)
 
+        # Clear import collections
+        self.extra_type_imports = set()
+        self.pydantic_imports = set()
+
         # Get registration order
         models_in_registration_order = self.discovery.get_models_in_registration_order()
 
@@ -155,12 +164,28 @@ class StaticDjangoModelGenerator:
                     model_name = pydantic_model.__name__
                     model_names.append(f"'{model_name}'")
 
+                    # Add import for the Pydantic model
+                    module_path = pydantic_model.__module__
+                    self.pydantic_imports.add(f"from {module_path} import {model_name}")
+
                     # Track if this model has a context class
                     has_context = bool(context_def.strip())
                     model_has_context[model_name] = has_context
 
-                    if has_context:
+                    if has_context and carrier.model_context is not None:
                         context_definitions.append(context_def)
+
+                        # Track any special type imports needed for context fields
+                        for field_context in carrier.model_context.context_fields:
+                            field_type_str = str(field_context.field_type)
+                            if "Optional[" in field_type_str:
+                                self.extra_type_imports.add("Optional")
+                            if "List[" in field_type_str:
+                                self.extra_type_imports.add("List")
+                            if "Dict[" in field_type_str:
+                                self.extra_type_imports.add("Dict")
+                            if "Union[" in field_type_str:
+                                self.extra_type_imports.add("Union")
                 else:
                     logger.warning(f"Skipping model {pydantic_model.__name__} due to errors")
 
@@ -168,24 +193,16 @@ class StaticDjangoModelGenerator:
                 logger.error(f"Error generating model definition for {pydantic_model.__name__}: {e}")
                 raise
 
-        # Prepare imports
-        imports = [
-            "import uuid",
-            "import importlib",
-            "from typing import Any, Dict, List, Optional, Union, TypeVar",
-            "from dataclasses import dataclass, field",
-            "from pydantic2django.context_storage import ModelContext, FieldContext",
-        ]
-
         # Render the models file template
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(
             generation_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            imports=imports,
             context_definitions=context_definitions,
             model_definitions=model_definitions,
             all_models=model_names,
             model_has_context=model_has_context,
+            extra_type_imports=sorted(self.extra_type_imports),
+            pydantic_imports=sorted(self.pydantic_imports),
         )
 
     def discover_models(self) -> None:
@@ -245,6 +262,7 @@ class StaticDjangoModelGenerator:
                 return None
         except Exception as e:
             logger.error(f"Error creating Django model for {pydantic_model.__name__}: {e}")
+            return None
 
     def generate_definitions_from_carrier(self, carrier: DjangoModelFactoryCarrier) -> tuple[str, str]:
         if carrier.django_model and carrier.model_context:
@@ -264,25 +282,33 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the model
         """
+        if carrier.django_model is None:
+            logger.warning("Cannot generate model definition for None django_model")
+            return ""
+
         model_name = carrier.django_model.__name__
 
         # Get fields from the model
         fields = []
-        for field in carrier.django_model._meta.fields:
-            # Skip the fields from Pydantic2DjangoBaseClass
-            if field.name in ["id", "name", "object_type", "created_at", "updated_at"]:
-                continue
+        if hasattr(carrier.django_model, "_meta") and hasattr(carrier.django_model._meta, "fields"):
+            for field in carrier.django_model._meta.fields:
+                # Skip the fields from Pydantic2DjangoBaseClass
+                if field.name in ["id", "name", "object_type", "created_at", "updated_at"]:
+                    continue
 
-            field_definition = self.generate_field_definition(field)
-            fields.append((field.name, field_definition))
+                field_definition = self.generate_field_definition(field)
+                fields.append((field.name, field_definition))
 
         # Get many-to-many fields safely
         try:
-            if hasattr(carrier.django_model._meta, "many_to_many"):
-                many_to_many = getattr(carrier.django_model._meta, "many_to_many", [])
-                for field in many_to_many:
-                    field_definition = self.generate_field_definition(field)
-                    fields.append((field.name, field_definition))
+            if hasattr(carrier.django_model, "_meta"):
+                meta = carrier.django_model._meta
+                # Use safer getattr to avoid linter errors
+                many_to_many = getattr(meta, "many_to_many", [])
+                if many_to_many:
+                    for field in many_to_many:
+                        field_definition = self.generate_field_definition(field)
+                        fields.append((field.name, field_definition))
         except Exception as e:
             logger.exception(f"Error processing many-to-many fields for {model_name}: {e}")
 
@@ -298,10 +324,25 @@ class StaticDjangoModelGenerator:
 
         # Prepare meta information
         meta = {
-            "db_table": carrier.django_model._meta.db_table or f"{self.app_label}_{model_name.lower()}",
+            "db_table": (
+                getattr(carrier.django_model._meta, "db_table", None)
+                if hasattr(carrier.django_model, "_meta")
+                else None
+            )
+            or f"{self.app_label}_{model_name.lower()}",
             "app_label": self.app_label,
-            "verbose_name": carrier.django_model._meta.verbose_name or model_name,
-            "verbose_name_plural": carrier.django_model._meta.verbose_name_plural or f"{model_name}s",
+            "verbose_name": (
+                getattr(carrier.django_model._meta, "verbose_name", None)
+                if hasattr(carrier.django_model, "_meta")
+                else None
+            )
+            or model_name,
+            "verbose_name_plural": (
+                getattr(carrier.django_model._meta, "verbose_name_plural", None)
+                if hasattr(carrier.django_model, "_meta")
+                else None
+            )
+            or f"{model_name}s",
         }
 
         # Render the model definition template
@@ -338,41 +379,46 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the context class
         """
+        if model_context is None or not hasattr(model_context, "django_model") or model_context.django_model is None:
+            logger.warning("Cannot generate context class for None model_context or missing django_model")
+            return ""
+
         template = self.jinja_env.get_template("context_class.py.j2")
 
         # Prepare field definitions
         field_definitions = []
-        for field_context in model_context.context_fields:
-            # Sanitize the type representation for display in comments
-            try:
-                type_name = field_context.field_type.__name__
-            except (AttributeError, TypeError):
-                # Handle complex types or types without __name__
-                type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
+        if hasattr(model_context, "context_fields"):
+            for field_context in model_context.context_fields:
+                # Sanitize the type representation for display in comments
+                try:
+                    type_name = field_context.field_type.__name__
+                except (AttributeError, TypeError):
+                    # Handle complex types or types without __name__
+                    type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
 
-            # Clean up any remaining angle brackets that could cause rendering issues
-            type_name = type_name.replace("<", "[").replace(">", "]")
+                # Clean up any remaining angle brackets that could cause rendering issues
+                type_name = type_name.replace("<", "[").replace(">", "]")
 
-            # Handle any special characters that might cause formatting issues
-            type_name = type_name.strip().replace(",", ", ")
+                # Handle any special characters that might cause formatting issues
+                type_name = type_name.strip().replace(",", ", ")
 
-            # Ensure metadata is a dict and doesn't contain problematic characters
-            metadata = {}
-            if field_context.additional_metadata:
-                for k, v in field_context.additional_metadata.items():
-                    if isinstance(v, str):
-                        metadata[k] = v.replace("\n", " ").replace("\r", "")
-                    else:
-                        metadata[k] = v
+                # Ensure metadata is a dict and doesn't contain problematic characters
+                metadata = {}
+                if field_context.additional_metadata:
+                    for k, v in field_context.additional_metadata.items():
+                        if isinstance(v, str):
+                            metadata[k] = v.replace("\n", " ").replace("\r", "")
+                        else:
+                            metadata[k] = v
 
-            field_def = {
-                "name": field_context.field_name,
-                "type": type_name,
-                "is_optional": field_context.is_optional,
-                "is_list": field_context.is_list,
-                "metadata": metadata,
-            }
-            field_definitions.append(field_def)
+                field_def = {
+                    "name": field_context.field_name,
+                    "type": type_name,
+                    "is_optional": field_context.is_optional,
+                    "is_list": field_context.is_list,
+                    "metadata": metadata,
+                }
+                field_definitions.append(field_def)
 
         return template.render(
             model_name=model_context.django_model.__name__,

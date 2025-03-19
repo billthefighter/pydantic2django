@@ -1,0 +1,28 @@
+"""
+Imports for generated models and context classes.
+"""
+# Standard library imports
+import uuid
+import importlib
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from dataclasses import dataclass, field
+
+# Django imports
+from django.db import models
+
+# Pydantic2Django imports
+from pydantic2django.base_django_model import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject
+from pydantic2django.context_storage import ModelContext, FieldContext
+
+# Additional type imports
+{% if extra_type_imports %}
+from typing import {{ extra_type_imports|join(', ') }}
+{% endif %}
+
+# Original Pydantic model imports
+{% for import_line in pydantic_imports %}
+{{ import_line }}
+{% endfor %}
+
+# Type variable for model classes
+T = TypeVar('T')
