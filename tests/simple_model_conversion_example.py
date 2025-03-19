@@ -78,7 +78,7 @@ if not settings.configured:
 # Now import other modules that depend on Django
 from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
 from inspect import isclass
-from tests.mock_discovery import MockDiscovery, register_model, get_discovered_models
+from mock_discovery import MockDiscovery, register_model, get_discovered_models
 
 
 def generate_models():

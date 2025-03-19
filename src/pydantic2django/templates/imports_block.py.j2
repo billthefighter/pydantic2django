@@ -4,8 +4,12 @@ Imports for generated models and context classes.
 # Standard library imports
 import uuid
 import importlib
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast, TypedDict
 from dataclasses import dataclass, field
+
+# Django and Pydantic imports
+from django.db import models
+from pydantic import BaseModel
 
 # Pydantic2Django imports
 from pydantic2django.base_django_model import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject

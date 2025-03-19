@@ -6,7 +6,7 @@ class {{ model_name }}Context(ModelContext):
     """
     model_name: str = "{{ model_name }}"
     pydantic_class: Type = {{ pydantic_class }}
-    django_model: Type[models.Model] = None  # Will be set during model registration
+    django_model: Type[models.Model]
     context_fields: list[FieldContext] = field(default_factory=list)
 
     def __post_init__(self):
@@ -23,18 +23,20 @@ class {{ model_name }}Context(ModelContext):
 {% if field_definitions %}
     @classmethod
     def create(cls,
-        {% for field in field_definitions %}{{ field.name }}: {% if field.is_optional %}Optional[{{ field.type }}]{% else %}{{ field.type }}{% endif %}{% if not loop.last %},
-        {% endif %}{% endfor %}
+        django_model: Type[models.Model],
+{% for field in field_definitions %}        {{ field.name }}: {% if field.is_optional %}Optional[{{ field.type }}]{% else %}{{ field.type }}{% endif %}{% if not loop.last %},
+{% endif %}{% endfor %}
     ) -> "{{ model_name }}Context":
         """
         Create a context instance with the required field values.
 
         Args:
+            django_model: The Django model class
 {% for field in field_definitions %}            {{ field.name }}: Value for {{ field.name }} field
 {% endfor %}        Returns:
             A context instance with all required field values set
         """
-        context = cls()
+        context = cls(django_model=django_model)
         {% for field in field_definitions %}
         context.set_value("{{ field.name }}", {{ field.name }})
         {% endfor %}

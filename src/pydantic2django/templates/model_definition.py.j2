@@ -1,21 +1,6 @@
-from typing import Any, TypeVar, cast, TypedDict
-
-from django.db import models
-from pydantic import BaseModel
-
-from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
-
 """
 Django model for {{ original_name }}.
 """
-
-{% if context_fields %}
-class {{ model_name }}Context(TypedDict):
-    """Required context fields for converting {{ model_name }} back to {{ original_name }}."""
-    {% for field in context_fields %}
-    {{ field }}: Any  # TODO: Could potentially get actual type from original Pydantic model
-    {% endfor %}
-{% endif %}
 
 class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
     """
@@ -24,20 +9,9 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
 
     Context Fields:
         The following fields require context when converting back to Pydantic:
-        {% for field in context_fields %}
-        - {{ field }}
+        {% for field_name, field_type in context_fields %}
+        - {{ field_name }}: {{ field_type }}
         {% endfor %}
-
-    Example:
-        ```python
-        django_obj = {{ model_name }}.objects.get(...)
-        context = {{ model_name }}Context.create(
-            {% for field in context_fields %}
-            {{ field }}=value,  # Required
-            {% endfor %}
-        )
-        pydantic_obj = django_obj.to_pydantic(context=context)
-        ```
     {% endif %}
     """
 

@@ -3,11 +3,6 @@ Generated Django models from Pydantic models.
 Generated at: {{ generation_timestamp }}
 """
 
-# Django imports
-from django.db import models
-from pydantic import BaseModel
-from typing import Any, TypeVar, cast, TypedDict
-from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
 {% include 'imports_block.py.j2' %}
 
@@ -23,12 +18,13 @@ from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 {{ model_definition }}
 {% endfor %}
 
+
 # List of all generated models
 __all__ = [
-    {% for model in all_models %}
+    {% for model in django_model_names %}
     {{ model }},
-    {% if model_has_context[model.strip("'")] %}
-    "{{ model.strip("'") }}Context",
-    {% endif %}
+    {% endfor %}
+    {% for context_model in context_class_names %}
+    {{ context_model }},
     {% endfor %}
 ]
