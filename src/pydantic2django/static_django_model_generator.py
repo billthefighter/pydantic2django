@@ -66,7 +66,9 @@ class StaticDjangoModelGenerator:
         self.filter_function = filter_function
         self.verbose = verbose
         self.discovery = discovery_module or ModelDiscovery()
-        self.relationship_accessor: RelationshipConversionAccessor = RelationshipConversionAccessor()
+        self.relationship_accessor: RelationshipConversionAccessor = RelationshipConversionAccessor(
+            dependencies=self.discovery.dependencies
+        )
         self.field_factory = DjangoFieldFactory(available_relationships=self.relationship_accessor)
         self.django_model_factory = DjangoModelFactory(field_factory=self.field_factory)
         self.carriers: list[DjangoModelFactoryCarrier] = []
@@ -152,11 +154,11 @@ class StaticDjangoModelGenerator:
                     model_definitions.append(model_def)
                     model_name = pydantic_model.__name__
                     model_names.append(f"'{model_name}'")
-                    
+
                     # Track if this model has a context class
                     has_context = bool(context_def.strip())
                     model_has_context[model_name] = has_context
-                    
+
                     if has_context:
                         context_definitions.append(context_def)
                 else:
@@ -165,7 +167,7 @@ class StaticDjangoModelGenerator:
             except Exception as e:
                 logger.error(f"Error generating model definition for {pydantic_model.__name__}: {e}")
                 raise
-                
+
         # Prepare imports
         imports = [
             "import uuid",
@@ -220,7 +222,6 @@ class StaticDjangoModelGenerator:
 
         logger.info(f"Setting models for {self.app_label}...")
 
-
         factory_carrier = DjangoModelFactoryCarrier(
             pydantic_model=pydantic_model,
             meta_app_label=self.app_label,
@@ -238,7 +239,9 @@ class StaticDjangoModelGenerator:
                 self.carriers.append(factory_carrier)
                 return factory_carrier
             else:
-                logger.exception(f"Error creating Django model for {pydantic_model.__name__}: {factory_carrier.invalid_fields}")
+                logger.exception(
+                    f"Error creating Django model for {pydantic_model.__name__}: {factory_carrier.invalid_fields}"
+                )
                 return None
         except Exception as e:
             logger.error(f"Error creating Django model for {pydantic_model.__name__}: {e}")

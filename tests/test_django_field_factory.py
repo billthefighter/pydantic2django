@@ -280,12 +280,18 @@ def test_relationship_field_missing_model(empty_field_factory, relationship_mode
     # Test relationship fields with empty relationship accessor
     for field_name, field_info in user_model.model_fields.items():
         if field_name in ["address", "profile", "tags"]:
-            # Now we expect a ValueError for parameter issues like missing 'to'
-            with pytest.raises(ValueError) as excinfo:
-                result = empty_field_factory.convert_field(field_name, field_info)
+            # Instead of expecting a ValueError, we should get a FieldConversionResult with context_field set
+            result = empty_field_factory.convert_field(field_name, field_info)
 
-            # Verify the error mentions the missing required parameter
-            assert "missing 1 required positional argument: 'to'" in str(excinfo.value)
+            # Verify the result is properly handled as a context field
+            assert result is not None
+            assert isinstance(result, FieldConversionResult)
+            assert result.django_field is None
+            assert result.context_field is field_info
+
+            # Verify the error message mentions the missing model
+            assert result.error_str is not None
+            assert "not in relationship accessor" in result.error_str
 
 
 def test_handle_relationship_field_directly(field_factory, relationship_models):
@@ -854,16 +860,25 @@ def test_relationship_field_parameter_validation():
 
 def test_error_handling_for_parameter_errors(monkeypatch):
     """
-    Test that errors related to field parameters are properly raised rather than
-    silently converted to contextual fields.
+    Test that errors related to field parameters are properly handled.
+    - For non-relationship fields: parameter errors should raise exceptions
+    - For relationship fields: parameter errors should be handled as context fields
     """
 
     # Create a simple model for testing
     class SimpleModel(BaseModel):
         name: str
 
+    # Create a model with a relationship field for testing
+    class RelatedModel(BaseModel):
+        name: str
+
+    class ModelWithRelationship(BaseModel):
+        relation: RelatedModel
+
     # Get field info
-    field_info = SimpleModel.model_fields["name"]
+    simple_field_info = SimpleModel.model_fields["name"]
+    relation_field_info = ModelWithRelationship.model_fields["relation"]
 
     # Create a field factory
     field_factory = DjangoFieldFactory(available_relationships=RelationshipConversionAccessor())
@@ -878,35 +893,46 @@ def test_error_handling_for_parameter_errors(monkeypatch):
     # Apply the monkey patch
     monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field)
 
-    # The convert_field call should raise a ValueError
+    # CASE 1: Non-relationship field - parameter errors should raise exceptions
+    # The convert_field call should raise a ValueError for non-relationship fields
     with pytest.raises(ValueError) as excinfo:
         field_factory.convert_field(
             field_name="name",
-            field_info=field_info,
+            field_info=simple_field_info,
             app_label="test_app",
         )
 
     # Verify the error message mentions the parameter error
     assert "unexpected keyword argument" in str(excinfo.value)
 
-    # Also test the missing required argument case
-    def mock_get_field_missing_arg(self, kwargs=None):
-        # Simulate a missing argument error
-        raise TypeError("Field.__init__() missing 1 required positional argument: 'to'")
+    # CASE 2: Relationship field - parameter errors should be handled as context fields
+    # First set up the type mapping definition to identify this as a relationship field
+    # We'll monkey patch TypeMapper.get_mapping_for_type to return a relationship mapping
+
+    original_get_mapping = TypeMapper.get_mapping_for_type
+
+    def mock_get_mapping_for_relationship(field_type):
+        # For RelatedModel type, return a relationship mapping
+        if field_type == RelatedModel:
+            return TypeMappingDefinition(python_type=RelatedModel, django_field=models.ForeignKey, is_relationship=True)
+        # For other types, use the original method
+        return original_get_mapping(field_type)
 
     # Apply the second monkey patch
-    monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field_missing_arg)
+    monkeypatch.setattr(TypeMapper, "get_mapping_for_type", mock_get_mapping_for_relationship)
 
-    # This should also raise a ValueError
-    with pytest.raises(ValueError) as excinfo:
-        field_factory.convert_field(
-            field_name="name",
-            field_info=field_info,
-            app_label="test_app",
-        )
+    # Now for relationship fields, parameter errors should NOT raise exceptions
+    result = field_factory.convert_field(field_name="relation", field_info=relation_field_info, app_label="test_app")
 
-    # Verify the error message mentions the missing argument
-    assert "missing 1 required positional argument" in str(excinfo.value)
+    # Verify the field is properly handled as a context field
+    assert result is not None
+    assert isinstance(result, FieldConversionResult)
+    assert result.django_field is None
+    assert result.context_field is relation_field_info
+
+    # Verify the error message mentions the parameter error
+    assert result.error_str is not None
+    assert "unexpected keyword argument" in str(result.error_str)
 
 
 def test_optional_relationship_fields():
@@ -977,3 +1003,149 @@ def test_optional_relationship_fields():
     assert many_result.field_kwargs["blank"] is True
     # The key fix: ManyToManyField should NOT have on_delete
     assert "on_delete" not in many_result.field_kwargs
+
+
+def test_missing_model_handled_as_context_field():
+    """
+    This test specifically replicates the issue from the error logs where a field refers to
+    a BasePrompt model that isn't in the relationship accessor.
+    """
+
+    # Create a mock BasePrompt class similar to what was in the error logs
+    class BasePrompt(BaseModel):
+        content: str
+
+    # Create a model with a field that refers to BasePrompt
+    class ConversationChainNode(BaseModel):
+        name: str
+        # This is the field that was causing the error - Optional[BasePrompt]
+        prompt: Optional[BasePrompt] = None
+
+    # Create an empty relationship accessor (no models registered)
+    accessor = RelationshipConversionAccessor()
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Get the field info for the prompt field
+    field_info = ConversationChainNode.model_fields["prompt"]
+
+    # Convert the field - this should NOT raise an exception
+    result = field_factory.convert_field(field_name="prompt", field_info=field_info, app_label="django_llm")
+
+    # Verify the field is properly handled as a context field
+    assert result is not None
+    assert isinstance(result, FieldConversionResult)
+    assert result.django_field is None
+    assert result.context_field is field_info
+
+    # Verify the error message mentions the missing model
+    assert result.error_str is not None
+    assert "not in relationship accessor" in result.error_str
+
+
+def test_various_missing_relationship_types_handled_as_context():
+    """
+    Test that verifies various types of relationship fields with missing models
+    are properly handled as context fields rather than raising exceptions.
+    """
+
+    # Create some model classes that won't be in the relationship accessor
+    class MissingForeignKeyModel(BaseModel):
+        name: str
+
+    class MissingListModel(BaseModel):
+        name: str
+
+    class MissingDictModel(BaseModel):
+        key: str
+
+    # Create a model with various relationship types to missing models
+    class ModelWithMissingRelationships(BaseModel):
+        # Direct foreign key relationship
+        foreign_key: MissingForeignKeyModel
+        # Optional foreign key
+        optional_foreign_key: Optional[MissingForeignKeyModel] = None
+        # List relationship (ManyToMany)
+        list_relation: list[MissingListModel]
+        # Optional list relationship
+        optional_list: Optional[list[MissingListModel]] = None
+        # Dict relationship
+        dict_relation: dict[str, MissingDictModel]
+
+    # Create an empty relationship accessor
+    accessor = RelationshipConversionAccessor()
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Test each relationship field
+    for field_name, field_info in ModelWithMissingRelationships.model_fields.items():
+        # Convert the field - this should NOT raise an exception
+        result = field_factory.convert_field(field_name=field_name, field_info=field_info, app_label="django_llm")
+
+        # Verify all fields are properly handled as context fields
+        assert result is not None, f"Field {field_name} returned None result"
+        assert isinstance(result, FieldConversionResult)
+        assert result.django_field is None, f"Field {field_name} should have django_field=None"
+        assert result.context_field is field_info, f"Field {field_name} should be a context field"
+
+        # Verify the error message mentions the missing model
+        assert result.error_str is not None, f"Field {field_name} should have an error message"
+        assert "not in relationship accessor" in result.error_str, f"Field {field_name} should mention missing model"
+
+
+def test_relationship_parameter_errors_handled_as_context(monkeypatch):
+    """
+    Test that parameter errors in relationship fields are handled as context fields
+    rather than raising exceptions.
+    """
+
+    # Create a simple model for testing
+    class RelatedModel(BaseModel):
+        name: str
+
+    class TestModel(BaseModel):
+        relation: RelatedModel
+
+    # Set up a relationship accessor with the related model
+    accessor = RelationshipConversionAccessor()
+
+    # Create a fake Django model for RelatedModel
+    django_related = type(
+        "DjangoRelatedModel",
+        (models.Model,),
+        {"__module__": "tests.test_models", "Meta": type("Meta", (), {"app_label": "test_app"})},
+    )
+
+    # Create model context and add to accessor
+    related_context = ModelContext(django_model=django_related, pydantic_class=RelatedModel)
+    accessor.available_relationships.append(RelationshipMapper(RelatedModel, django_related, related_context))
+
+    # Create field factory
+    field_factory = DjangoFieldFactory(available_relationships=accessor)
+
+    # Monkey patch TypeMappingDefinition.get_django_field to raise a parameter error
+    original_get_field = TypeMappingDefinition.get_django_field
+
+    def mock_get_field(self, kwargs=None):
+        # For ForeignKey relationship fields, raise a missing 'to' parameter error
+        if self.django_field == models.ForeignKey:
+            raise TypeError("ForeignKey.__init__() missing 1 required positional argument: 'to'")
+        # For other field types, use the original method
+        return original_get_field(self, kwargs)
+
+    # Apply the monkey patch
+    monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field)
+
+    # Get field info
+    field_info = TestModel.model_fields["relation"]
+
+    # Convert the field - this should NOT raise an exception despite the parameter error
+    result = field_factory.convert_field(field_name="relation", field_info=field_info, app_label="test_app")
+
+    # Verify the field is properly handled as a context field
+    assert result is not None
+    assert isinstance(result, FieldConversionResult)
+    assert result.django_field is None
+    assert result.context_field is field_info
+
+    # Verify the error message mentions the parameter error
+    assert result.error_str is not None
+    assert "missing 1 required positional argument: 'to'" in result.error_str

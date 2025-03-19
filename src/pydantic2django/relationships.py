@@ -29,6 +29,7 @@ D = TypeVar("D", bound=models.Model)
 @dataclass
 class RelationshipConversionAccessor:
     available_relationships: list[RelationshipMapper] = field(default_factory=list)
+    dependencies: Optional[dict[str, set[str]]] = field(default=None)
 
     @classmethod
     def from_dict(cls, relationship_mapping_dict: dict) -> "RelationshipConversionAccessor":

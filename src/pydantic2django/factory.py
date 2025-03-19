@@ -193,6 +193,8 @@ class DjangoFieldFactory:
                     logger.warning(f"Could not create relationship field for {field_name}, must be contextual")
                     # Mark unmappable relationship fields as context fields
                     result.context_field = field_info
+                    # Return early since we've already set this as a context field
+                    return result
 
             # Try to create a Django field from the mapping
             if result.type_mapping_definition and not result.django_field:
@@ -205,15 +207,27 @@ class DjangoFieldFactory:
                     error_msg = f"Failed to convert Django field for {field_name}: {e}"
                     logger.warning(f"{error_msg} - saving this result to context.")
 
-                    # For parameter errors, raise an exception
+                    # Don't fall back to contextual fields for parameter errors
+                    # These indicate a bug that should be fixed
                     if "got an unexpected keyword argument" in str(
                         e
                     ) or "missing 1 required positional argument" in str(e):
                         logger.error(f"Parameter error detected: {e}")
-                        raise ValueError(error_msg) from e
+                        # For relationship fields, handle as context field rather than raising
+                        if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
+                            logger.warning(
+                                f"Parameter error in relationship field '{field_name}', handling as context field: {e}"
+                            )
+                            result.error_str = (
+                                f"Relationship field '{field_name}' could not be mapped, handling as context field: {e}"
+                            )
+                        else:
+                            # For non-relationship fields, we still want to raise errors to fix bugs
+                            raise ValueError(error_msg) from e
 
-                    # For other errors, still mark as contextual field
+                    # For other errors, still mark as contextual field and return
                     result.context_field = field_info
+                    return result
 
             return result
 
@@ -256,11 +270,22 @@ class DjangoFieldFactory:
             result.error_str = detailed_msg
 
             # Don't fall back to contextual fields for parameter errors
+            # These indicate a bug that should be fixed
             if "got an unexpected keyword argument" in str(e) or "missing 1 required positional argument" in str(e):
                 logger.error(f"Parameter error detected: {e}")
-                raise ValueError(detailed_msg) from e
+                # For relationship fields, handle as context field rather than raising
+                if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
+                    logger.warning(
+                        f"Parameter error in relationship field '{field_name}', handling as context field: {e}"
+                    )
+                    result.error_str = (
+                        f"Relationship field '{field_name}' could not be mapped, handling as context field: {e}"
+                    )
+                else:
+                    # For non-relationship fields, we still want to raise errors to fix bugs
+                    raise ValueError(detailed_msg) from e
 
-            # For other errors, still mark as contextual field and return
+            # For all errors with relationship fields or other errors, mark as contextual field and return
             result.context_field = field_info
             return result
 
@@ -301,6 +326,7 @@ class DjangoFieldFactory:
             logger.warning(f"Invalid model class type for field {field_name}: {origin} {args}")
             result.error_str = f"Invalid model class type for field {field_name}: {origin} {args}"
             result.django_field = None
+            result.context_field = field_info
             return result
 
         # Handle case where model is not in relationship accessor
@@ -308,6 +334,8 @@ class DjangoFieldFactory:
             logger.warning(f"Model {model_class} not in relationship accessor")
             result.django_field = None
             result.error_str = f"Model {model_class} not in relationship accessor"
+            # Mark as context field and return early
+            result.context_field = field_info
             return result
 
         # Get the model name, handling both string and class references
@@ -318,6 +346,8 @@ class DjangoFieldFactory:
         else:
             logger.warning(f"Invalid model class type for field {field_name}: {type(model_class)}")
             result.django_field = None
+            # Also mark this as a context field
+            result.context_field = field_info
             return result
 
         # Get the related name
@@ -347,14 +377,16 @@ class DjangoFieldFactory:
                 error_msg = f"Failed to create Django field for {field_name}: {e}"
                 logger.warning(error_msg)
                 result.error_str = error_msg
-
-                # Don't fall back to contextual fields for parameter errors - these indicate a bug
-                # that should be fixed rather than silently treating as contextual
-                if "got an unexpected keyword argument" in str(e) or "missing 1 required positional argument" in str(e):
-                    raise ValueError(error_msg) from e
-
-                # For other errors, still set as None to allow graceful fallback
+                # Mark as context field for any exception
+                result.context_field = field_info
                 result.django_field = None
+
+                # Don't raise parameter errors, just log them and continue with context field
+                if "got an unexpected keyword argument" in str(e) or "missing 1 required positional argument" in str(e):
+                    logger.warning(f"Parameter error in relationship field: {e}")
+
+                # Return the result with context_field set
+                return result
 
         return result
 
