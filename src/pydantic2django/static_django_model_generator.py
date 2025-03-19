@@ -583,18 +583,8 @@ class StaticDjangoModelGenerator:
         Returns:
             String representation of the field
         """
-        field_def = FieldSerializer.serialize_field(field)
-
-        # Fix the "to" model references to include app_label
-        if "to='" in field_def and f"to='{self.app_label}." not in field_def:
-            field_def = field_def.replace("to='", f"to='{self.app_label}.")
-
-        # Fix double app_label prefixes - e.g., 'django_llm.django_llm.' to just 'django_llm.'
-        double_prefix = f"to='{self.app_label}.{self.app_label}."
-        if double_prefix in field_def:
-            field_def = field_def.replace(double_prefix, f"to='{self.app_label}.")
-
-        return field_def
+        # Just get the serialized field directly without modifying paths
+        return FieldSerializer.serialize_field(field)
 
     def generate_context_class(self, model_context: ModelContext) -> str:
         """

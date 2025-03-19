@@ -190,7 +190,15 @@ class MockDiscovery(ModelDiscovery):
         """
         logger.debug("get_models_in_registration_order called")
         registration_order = self.get_registration_order()
-        models = [self.filtered_models[name] for name in registration_order]
+        # Make sure we handle the registration_order correctly and avoid double app_labels
+        models = []
+        for name in registration_order:
+            # Remove app_label if present to get the base model name
+            model_name = name.split(".")[-1] if "." in name else name
+            if model_name in self.discovered_models:
+                models.append(self.discovered_models[model_name])
+            elif name in self.filtered_models:
+                models.append(self.filtered_models[name])
         logger.debug(f"Returning {len(models)} models in registration order")
         return models
 

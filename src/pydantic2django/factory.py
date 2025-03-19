@@ -359,8 +359,21 @@ class DjangoFieldFactory:
 
         field_kwargs["related_name"] = related_name
 
-        # Handle to_field behavior - Fix: Use a string instead of a tuple
-        field_kwargs["to"] = f"{result.app_label}.{target_model_name}"
+        # Handle to_field behavior - Only add app_label if it's not already part of the target model name
+        # Check for duplicate app labels to ensure we don't create them
+        if "." in target_model_name:
+            # If target already has an app label, check for duplicates
+            parts = target_model_name.split(".")
+            if len(parts) >= 2 and parts[0] == parts[1]:
+                # Remove duplicate app label (app_name.app_name.ModelName)
+                target_model_name = f"{parts[0]}.{'.'.join(parts[2:])}"
+            # Use model name with cleaned app label
+            to_value = target_model_name
+        else:
+            # No app label in target model name, add the app label from result
+            to_value = f"{result.app_label}.{target_model_name}"
+
+        field_kwargs["to"] = to_value  # This is the single source of truth for relationship targets
 
         # Add on_delete only for ForeignKey and OneToOneField, not for ManyToManyField
         django_field = result.type_mapping_definition.django_field

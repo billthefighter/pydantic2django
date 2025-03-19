@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Optional, get_args, get_origin
 
 from django.db import models
-from django.db.models import Model as DjangoModel
-from django.db.models.fields import Field as DjangoField
 from pydantic import BaseModel
 
 from .types import is_pydantic_model
@@ -63,7 +61,7 @@ def find_missing_models(models: dict[str, type], dependencies: dict[str, set[str
             # Skip self-references
             if dep == model_name or dep == "self":
                 continue
-                
+
             # Check if the dependency exists in normalized models
             normalized_dep = normalize_model_reference(dep)
             if normalized_dep not in normalized_models:
@@ -430,9 +428,9 @@ class ModelDiscovery:
             if errors:
                 logger.warning(f"The following models are referenced but not available: {errors}")
                 logger.warning("These will be appended to context. and removed from the dependency graph.")
-                #for error in errors:
+                # for error in errors:
                 #    del self.dependencies[error]
-                
+
             # Create a copy of dependencies that only includes models that are in filtered_models
             filtered_dependencies = {}
             for model_name in self.dependencies:
@@ -443,7 +441,7 @@ class ModelDiscovery:
                     for dep in self.dependencies[model_name]:
                         if dep in self.filtered_models:
                             filtered_dependencies[model_name].add(dep)
-            
+
             # Get the raw order from topological sort using the filtered dependencies
             raw_order = topological_sort(filtered_dependencies)
             # Store the unqualified model names order
@@ -516,7 +514,7 @@ class ModelDiscovery:
 
         # For Pydantic models, analyze field dependencies
         if is_pydantic_model(model):
-            for field_name, field in model.model_fields.items():
+            for _, field in model.model_fields.items():
                 annotation = field.annotation
                 if annotation is not None:
                     # Handle direct model references

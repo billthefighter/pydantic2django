@@ -143,18 +143,9 @@ class FieldSerializer:
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
             if related_model_name:
-                # Use direct class reference for type checking
-                if "." in related_model_name:
-                    # If it's a cross-app reference, keep it as a string
-                    # Avoid duplicate app labels (app_name.app_name.model_name)
-                    if "." in related_model_name and related_model_name.count(".") > 1:
-                        app_label, remainder = related_model_name.split(".", 1)
-                        if remainder.startswith(f"{app_label}."):
-                            related_model_name = f"{app_label}.{remainder.split('.', 1)[1]}"
-                    params.append(f"to='{related_model_name}'")
-                else:
-                    # Direct class reference for same-app models
-                    params.append(f"to={related_model_name}")
+                # Use the related model name exactly as provided - no modifications
+                # This prevents app label duplication and maintains the format
+                params.append(f"to='{related_model_name}'")
             else:
                 params.append("to='self'")  # Default to self-reference if we can't determine
 
@@ -172,18 +163,8 @@ class FieldSerializer:
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
             if related_model_name:
-                # Use direct class reference for type checking
-                if "." in related_model_name:
-                    # If it's a cross-app reference, keep it as a string
-                    # Avoid duplicate app labels (app_name.app_name.model_name)
-                    if "." in related_model_name and related_model_name.count(".") > 1:
-                        app_label, remainder = related_model_name.split(".", 1)
-                        if remainder.startswith(f"{app_label}."):
-                            related_model_name = f"{app_label}.{remainder.split('.', 1)[1]}"
-                    params.append(f"to='{related_model_name}'")
-                else:
-                    # Direct class reference for same-app models
-                    params.append(f"to={related_model_name}")
+                # Use the related model name exactly as provided - no modifications
+                params.append(f"to='{related_model_name}'")
             else:
                 raise ValueError(f"Related model not found for {field}")
 
@@ -207,7 +188,11 @@ class FieldSerializer:
                         else (through.__name__ if hasattr(through, "__name__") else str(through))
                     )
                     if "." in through_name:
-                        # If it's a cross-app reference, keep it as a string
+                        # Check for and fix duplicate app labels
+                        parts = through_name.split(".")
+                        if len(parts) >= 2 and parts[0] == parts[1]:
+                            # Remove duplicate app label
+                            through_name = f"{parts[0]}.{'.'.join(parts[2:])}"
                         params.append(f"through='{through_name}'")
                     else:
                         # Direct class reference for same-app models

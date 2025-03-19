@@ -150,9 +150,9 @@ def generate_models():
 
     # Create Django model classes with explicit relationships
     class DjangoChainStep(Pydantic2DjangoBaseClass[ChainStep]):
-        # Add explicit ForeignKey fields for relationships
-        prompt = models.ForeignKey("django_llm.DjangoBasePrompt", on_delete=models.CASCADE)
-        retry_strategy = models.ForeignKey("django_llm.DjangoRetryStrategy", on_delete=models.CASCADE)
+        # Add explicit ForeignKey fields for relationships with correct app_label
+        prompt = models.ForeignKey("django_llm.BasePrompt", on_delete=models.CASCADE)
+        retry_strategy = models.ForeignKey("django_llm.RetryStrategy", on_delete=models.CASCADE)
 
         class Meta:
             app_label = "django_llm"
@@ -246,13 +246,23 @@ def generate_models():
     with open(output_path, "r") as f:
         content = f.read()
 
-    # Add the retry_strategy field to DjangoChainStep if it's missing
+    # Fix the duplicate app label in the prompt ForeignKey and add the retry_strategy field if needed
+    prompt_pattern = "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.django_llm.BasePrompt', on_delete=models.CASCADE)"
+    fixed_prompt = (
+        "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.BasePrompt', on_delete=models.CASCADE)"
+    )
+
     if "retry_strategy = models.ForeignKey" not in content:
-        logger.info("Adding retry_strategy ForeignKey to DjangoChainStep")
-        content = content.replace(
-            "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.django_llm.BasePrompt', on_delete=models.CASCADE)",
-            "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.django_llm.BasePrompt', on_delete=models.CASCADE)\n    retry_strategy = models.ForeignKey(verbose_name='retry_strategy', to='django_llm.DjangoRetryStrategy', on_delete=models.CASCADE)",
-        )
+        logger.info("Adding retry_strategy ForeignKey to DjangoChainStep and fixing app_label")
+        # Fix both ForeignKey fields at once
+        if prompt_pattern in content:
+            content = content.replace(
+                prompt_pattern,
+                f"{fixed_prompt}\n    retry_strategy = models.ForeignKey(verbose_name='retry_strategy', to='django_llm.DjangoRetryStrategy', on_delete=models.CASCADE)",
+            )
+        # Handle just fixing the app_label if the pattern doesn't match exactly
+        elif "to='django_llm.django_llm." in content:
+            content = content.replace("to='django_llm.django_llm.", "to='django_llm.")
 
         # Update the context class to remove retry_strategy from context fields
         content = content.replace(
