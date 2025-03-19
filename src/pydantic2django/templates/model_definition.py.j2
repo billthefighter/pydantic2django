@@ -18,7 +18,7 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ cleaned_original_name }}]):
 
     {% for field_name, field_definition in fields %}
     {% if field_name != 'id' and field_name != 'object_type' and field_name != 'object_type_field' and not field_definition.startswith('models.BigAutoField') and not field_definition.startswith('models.UUIDField') %}
-    {{ field_name }} = {{ field_definition|replace('to=\'', 'to=\''~meta.app_label~'.')|replace('default=<class \'django.db.models.fields.NOT_PROVIDED\'>', 'null=True') }}
+    {{ field_name }} = {{ field_definition|replace('default=<class \'django.db.models.fields.NOT_PROVIDED\'>', 'null=True') }}
     {% endif %}
     {% endfor %}
 
@@ -32,17 +32,7 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ cleaned_original_name }}]):
     {% if context_fields %}
     def to_pydantic(self, context: "{{ model_name }}Context") -> {{ cleaned_original_name }}:
         """
-        Convert this Django model to a Pydantic object.
-
-        Args:
-            context: Context instance containing values for non-serializable fields.
-                    Required for this model because it has non-serializable fields.
-
-        Returns:
-            The corresponding {{ original_name }} object
-
-        Raises:
-            ValueError: If context is missing required fields
+        Convert this Django model to The corresponding {{ original_name }} object.
         """
         return cast({{ cleaned_original_name }}, super().to_pydantic(context=context))
     {% endif %}

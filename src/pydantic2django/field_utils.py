@@ -143,8 +143,19 @@ class FieldSerializer:
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
             if related_model_name:
-                # Use the related model name exactly as provided - no modifications
-                # This prevents app label duplication and maintains the format
+                # Ensure the model name has the app label if needed
+                if "." not in related_model_name:
+                    # Get app label from the field's model if available
+                    app_label = None
+                    if hasattr(field, "model") and hasattr(field.model, "_meta"):
+                        app_label = field.model._meta.app_label
+                    # Use the related field's app label as a fallback
+                    elif hasattr(field.remote_field, "model") and hasattr(field.remote_field.model, "_meta"):
+                        app_label = field.remote_field.model._meta.app_label
+
+                    if app_label:
+                        related_model_name = f"{app_label}.{related_model_name}"
+
                 params.append(f"to='{related_model_name}'")
             else:
                 params.append("to='self'")  # Default to self-reference if we can't determine
@@ -163,7 +174,19 @@ class FieldSerializer:
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
             if related_model_name:
-                # Use the related model name exactly as provided - no modifications
+                # Ensure the model name has the app label if needed
+                if "." not in related_model_name:
+                    # Get app label from the field's model if available
+                    app_label = None
+                    if hasattr(field, "model") and hasattr(field.model, "_meta"):
+                        app_label = field.model._meta.app_label
+                    # Use the related field's app label as a fallback
+                    elif hasattr(field.remote_field, "model") and hasattr(field.remote_field.model, "_meta"):
+                        app_label = field.remote_field.model._meta.app_label
+
+                    if app_label:
+                        related_model_name = f"{app_label}.{related_model_name}"
+
                 params.append(f"to='{related_model_name}'")
             else:
                 raise ValueError(f"Related model not found for {field}")
