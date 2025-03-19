@@ -77,8 +77,33 @@ if not settings.configured:
 
 # Now import other modules that depend on Django
 from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
+from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
 from inspect import isclass
 from mock_discovery import MockDiscovery, register_model, get_discovered_models
+
+
+def setup_relationships():
+    """
+    Set up relationships between Pydantic and Django models without creating Django models.
+
+    This approach allows us to register the models and their relationships without
+    creating the Django models ourselves, which would conflict with what the generator creates.
+    """
+    logger.info("Setting up model relationships")
+
+    # Register models with the mock discovery
+    logger.debug("Registering ChainStep and RetryStrategy models")
+    register_model("ChainStep", ChainStep, has_context=True)
+    register_model("RetryStrategy", RetryStrategy, has_context=False)
+
+    # Create a relationship accessor
+    relationship_accessor = RelationshipConversionAccessor()
+
+    # Add our models to the accessor to be recognized during generation
+    relationship_accessor.add_pydantic_model(ChainStep)
+    relationship_accessor.add_pydantic_model(RetryStrategy)
+
+    return relationship_accessor
 
 
 def generate_models():
@@ -106,11 +131,9 @@ def generate_models():
     # Check what models were discovered
     logger.info(f"Discovery models after discover_models: {list(discovery.discovered_models.keys())}")
 
-    # Setup the models
-    logger.debug("Setting up dynamic models")
-    django_models = discovery.setup_dynamic_models(app_label="django_llm")
-
-    logger.info(f"Generated {len(django_models)} Django models: {list(django_models.keys())}")
+    # At this point, we have discovered models but not created any Django models.
+    # Instead of calling setup_dynamic_models() which creates Django models,
+    # we'll rely on the generator to create them based on our relationship accessor.
 
     # Make sure output directory exists
     output_path = "tests/django_llm/models/models.py"
@@ -126,11 +149,7 @@ def generate_models():
         discovery_module=discovery,
     )
 
-    # Check discovery state before generation
-    logger.debug(f"Discovery module has models: {discovery.discovered_models}")
-    logger.debug(f"Discovery module has django models: {discovery.django_models}")
-    logger.debug(f"Discovery module has model_has_context: {discovery.get_model_has_context()}")
-
+    # We've set up the discovery with our models, now generate
     logger.debug("Calling generate() method")
     gen.generate()
 

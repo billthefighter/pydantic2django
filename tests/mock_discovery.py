@@ -15,11 +15,15 @@ logger = logging.getLogger("mock_discovery")
 from django.db import models
 from pydantic import BaseModel
 from pydantic2django.discovery import ModelDiscovery
+from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
 
 # Storage for discovered models
 _discovered_models: dict[str, type[BaseModel]] = {}
 _django_models: dict[str, type[models.Model]] = {}
 _model_has_context: dict[str, bool] = {}
+
+# Initialize relationships
+_relationships = RelationshipConversionAccessor()
 
 
 class MockDiscovery(ModelDiscovery):
@@ -32,6 +36,15 @@ class MockDiscovery(ModelDiscovery):
         self.discovered_models = _discovered_models
         self.django_models = _django_models
         self.filtered_models = {}  # Will hold the filtered models
+        self.relationship_accessor = _relationships  # Use the global relationship accessor
+
+        # Add our pydantic models to the relationship accessor directly
+        # Instead of using add_pydantic_model which might have different signature
+        for name, model in self.discovered_models.items():
+            logger.debug(f"Adding Pydantic model {name} to relationship accessor")
+            relationship = RelationshipMapper(pydantic_model=model, django_model=None, context=None)
+            self.relationship_accessor.available_relationships.append(relationship)
+
         logger.debug(f"MockDiscovery initialized with {len(_discovered_models)} discovered models")
 
     def discover_models(
@@ -94,24 +107,40 @@ class MockDiscovery(ModelDiscovery):
             if name not in _django_models:
                 logger.debug(f"Creating Django model for {name}")
 
-                # Create a unique model class for each model
-                model_class_name = f"{name}Model"
+                # Create the Django model class name
+                # Use standard Django naming convention - no 'Model' suffix
+                model_class_name = f"Django{name}"
                 model_attrs = {
                     "Meta": type("Meta", (), {"app_label": self.app_label}),
-                    "__module__": f"django_llm.models.{name.lower()}",
+                    "__module__": f"{self.app_label}.models.{name.lower()}",
                 }
 
                 DynamicModel = type(model_class_name, (models.Model,), model_attrs)
                 _django_models[name] = DynamicModel
                 logger.debug(f"Created model class {model_class_name}")
+
+                # Map the relationship
+                self.map_model_relationship(pydantic_model, DynamicModel)
             else:
                 logger.debug(f"Django model for {name} already exists")
+                # Ensure relationship is mapped for existing models
+                if name in _django_models:
+                    self.map_model_relationship(pydantic_model, _django_models[name])
 
         self.django_models = _django_models
         logger.debug(
             f"setup_dynamic_models created {len(self.django_models)} models: {list(self.django_models.keys())}"
         )
         return self.django_models
+
+    def map_model_relationship(self, pydantic_model: type[BaseModel], django_model: type[models.Model]) -> None:
+        """Map the relationship between a Pydantic model and a Django model."""
+        logger.debug(f"Mapping relationship: {pydantic_model.__name__} <-> {django_model.__name__}")
+        self.relationship_accessor.map_relationship(pydantic_model, django_model)
+
+    def get_relationship_accessor(self) -> RelationshipConversionAccessor:
+        """Get the RelationshipConversionAccessor."""
+        return self.relationship_accessor
 
     def get_model_has_context(self) -> dict[str, bool]:
         """Get the dictionary of models with context."""
@@ -145,6 +174,18 @@ def register_django_model(name: str, model: type[models.Model]) -> None:
     _django_models[name] = model
 
 
+def map_relationship(pydantic_model: type[BaseModel], django_model: type[models.Model]) -> None:
+    """
+    Map a relationship between a Pydantic model and a Django model.
+
+    Args:
+        pydantic_model: The Pydantic model class
+        django_model: The Django model class
+    """
+    logger.debug(f"Mapping relationship: {pydantic_model.__name__} <-> {django_model.__name__}")
+    _relationships.map_relationship(pydantic_model, django_model)
+
+
 def get_discovered_models() -> dict[str, type[BaseModel]]:
     """
     Get all discovered Pydantic models.
@@ -166,15 +207,18 @@ def get_django_models() -> dict[str, type[models.Model]]:
             logger.debug(f"Creating Django model for {name}")
 
             # Create a unique model class for each model
-            model_class_name = f"{name}Model"
+            model_class_name = f"Django{name}"
             model_attrs = {
-                "Meta": type("Meta", (), {"app_label": "test_app"}),
-                "__module__": f"test_app.models.{name.lower()}",
+                "Meta": type("Meta", (), {"app_label": "django_llm"}),
+                "__module__": f"django_llm.models.{name.lower()}",
             }
 
             DynamicModel = type(model_class_name, (models.Model,), model_attrs)
             _django_models[name] = DynamicModel
             logger.debug(f"Created model class {model_class_name}")
+
+            # Map the relationship
+            map_relationship(pydantic_model, DynamicModel)
         else:
             logger.debug(f"Django model for {name} already exists")
 
@@ -188,9 +232,15 @@ def get_model_has_context() -> dict[str, bool]:
     return _model_has_context
 
 
+def get_relationship_accessor() -> RelationshipConversionAccessor:
+    """Get the RelationshipConversionAccessor."""
+    return _relationships
+
+
 def clear() -> None:
-    """Clear all registered models."""
-    logger.debug("Clearing all registered models")
+    """Clear all registered models and relationships."""
+    logger.debug("Clearing all registered models and relationships")
     _discovered_models.clear()
     _django_models.clear()
     _model_has_context.clear()
+    _relationships.available_relationships.clear()
