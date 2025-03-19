@@ -343,12 +343,31 @@ class StaticDjangoModelGenerator:
         # Prepare field definitions
         field_definitions = []
         for field_context in model_context.context_fields:
+            # Sanitize the type representation for display in comments
+            try:
+                type_name = field_context.field_type.__name__
+            except (AttributeError, TypeError):
+                # Handle complex types or types without __name__
+                type_name = str(field_context.field_type).replace("<", "[").replace(">", "]")
+
+            # Clean up any remaining angle brackets that could cause rendering issues
+            type_name = type_name.replace("<", "[").replace(">", "]")
+
+            # Ensure metadata is a dict and doesn't contain problematic characters
+            metadata = {}
+            if field_context.additional_metadata:
+                for k, v in field_context.additional_metadata.items():
+                    if isinstance(v, str):
+                        metadata[k] = v.replace("\n", " ").replace("\r", "")
+                    else:
+                        metadata[k] = v
+
             field_def = {
                 "name": field_context.field_name,
-                "type": field_context.field_type.__name__,
+                "type": type_name,
                 "is_optional": field_context.is_optional,
                 "is_list": field_context.is_list,
-                "metadata": field_context.additional_metadata,
+                "metadata": metadata,
             }
             field_definitions.append(field_def)
 
