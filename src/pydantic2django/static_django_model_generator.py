@@ -180,6 +180,9 @@ class StaticDjangoModelGenerator:
                     # Add the Django model name (with its prefix) for __all__
                     if carrier.django_model:
                         django_model_name = carrier.django_model.__name__
+                        # Clean up any parametrized generic types in model names for __all__
+                        if "[" in django_model_name or "<" in django_model_name:
+                            django_model_name = re.sub(r"\[.*\]", "", django_model_name)
                         django_model_names.append(f"'{django_model_name}'")
                         # Map Django model name to Pydantic model name
                         django_model_to_pydantic[django_model_name] = model_name
@@ -413,7 +416,7 @@ class StaticDjangoModelGenerator:
         Generate a string representation of a Django model.
 
         Args:
-            model: The Django model class
+            carrier: The carrier containing the Django model to generate
 
         Returns:
             String representation of the model
@@ -424,11 +427,11 @@ class StaticDjangoModelGenerator:
 
         model_name = carrier.django_model.__name__
 
-        # Check if we're generating a parametrized generic model
-        # Skip these since they cause duplicates and errors
+        # Handle parametrized generic models by extracting the base name
         if "[" in model_name or "<" in model_name:
-            logger.warning(f"Skipping parametrized generic model: {model_name}")
-            return ""
+            # Extract the base model name without generic parameters
+            model_name = re.sub(r"\[.*\]", "", model_name)
+            logger.info(f"Processing generic model: {model_name}")
 
         # Get fields from the model
         fields = []

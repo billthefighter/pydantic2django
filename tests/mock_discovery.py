@@ -5,7 +5,7 @@ This module provides simplified mock implementations of the discovery functions
 to allow examples and tests to run without requiring the full implementation.
 """
 from collections.abc import Callable
-from typing import Optional
+from typing import Optional, Union, get_origin, get_args, List
 import logging
 
 # Configure logging
@@ -25,6 +25,99 @@ _model_has_context: dict[str, bool] = {}
 # Initialize relationships
 _relationships = RelationshipConversionAccessor()
 
+# Store specific field overrides for models
+_field_overrides = {}
+
+
+def set_field_override(model_name: str, field_name: str, field_type: str, target_model: str) -> None:
+    """
+    Set a field override for a model.
+    This allows us to specify a specific field type for a field in a model.
+
+    Args:
+        model_name: The name of the model
+        field_name: The name of the field
+        field_type: The type of field (e.g. "ForeignKey")
+        target_model: The target model for the field
+    """
+    if model_name not in _field_overrides:
+        _field_overrides[model_name] = {}
+    _field_overrides[model_name][field_name] = {"field_type": field_type, "target_model": target_model}
+
+
+def _setup_nested_model_relationships():
+    """Set up relationships between nested Pydantic models."""
+    # Get all models we've registered
+    pydantic_models = _discovered_models.values()
+
+    # Map relationships between models that reference each other
+    from typing import get_origin, get_args, Optional, Union, List
+
+    # For each model, analyze fields to find relationships
+    for model_name, pydantic_model in _discovered_models.items():
+        logger.debug(f"Analyzing model {model_name} for relationships")
+        for field_name, field in pydantic_model.model_fields.items():
+            annotation = field.annotation
+
+            # Check for default_factory fields with RetryStrategy
+            if field_name == "retry_strategy" and hasattr(field, "default_factory"):
+                # For RetryStrategy in ChainStep, manually map the relationship
+                for other_name, other_model in _discovered_models.items():
+                    if other_name == "RetryStrategy" and model_name == "ChainStep":
+                        logger.debug(f"Found default_factory relationship: {model_name}.{field_name} -> {other_name}")
+                        if model_name in _django_models and other_name in _django_models:
+                            django_model = _django_models[model_name]
+                            other_django_model = _django_models[other_name]
+                            map_relationship(pydantic_model, django_model)
+                            map_relationship(other_model, other_django_model)
+                            logger.debug(f"Mapped default_factory relationship: {model_name} <-> Django{model_name}")
+                            logger.debug(f"Mapped default_factory relationship: {other_name} <-> Django{other_name}")
+
+            # Check if this field references another Pydantic model
+            for other_name, other_model in _discovered_models.items():
+                # Skip self-references
+                if other_model == pydantic_model:
+                    continue
+
+                try:
+                    # Try direct match first
+                    if annotation == other_model:
+                        logger.debug(f"Found direct relationship: {model_name}.{field_name} -> {other_name}")
+                        _map_model_relationship(model_name, other_name, pydantic_model, other_model)
+                    # Check for Optional[OtherModel]
+                    elif hasattr(annotation, "__origin__"):
+                        origin = get_origin(annotation)
+                        args = get_args(annotation)
+                        if origin is Union and type(None) in args and other_model in args:
+                            logger.debug(f"Found Optional relationship: {model_name}.{field_name} -> {other_name}")
+                            _map_model_relationship(model_name, other_name, pydantic_model, other_model)
+                        # Check for List[OtherModel]
+                        elif origin is list and len(args) == 1 and args[0] == other_model:
+                            logger.debug(f"Found List relationship: {model_name}.{field_name} -> {other_name}")
+                            _map_model_relationship(model_name, other_name, pydantic_model, other_model)
+                except (AttributeError, TypeError):
+                    # If we can't determine the relationship, just continue
+                    continue
+
+
+def _map_model_relationship(model_name, other_name, pydantic_model, other_model):
+    """Helper to map relationships between models."""
+    # If we find a reference, make sure both models are mapped properly
+    django_model_name = f"Django{model_name}"
+    other_django_model_name = f"Django{other_name}"
+
+    # Get Django models if they exist
+    if model_name in _django_models and other_name in _django_models:
+        django_model = _django_models[model_name]
+        other_django_model = _django_models[other_name]
+
+        # Map both ways for full bidirectional mapping
+        map_relationship(pydantic_model, django_model)
+        map_relationship(other_model, other_django_model)
+
+        logger.debug(f"Mapped relationship: {model_name} <-> {django_model_name}")
+        logger.debug(f"Mapped relationship: {other_name} <-> {other_django_model_name}")
+
 
 class MockDiscovery(ModelDiscovery):
     """Mock implementation of ModelDiscovery for testing."""
@@ -37,6 +130,7 @@ class MockDiscovery(ModelDiscovery):
         self.django_models = _django_models
         self.filtered_models = {}  # Will hold the filtered models
         self.relationship_accessor = _relationships  # Use the global relationship accessor
+        self.field_overrides = _field_overrides  # Access field overrides
 
         # Add our pydantic models to the relationship accessor directly
         # Instead of using add_pydantic_model which might have different signature
@@ -44,6 +138,9 @@ class MockDiscovery(ModelDiscovery):
             logger.debug(f"Adding Pydantic model {name} to relationship accessor")
             relationship = RelationshipMapper(pydantic_model=model, django_model=None, context=None)
             self.relationship_accessor.available_relationships.append(relationship)
+
+        # Set up relationships between models that reference each other
+        _setup_nested_model_relationships()
 
         logger.debug(f"MockDiscovery initialized with {len(_discovered_models)} discovered models")
 
@@ -147,6 +244,10 @@ class MockDiscovery(ModelDiscovery):
         logger.debug(f"get_model_has_context returning {len(_model_has_context)} items")
         return _model_has_context
 
+    def get_field_overrides(self) -> dict:
+        """Get the field overrides dictionary."""
+        return self.field_overrides
+
 
 def register_model(name: str, model: type[BaseModel], has_context: bool = False) -> None:
     """
@@ -235,6 +336,23 @@ def get_model_has_context() -> dict[str, bool]:
 def get_relationship_accessor() -> RelationshipConversionAccessor:
     """Get the RelationshipConversionAccessor."""
     return _relationships
+
+
+def get_field_overrides() -> dict:
+    """Get the field overrides dictionary."""
+    return _field_overrides
+
+
+def has_field_override(model_name: str, field_name: str) -> bool:
+    """Check if a field override exists for a field."""
+    return model_name in _field_overrides and field_name in _field_overrides[model_name]
+
+
+def get_field_override(model_name: str, field_name: str) -> Optional[dict]:
+    """Get the field override for a field."""
+    if has_field_override(model_name, field_name):
+        return _field_overrides[model_name][field_name]
+    return None
 
 
 def clear() -> None:

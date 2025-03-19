@@ -2,7 +2,8 @@
 Django model for {{ original_name }}.
 """
 
-class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
+{% set cleaned_original_name = original_name.split('[')[0] if '[' in original_name else original_name %}
+class {{ model_name }}(Pydantic2DjangoBaseClass[{{ cleaned_original_name }}]):
     """
     Django model for {{ original_name }}.
     {% if context_fields %}
@@ -29,7 +30,7 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
         abstract = False
 
     {% if context_fields %}
-    def to_pydantic(self, context: "{{ model_name }}Context") -> {{ original_name }}:
+    def to_pydantic(self, context: "{{ model_name }}Context") -> {{ cleaned_original_name }}:
         """
         Convert this Django model to a Pydantic object.
 
@@ -43,5 +44,5 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ original_name }}]):
         Raises:
             ValueError: If context is missing required fields
         """
-        return cast({{ original_name }}, super().to_pydantic(context=context))
+        return cast({{ cleaned_original_name }}, super().to_pydantic(context=context))
     {% endif %}
