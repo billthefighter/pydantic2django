@@ -353,6 +353,9 @@ class StaticDjangoModelGenerator:
             # Clean up any remaining angle brackets that could cause rendering issues
             type_name = type_name.replace("<", "[").replace(">", "]")
 
+            # Handle any special characters that might cause formatting issues
+            type_name = type_name.strip().replace(",", ", ")
+
             # Ensure metadata is a dict and doesn't contain problematic characters
             metadata = {}
             if field_context.additional_metadata:

@@ -41,19 +41,15 @@ class {{ model_name }}Context(ModelContext):
         {% endfor %}
 
     @classmethod
-    def create(cls,
-        {%- for field in field_definitions %}
-        {{ field.name }}: Any,  # {{ field.type }}{% if not loop.last %}, {% endif %}
-        {%- endfor -%}
+    def create(cls,{% if field_definitions %}{% for field in field_definitions %}
+        {{ field.name }}: Any,{% endfor %}{% endif %}
     ) -> "{{ model_name }}Context":
         """
         Create a context instance with the required fields.
 
-        Args:
-        {%- for field in field_definitions %}
-            {{ field.name }}: {{ field.type }} for {{ field.name }} field
-        {%- endfor %}
-
+        Args:{% if field_definitions %}
+{% for field in field_definitions %}            {{ field.name }}: {{ field.type }} for {{ field.name }} field
+{% endfor %}{% endif %}
         Returns:
             A context instance with all required fields set
         """
