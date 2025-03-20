@@ -25,8 +25,7 @@ class {{ model_name }}Context(ModelContext):
     def create(cls,
         django_model: Type[models.Model],
 {% for field in field_definitions %}        {{ field.name }}: {% if field.is_optional %}Optional[{{ field.type }}]{% else %}{{ field.type }}{% endif %}{% if not loop.last %},
-{% endif %}{% endfor %}
-    ) -> "{{ model_name }}Context":
+{% endif %}{% endfor %}) -> "{{ model_name }}Context":
         """
         Create a context instance with the required field values.
 

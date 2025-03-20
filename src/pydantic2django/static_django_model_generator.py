@@ -192,18 +192,23 @@ class StaticDjangoModelGenerator:
                     if carrier.django_model:
                         django_model_name = carrier.django_model.__name__
                         # Clean up any parametrized generic types in model names for __all__
-                        if "[" in django_model_name or "<" in django_model_name:
-                            django_model_name = re.sub(r"\[.*\]", "", django_model_name)
+                        django_model_name = self._clean_generic_type(django_model_name)
                         django_model_names.append(f"'{django_model_name}'")
                         # Map Django model name to Pydantic model name
                         django_model_to_pydantic[django_model_name] = model_name
 
                     # Add import for the Pydantic model (avoid duplicates)
                     module_path = pydantic_model.__module__
-                    if model_name not in pydantic_imported_names and model_name not in all_imported_types:
-                        self.pydantic_imports.add(f"from {module_path} import {model_name}")
-                        pydantic_imported_names[model_name] = module_path
-                        all_imported_types.add(model_name)
+                    # Clean up any parametrized generic types in model names for imports
+                    cleaned_model_name = self._clean_generic_type(model_name)
+
+                    if (
+                        cleaned_model_name not in pydantic_imported_names
+                        and cleaned_model_name not in all_imported_types
+                    ):
+                        self.pydantic_imports.add(f"from {module_path} import {cleaned_model_name}")
+                        pydantic_imported_names[cleaned_model_name] = module_path
+                        all_imported_types.add(cleaned_model_name)
 
                     # Check if this model has a non-empty context class
                     has_context = bool(context_def.strip())
@@ -235,6 +240,10 @@ class StaticDjangoModelGenerator:
                                         "dict",
                                         "list",
                                     ]:
+                                        # Clean up any parametrized generic types
+                                        if "[" in type_name or "<" in type_name:
+                                            type_name = re.sub(r"\[.*\]", "", type_name)
+
                                         # Avoid duplicate context field imports by checking if it's already imported
                                         # as a Pydantic model or other context field type
                                         if (
@@ -321,6 +330,8 @@ class StaticDjangoModelGenerator:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
                 for cls in classes.split(", "):
+                    # Clean up any parameterized generic types in class names
+                    cls = self._clean_generic_type(cls)
                     pydantic_classes[cls] = module
 
         for import_stmt in context_imports:
@@ -328,6 +339,8 @@ class StaticDjangoModelGenerator:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
                 for cls in classes.split(", "):
+                    # Clean up any parameterized generic types in class names
+                    cls = self._clean_generic_type(cls)
                     # If this class is already imported in pydantic imports, skip it
                     if cls in pydantic_classes:
                         continue
@@ -445,9 +458,8 @@ class StaticDjangoModelGenerator:
         model_name = carrier.django_model.__name__
 
         # Handle parametrized generic models by extracting the base name
-        if "[" in model_name or "<" in model_name:
-            # Extract the base model name without generic parameters
-            model_name = re.sub(r"\[.*\]", "", model_name)
+        model_name = self._clean_generic_type(model_name)
+        if "<" in carrier.django_model.__name__ or "[" in carrier.django_model.__name__:
             logger.info(f"Processing generic model: {model_name}")
 
         # Get fields from the model
@@ -519,6 +531,9 @@ class StaticDjangoModelGenerator:
 
         # Add import for the original Pydantic model
         pydantic_model_name = carrier.pydantic_model.__name__
+        # Clean up any generic parameters in the name
+        pydantic_model_name = self._clean_generic_type(pydantic_model_name)
+
         module_path = carrier.pydantic_model.__module__
         self.pydantic_imports.add(f"from {module_path} import {pydantic_model_name}")
 
@@ -690,11 +705,25 @@ class StaticDjangoModelGenerator:
                 field_definitions.append(field_def)
 
         return template.render(
-            model_name=model_context.django_model.__name__,
-            pydantic_class=model_context.pydantic_class.__name__,
+            model_name=self._clean_generic_type(model_context.django_model.__name__),
+            pydantic_class=self._clean_generic_type(model_context.pydantic_class.__name__),
             pydantic_module=model_context.pydantic_class.__module__,
             field_definitions=field_definitions,
         )
+
+    def _clean_generic_type(self, name: str) -> str:
+        """
+        Clean generic parameters from a type name.
+
+        Args:
+            name: The type name to clean
+
+        Returns:
+            The cleaned type name without generic parameters
+        """
+        if "[" in name or "<" in name:
+            return re.sub(r"\[.*\]", "", name)
+        return name
 
 
 def main():

@@ -328,13 +328,13 @@ class DjangoFieldFactory:
         # Get the model class based on the field type
         if origin is list and args:
             # For list[Model] - many-to-many relationship
-            model_class = args[0]
+            pydantic_model_class = args[0]
         elif origin is dict and len(args) == 2:
             # For dict[str, Model] - many-to-many with key
-            model_class = args[1]
+            pydantic_model_class = args[1]
         elif origin is None and inspect.isclass(field_type) and issubclass(field_type, BaseModel):
             # Direct model reference - foreign key
-            model_class = field_type
+            pydantic_model_class = field_type
         else:
             logger.warning(f"Invalid model class type for field {field_name}: {origin} {args}")
             result.error_str = f"Invalid model class type for field {field_name}: {origin} {args}"
@@ -342,26 +342,31 @@ class DjangoFieldFactory:
             result.context_field = field_info
             return result
 
-        # Handle case where model is not in relationship accessor
-        if model_class not in self.available_relationships.available_pydantic_models:
-            logger.warning(f"Model {model_class} not in relationship accessor")
+        # Handle case where pydantic model is not in relationship accessor
+        if pydantic_model_class not in self.available_relationships.available_pydantic_models:
+            logger.warning(f"Model {pydantic_model_class} not in relationship accessor")
             result.django_field = None
-            result.error_str = f"Model {model_class} not in relationship accessor"
+            result.error_str = f"Model {pydantic_model_class} not in relationship accessor"
             # Mark as context field and return early
             result.context_field = field_info
             return result
 
-        # Get the model name, handling both string and class references
-        if isinstance(model_class, str):
-            target_model_name = model_class
-        elif inspect.isclass(model_class):
-            target_model_name = model_class.__name__
-        else:
-            logger.warning(f"Invalid model class type for field {field_name}: {type(model_class)}")
+        # Get the corresponding Django model from the relationship accessor
+        django_model_class = self.available_relationships.get_django_model_for_pydantic(pydantic_model_class)
+
+        if not django_model_class:
+            logger.warning(f"No Django model found for Pydantic model {pydantic_model_class}")
             result.django_field = None
-            # Also mark this as a context field
+            result.error_str = f"No Django model found for Pydantic model {pydantic_model_class}"
+            # Mark as context field and return early
             result.context_field = field_info
             return result
+
+        # Get the model name from the Django model
+        if hasattr(django_model_class, "_meta") and hasattr(django_model_class._meta, "model_name"):
+            target_model_name = django_model_class._meta.model_name
+        else:
+            target_model_name = django_model_class.__name__
 
         # Get the related name
         related_name = sanitize_related_name(
@@ -372,19 +377,13 @@ class DjangoFieldFactory:
 
         field_kwargs["related_name"] = related_name
 
-        # Handle to_field behavior - Only add app_label if it's not already part of the target model name
-        # Check for duplicate app labels to ensure we don't create them
-        if "." in target_model_name:
-            # If target already has an app label, check for duplicates
-            parts = target_model_name.split(".")
-            if len(parts) >= 2 and parts[0] == parts[1]:
-                # Remove duplicate app label (app_name.app_name.ModelName)
-                target_model_name = f"{parts[0]}.{'.'.join(parts[2:])}"
-            # Use model name with cleaned app label
-            to_value = target_model_name
-        else:
-            # No app label in target model name, add the app label from result
-            to_value = f"{result.app_label}.{target_model_name}"
+        # Handle to_field behavior using app_label from Django model
+        app_label = (
+            getattr(django_model_class._meta, "app_label", result.app_label)
+            if hasattr(django_model_class, "_meta")
+            else result.app_label
+        )
+        to_value = f"{app_label}.{django_model_class.__name__}"
 
         field_kwargs["to"] = to_value  # This is the single source of truth for relationship targets
 
