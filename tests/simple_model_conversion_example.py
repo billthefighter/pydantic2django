@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Callable, Any, Generic, Dict, TypeVar
+from typing import Optional, Callable, Any, Generic, Dict, TypeVar, Literal
 from uuid import uuid4
 import logging
+from enum import Enum
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -40,6 +41,16 @@ class ChainStep(BaseModel, Generic[T]):
     model_config = ConfigDict(validate_assignment=True, arbitrary_types_allowed=True)
 
 
+class EnumValues(Enum):
+    VALUE1 = "value1"
+    VALUE2 = "value2"
+    VALUE3 = "value3"
+
+
+class EnumExample(BaseModel):
+    enum_field: EnumValues
+
+
 def is_persistent_model(obj: Any) -> bool:
     """
     Filter function that returns True if the object is a ChainStep or RetryStrategy class.
@@ -50,7 +61,7 @@ def is_persistent_model(obj: Any) -> bool:
     Returns:
         bool: True if obj is ChainStep or RetryStrategy, False otherwise
     """
-    return isclass(obj) and (obj is ChainStep or obj is RetryStrategy)
+    return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample)
 
 
 # Configure Django settings before importing any Django-related modules
@@ -95,14 +106,14 @@ def setup_relationships():
     logger.debug("Registering ChainStep and RetryStrategy models")
     register_model("ChainStep", ChainStep, has_context=True)
     register_model("RetryStrategy", RetryStrategy, has_context=False)
-
+    register_model("EnumExample", EnumExample, has_context=False)
     # Create a relationship accessor
     relationship_accessor = RelationshipConversionAccessor()
 
     # Add our models to the accessor to be recognized during generation
     relationship_accessor.add_pydantic_model(ChainStep)
     relationship_accessor.add_pydantic_model(RetryStrategy)
-
+    relationship_accessor.add_pydantic_model(EnumExample)
     return relationship_accessor
 
 
@@ -122,6 +133,7 @@ def generate_models():
     register_model("ChainStep", ChainStep, has_context=True)
     register_model("RetryStrategy", RetryStrategy, has_context=False)
     register_model("BasePrompt", BasePrompt, has_context=False)
+    register_model("EnumExample", EnumExample, has_context=False)
 
     # Set up field overrides
     from mock_discovery import set_field_override
@@ -141,256 +153,22 @@ def generate_models():
     relationship_accessor.available_relationships.append(RelationshipMapper(ChainStep, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(RetryStrategy, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(BasePrompt, None, None))
-
+    relationship_accessor.available_relationships.append(RelationshipMapper(EnumExample, None, None))
     # We need to set up Django models as well to establish the relationships
     from django.db import models
 
     # Set up base classes for our Django models
     from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
-    # Create Django model classes with explicit relationships
-    class DjangoChainStep(Pydantic2DjangoBaseClass[ChainStep]):
-        # Add explicit ForeignKey fields for relationships with correct app_label
-        prompt = models.ForeignKey("django_llm.BasePrompt", on_delete=models.CASCADE)
-        retry_strategy = models.ForeignKey("django_llm.RetryStrategy", on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = "django_llm"
-
-    class DjangoRetryStrategy(Pydantic2DjangoBaseClass[RetryStrategy]):
-        max_retries = models.IntegerField(default=3)
-        delay = models.IntegerField(default=1)
-
-        class Meta:
-            app_label = "django_llm"
-
-    class DjangoBasePrompt(Pydantic2DjangoBaseClass[BasePrompt]):
-        prompt = models.TextField()
-
-        class Meta:
-            app_label = "django_llm"
-
-    # Register Django models
-    from mock_discovery import register_django_model
-
-    register_django_model("ChainStep", DjangoChainStep)
-    register_django_model("RetryStrategy", DjangoRetryStrategy)
-    register_django_model("BasePrompt", DjangoBasePrompt)
-
-    # Explicitly map relationships
-    from mock_discovery import map_relationship
-
-    map_relationship(ChainStep, DjangoChainStep)
-    map_relationship(RetryStrategy, DjangoRetryStrategy)
-    map_relationship(BasePrompt, DjangoBasePrompt)
-
-    # Get and log the registered models
-    discovered = get_discovered_models()
-    logger.info(f"Registered models: {list(discovered.keys())}")
-
-    # Use a mock discovery instance instead of the real generator
-    logger.debug("Creating MockDiscovery instance")
-    discovery = MockDiscovery()
-
-    logger.debug("Calling discover_models")
-    discovery.discover_models(package_names=[], app_label="django_llm")
-
-    # Check what models were discovered
-    logger.info(f"Discovery models after discover_models: {list(discovery.discovered_models.keys())}")
-
-    # Check relationships before generation
-    logger.info("Checking relationships before generation:")
-    for rel in relationship_accessor.available_relationships:
-        if rel.pydantic_model and rel.django_model:
-            logger.info(f"  Relationship: {rel.pydantic_model.__name__} <-> {rel.django_model.__name__}")
-
-    # Check field overrides
-    from mock_discovery import get_field_overrides
-
-    field_overrides = get_field_overrides()
-    logger.info("Field overrides:")
-    for model_name, fields in field_overrides.items():
-        for field_name, override in fields.items():
-            logger.info(f"  {model_name}.{field_name}: {override}")
-
-    # Make sure output directory exists
-    output_path = "tests/django_llm/models/models.py"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    logger.debug(f"Created output directory for {output_path}")
-
-    # Use the generator with our mock discovery
-    logger.debug("Creating StaticDjangoModelGenerator with discovery_module")
-    gen = StaticDjangoModelGenerator(
-        output_path=output_path,
-        packages=[],
+    generator = StaticDjangoModelGenerator(
+        output_path="generated_models.py",
+        packages=["tests.django_llm"],
         app_label="django_llm",
-        discovery_module=discovery,
+        filter_function=is_persistent_model,
+        discovery_module=MockDiscovery(),
     )
-
-    # We've set up the discovery with our models, now generate
-    logger.debug("Calling generate() method")
-    gen.generate()
-
-    logger.info("Model generation complete")
-
-    # Check if the output file exists and has content
-    if os.path.exists(output_path):
-        with open(output_path, "r") as f:
-            content = f.read()
-            logger.info(f"Output file size: {len(content)} bytes")
-            # Check if any models were actually generated
-            if "__all__ = []" in content:
-                logger.warning("No models were added to __all__ list in the output file")
-
-    # Since the generator overwrites our file, let's manually add the relationship field
-    with open(output_path, "r") as f:
-        content = f.read()
-
-    # Fix the duplicate app label in the prompt ForeignKey and add the retry_strategy field if needed
-    prompt_pattern = "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.django_llm.BasePrompt', on_delete=models.CASCADE)"
-    fixed_prompt = (
-        "prompt = models.ForeignKey(verbose_name='prompt', to='django_llm.BasePrompt', on_delete=models.CASCADE)"
-    )
-
-    if "retry_strategy = models.ForeignKey" not in content:
-        logger.info("Adding retry_strategy ForeignKey to DjangoChainStep and fixing app_label")
-        # Fix both ForeignKey fields at once
-        if prompt_pattern in content:
-            content = content.replace(
-                prompt_pattern,
-                f"{fixed_prompt}\n    retry_strategy = models.ForeignKey(verbose_name='retry_strategy', to='django_llm.DjangoRetryStrategy', on_delete=models.CASCADE)",
-            )
-        # Handle just fixing the app_label if the pattern doesn't match exactly
-        elif "to='django_llm.django_llm." in content:
-            content = content.replace("to='django_llm.django_llm.", "to='django_llm.")
-
-        # Update the context class to remove retry_strategy from context fields
-        content = content.replace(
-            """self.add_field(
-            field_name="retry_strategy",
-            field_type=RetryStrategy,
-            is_optional=False,
-            is_list=False,
-            additional_metadata={}
-        )""",
-            "",
-        )
-
-        # Update the create method parameter list
-        content = content.replace(
-            """@classmethod
-    def create(cls,
-        django_model: Type[models.Model],
-        input_transform: Optional[Callable],
-        output_transform: Optional[Callable],
-        retry_strategy: RetryStrategy    ) -> "DjangoChainStepContext":""",
-            """@classmethod
-    def create(cls,
-        django_model: Type[models.Model],
-        input_transform: Optional[Callable],
-        output_transform: Optional[Callable]) -> "DjangoChainStepContext":""",
-        )
-
-        # Remove the retry_strategy parameter from the docstring
-        content = content.replace(
-            """            input_transform: Value for input_transform field
-            output_transform: Value for output_transform field
-            retry_strategy: Value for retry_strategy field""",
-            """            input_transform: Value for input_transform field
-            output_transform: Value for output_transform field""",
-        )
-
-        # Remove setting the retry_strategy context value
-        content = content.replace(
-            """        context.set_value("input_transform", input_transform)
-        context.set_value("output_transform", output_transform)
-        context.set_value("retry_strategy", retry_strategy)""",
-            """        context.set_value("input_transform", input_transform)
-        context.set_value("output_transform", output_transform)""",
-        )
-
-        # Update the docstring for the model
-        content = content.replace(
-            """    Context Fields:
-        The following fields require context when converting back to Pydantic:
-        - input_transform: Optional[Any]
-        - output_transform: Optional[LLMResponse]
-        - retry_strategy: RetryStrategy""",
-            """    Context Fields:
-        The following fields require context when converting back to Pydantic:
-        - input_transform: Optional[Any]
-        - output_transform: Optional[LLMResponse]""",
-        )
-
-        # Write the updated content back to the file
-        with open(output_path, "w") as f:
-            f.write(content)
-
-        logger.info("Updated models file with retry_strategy ForeignKey relationship")
+    generator.generate()
 
 
 if __name__ == "__main__":
     generate_models()
-
-    def test_manual_model_creation():
-        """Test manual model creation without importing the generated models."""
-        from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
-        from pydantic2django.context_storage import ModelContext, FieldContext
-        from dataclasses import dataclass, field
-        from typing import Type, Optional
-        from django.db import models
-
-        logger.info("Testing manual model creation")
-
-        # Create a simple RetryStrategy model manually
-        class ManualDjangoRetryStrategy(Pydantic2DjangoBaseClass[RetryStrategy]):
-            max_retries = models.IntegerField(verbose_name="max retries", default=3)
-            delay = models.IntegerField(verbose_name="delay", default=1)
-            pydantic_data = models.TextField(default="{}")
-
-            class Meta(Pydantic2DjangoBaseClass.Meta):
-                app_label = "test_app"
-
-            @classmethod
-            def from_pydantic(cls, pydantic_instance, **kwargs):
-                """Custom from_pydantic implementation that handles the conversion manually."""
-                django_instance = cls()
-                django_instance.max_retries = pydantic_instance.max_retries
-                django_instance.delay = pydantic_instance.delay
-                # Save JSON representation for to_pydantic
-                django_instance.pydantic_data = pydantic_instance.model_dump_json()
-                return django_instance
-
-            def to_pydantic(self, **kwargs):
-                """Custom to_pydantic implementation."""
-                # In Pydantic v2, we use model_validate_json instead of parse_raw_as
-                return RetryStrategy.model_validate_json(self.pydantic_data)
-
-        # Create test objects
-        retry = RetryStrategy(max_retries=5, delay=2)
-        logger.info(f"Created Pydantic RetryStrategy: {retry}")
-
-        # Test RetryStrategy conversion - simpler case without context
-        django_retry = ManualDjangoRetryStrategy.from_pydantic(retry)
-        logger.info(f"Created Manual Django RetryStrategy: {django_retry}")
-
-        # Convert back to Pydantic
-        recovered_retry = django_retry.to_pydantic()
-        logger.info(f"Recovered Pydantic RetryStrategy: {recovered_retry}")
-
-        # Verify the conversion worked
-        assert (
-            recovered_retry.max_retries == retry.max_retries
-        ), f"Expected {retry.max_retries}, got {recovered_retry.max_retries}"
-        assert recovered_retry.delay == retry.delay, f"Expected {retry.delay}, got {recovered_retry.delay}"
-        logger.info("RetryStrategy conversion test passed")
-
-        logger.info("All conversion tests passed!")
-        return True
-
-    try:
-        # Run the test
-        test_manual_model_creation()
-        logger.info("All tests passed!")
-    except Exception as e:
-        logger.error(f"Test failed: {str(e)}", exc_info=True)

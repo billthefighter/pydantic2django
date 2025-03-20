@@ -99,6 +99,11 @@ class FieldSerializer:
         if hasattr(field, "blank") and field.blank:
             params.append(f"blank={field.blank}")
 
+        # Handle choices for fields like EnumFields
+        if hasattr(field, "choices") and field.choices:
+            choices_repr = str(field.choices)
+            params.append(f"choices={choices_repr}")
+
         # Only include default if it was explicitly set (None)
         if hasattr(field, "default") and field.default is not None:
             # Check if this is a Django-provided default or one we explicitly set

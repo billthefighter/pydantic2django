@@ -122,7 +122,9 @@ class TypeMappingDefinition:
     @classmethod
     def enum_field(cls, python_type: type[Enum]) -> "TypeMappingDefinition":
         """Create an EnumField mapping."""
-        enum_values = [item.value for item in python_type]
+        # Get enum values from __members__ dictionary instead of iterating the class directly
+        # This is more reliable as direct iteration can fail in some contexts
+        enum_values = [member.value for member in python_type.__members__.values()]
 
         # Determine the type of the enum values
         if all(isinstance(val, int) for val in enum_values):
@@ -130,23 +132,25 @@ class TypeMappingDefinition:
             return cls(
                 python_type=python_type,
                 django_field=models.IntegerField,
-                field_kwargs={"choices": [(item.value, item.name) for item in enum_values]},
+                field_kwargs={"choices": [(member.value, name) for name, member in python_type.__members__.items()]},
             )
-        elif all(isinstance(val, (str, int)) for val in enum_values):
-            # String enum
-            max_length = max(len(str(val)) for val in enum_values if isinstance(val, str))
+        elif all(isinstance(val, str) for val in enum_values):
+            # String enum - all values must be strings only
+            max_length = max(len(str(val)) for val in enum_values)
             return cls(
                 python_type=python_type,
                 django_field=models.CharField,
                 max_length=max_length,
-                field_kwargs={"choices": [(item.value, item.name) for item in enum_values]},
+                field_kwargs={"choices": [(member.value, name) for name, member in python_type.__members__.items()]},
             )
         elif all(isinstance(val, (str, int, float)) for val in enum_values):
             # Mixed type enum - use TextField with choices
             return cls(
                 python_type=python_type,
                 django_field=models.TextField,
-                field_kwargs={"choices": [(str(item.value), item.name) for item in enum_values]},
+                field_kwargs={
+                    "choices": [(str(member.value), name) for name, member in python_type.__members__.items()]
+                },
             )
         # TODO: Add support for other enum types
         else:
@@ -369,6 +373,11 @@ class TypeMapper:
             # Default to JSONField for these special forms
             return TypeMappingDefinition(python_type=dict, django_field=models.JSONField)
 
+        # Check if type is an Enum - handle this case first for more accurate matching
+        if isinstance(python_type, type) and issubclass(python_type, Enum):
+            # Create a specific enum mapping for this enum type
+            return cls.enum_field(python_type)
+
         # Handle Optional types first
         origin = get_origin(python_type)
         args = get_args(python_type)
@@ -376,6 +385,14 @@ class TypeMapper:
         if is_pydantic_model_field_optional(python_type):
             # Get the non-None type
             inner_type = next(arg for arg in args if arg is not type(None))
+
+            # Check if inner type is an Enum
+            if isinstance(inner_type, type) and issubclass(inner_type, Enum):
+                enum_mapping = cls.enum_field(inner_type)
+                # Make it nullable since it's optional
+                enum_mapping.field_kwargs["null"] = True
+                enum_mapping.field_kwargs["blank"] = True
+                return enum_mapping
 
             # Check if the inner type is a relationship type
             inner_origin = get_origin(inner_type)
@@ -523,3 +540,16 @@ class TypeMapper:
         """
         # Use the shared utility function
         return get_default_max_length(field_name, field_type)
+
+    @classmethod
+    def enum_field(cls, enum_type: type[Enum]) -> TypeMappingDefinition:
+        """
+        Create a type mapping definition for an enum type.
+
+        Args:
+            enum_type: The enum type to create a mapping for
+
+        Returns:
+            A TypeMappingDefinition for the enum type
+        """
+        return TypeMappingDefinition.enum_field(enum_type)

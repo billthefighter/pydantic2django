@@ -175,16 +175,29 @@ class DjangoFieldFactory:
             # Get field type from annotation
             field_type = field_info.annotation
 
-            # Get unified field attributes
-            result.field_kwargs = self.process_field_attributes(field_info)
-
             # Get the field mapping from TypeMapper
-            result.type_mapping_definition = TypeMapper.get_mapping_for_type(field_type)
-            if not result.type_mapping_definition:
+            mapping_definition = TypeMapper.get_mapping_for_type(field_type)
+            if not mapping_definition:
                 logger.warning(f"Could not map {field_name} of type {field_type} to a Django field, must be contextual")
                 # Mark this as a context field since we can't map it
                 result.context_field = field_info
                 return result
+
+            # If we found a type mapping, create the Django field
+            if mapping_definition is not None:
+                # Process the field attributes
+                field_kwargs = self.process_field_attributes(field_info)
+
+                # Merge any type-specific kwargs from the mapping with our processed kwargs
+                # This ensures we preserve important mapping-specific kwargs like 'choices'
+                for key, value in mapping_definition.field_kwargs.items():
+                    field_kwargs[key] = value
+
+                # Store the merged kwargs in the result
+                result.field_kwargs = field_kwargs
+                result.type_mapping_definition = mapping_definition
+                django_field = models.Field()  # Just a placeholder until render time
+                result.django_field = django_field
 
             # For relationship fields, use RelationshipFieldHandler
             if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
@@ -661,6 +674,11 @@ class DjangoModelFactory:
             model_attrs["__module__"] = carrier.pydantic_model.__module__
         # Add  attribute that refers to the FQN
         model_attrs["object_type"] = f"{carrier.pydantic_model.__module__}.{carrier.pydantic_model.__name__}"
+
+        # Check if there are any Django fields - if not, don't create a model
+        if not carrier.django_fields:
+            logger.info(f"No Django fields for {carrier.pydantic_model.__name__}, skipping model creation")
+            return carrier
 
         # Determine base classes
         base_classes = [carrier.base_django_model] if carrier.base_django_model else [models.Model]

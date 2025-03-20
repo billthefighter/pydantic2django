@@ -167,11 +167,22 @@ class StaticDjangoModelGenerator:
         django_model_to_pydantic = {}  # Map Django model names to Pydantic model names
         context_class_names = []  # List to store context class names for __all__
 
+        # Track models that only have context fields for logging
+        context_only_models = []
+
         # Process models in registration order
         for pydantic_model in models_in_registration_order:
             try:
                 carrier = self.setup_django_model(pydantic_model)
                 if carrier:
+                    # Skip models that have no Django fields (only context fields)
+                    if not carrier.django_model:
+                        context_only_models.append(pydantic_model.__name__)
+                        logger.info(
+                            f"Skipping model {pydantic_model.__name__} with only context fields, no Django fields"
+                        )
+                        continue
+
                     model_def, context_def = self.generate_definitions_from_carrier(carrier)
                     model_definitions.append(model_def)
                     model_name = pydantic_model.__name__
@@ -251,6 +262,12 @@ class StaticDjangoModelGenerator:
             except Exception as e:
                 logger.error(f"Error generating model definition for {pydantic_model.__name__}: {e}")
                 raise
+
+        # Log summary of skipped models with only context fields
+        if context_only_models:
+            logger.info(
+                f"Skipped {len(context_only_models)} models with only context fields: {', '.join(context_only_models)}"
+            )
 
         # De-duplicate model definitions (remove repeated models like DjangoBaseGraph)
         unique_model_definitions = []
