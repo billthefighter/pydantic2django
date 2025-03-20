@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, TypeVar
+from typing import Optional, TypeVar, get_args
 
 import jinja2
 from django.db import models
@@ -651,6 +651,47 @@ class StaticDjangoModelGenerator:
                 if "Callable" in type_str or "typing.Callable" in type_str:
                     type_name = "Callable"
                     self.extra_type_imports.add("Callable")
+                # Handle TypeVar instances with tilde notation (Type[~TypeVarName])
+                elif "~" in type_str or "TypeVar" in type_str:
+                    # First, try to get the module and base type name if available
+                    if hasattr(field_context.field_type, "__module__") and hasattr(
+                        field_context.field_type, "__name__"
+                    ):
+                        module_name = field_context.field_type.__module__
+                        type_name = field_context.field_type.__name__
+                        # If it's a typing.Type[...], extract just "Type"
+                        if module_name == "typing" and type_name == "Type":
+                            # Try to get the base bound class of the TypeVar
+                            args = get_args(field_context.field_type)
+                            if args and len(args) > 0:
+                                if hasattr(args[0], "__bound__") and args[0].__bound__:
+                                    # Get the bound class of the TypeVar
+                                    bound_class = args[0].__bound__
+                                    if hasattr(bound_class, "__name__"):
+                                        type_name = f"Type[{bound_class.__name__}]"
+                                    else:
+                                        type_name = "Type"
+                                else:
+                                    # Use simple Type if we can't extract the bound
+                                    type_name = "Type"
+                            else:
+                                type_name = "Type"
+                        else:
+                            # Use the type name directly
+                            type_name = type_name
+                    else:
+                        # Clean up the type string, remove tildes and fix unclosed brackets
+                        type_name = re.sub(r"~", "", type_str)
+                        # Make sure brackets are balanced
+                        if "[" in type_name and "]" not in type_name:
+                            type_name = type_name + "]"
+                        # Fix "Type[Type[X]]" issues
+                        if "Type[Type[" in type_name:
+                            type_name = re.sub(r"Type\[Type\[([^\]]+)\]\]", r"Type[\1]", type_name)
+
+                    # Make sure we import Type if using it
+                    if "Type" in type_name:
+                        self.extra_type_imports.add("Type")
                 # Handle Optional types better by examining the string representation
                 elif "Optional" in type_str and field_context.is_optional:
                     # Extract what's inside Optional[...]
@@ -679,9 +720,14 @@ class StaticDjangoModelGenerator:
                     # Fix "Optional[Optional]" issues
                     if "Optional[Optional]" in type_name:
                         type_name = type_name.replace("Optional[Optional]", "Optional")
+                    # Fix any unclosed brackets
+                    if type_name.count("[") > type_name.count("]"):
+                        type_name += "]" * (type_name.count("[") - type_name.count("]"))
 
                 # Clean up any remaining angle brackets that could cause rendering issues
                 type_name = type_name.replace("<", "[").replace(">", "]")
+                # Remove any remaining tildes
+                type_name = type_name.replace("~", "")
 
                 # Handle any special characters that might cause formatting issues
                 type_name = type_name.strip().replace(",", ", ")
