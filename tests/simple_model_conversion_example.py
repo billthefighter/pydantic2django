@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Callable, Any, Generic, Dict, TypeVar, Literal
+from typing import Optional, Callable, Any, Generic, Dict, TypeVar, Literal, Type
 from uuid import uuid4
 import logging
 from enum import Enum
@@ -10,6 +10,7 @@ logger = logging.getLogger("model_conversion")
 
 # Type variable for model classes
 T = TypeVar("T")
+PromptType = TypeVar("PromptType", bound=Enum)
 
 
 class BasePrompt(BaseModel):
@@ -49,6 +50,14 @@ class EnumValues(Enum):
 
 class EnumExample(BaseModel):
     enum_field: EnumValues
+
+
+class ComplexTypingExample(BaseModel, Generic[PromptType, T]):
+    text: str
+    prompt: Type[PromptType]
+    input_transform: Callable[[ChainContext, Any], Dict[str, Any]]
+    output_transform: Callable[[LLMResponse], T]
+    retry_strategy: RetryStrategy
 
 
 def is_persistent_model(obj: Any) -> bool:
@@ -134,6 +143,7 @@ def generate_models():
     register_model("RetryStrategy", RetryStrategy, has_context=False)
     register_model("BasePrompt", BasePrompt, has_context=False)
     register_model("EnumExample", EnumExample, has_context=False)
+    register_model("ComplexTypingExample", ComplexTypingExample, has_context=True)
 
     # Set up field overrides
     from mock_discovery import set_field_override
