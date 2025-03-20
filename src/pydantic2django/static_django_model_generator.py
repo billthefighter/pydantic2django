@@ -5,13 +5,13 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, TypeVar, get_args
+from typing import Optional, TypeVar
 
 import jinja2
 from django.db import models
 from pydantic import BaseModel
 
-from pydantic2django.context_storage import ModelContext
+from pydantic2django.context_storage import ContextClassGenerator, ModelContext, TypeHandler
 
 # Import the base class for Django models
 from pydantic2django.discovery import ModelDiscovery
@@ -257,48 +257,31 @@ class StaticDjangoModelGenerator:
                             except (AttributeError, TypeError):
                                 pass
 
-                            if "Optional[" in field_type_str or field_context.is_optional:
-                                self.extra_type_imports.add("Optional")
-                            if "List[" in field_type_str or field_context.is_list:
-                                self.extra_type_imports.add("List")
-                            if "Dict[" in field_type_str:
-                                self.extra_type_imports.add("Dict")
-                            if "Union[" in field_type_str:
-                                self.extra_type_imports.add("Union")
-                            if "Type[" in field_type_str:
-                                self.extra_type_imports.add("Type")
+                            # Use TypeHandler to analyze the field type and get required imports
+                            field_imports = TypeHandler.get_required_imports(field_type_str)
 
-                            # Add explicit imports for TypeVars or custom types in Type expressions
-                            # Look for Type[SomeTypeName] patterns and extract SomeTypeName
-                            type_var_match = re.search(r"Type\[([\w.]+)\]", field_type_str)
-                            if type_var_match:
-                                inner_type = type_var_match.group(1)
-                                if "." not in inner_type and not inner_type.startswith(
-                                    ("str", "int", "float", "bool", "list", "dict", "Any")
+                            # Add typing imports
+                            for typing_import in field_imports["typing"]:
+                                self.extra_type_imports.add(typing_import)
+
+                            # Add custom type imports if they're not already imported
+                            for custom_type in field_imports["custom"]:
+                                # Skip if it's already in our imports
+                                if (
+                                    custom_type in context_field_imported_names
+                                    or custom_type in pydantic_imported_names
+                                    or custom_type in all_imported_types
                                 ):
-                                    # This looks like a TypeVar or other named type, add it to imports
-                                    self.extra_type_imports.add(inner_type)
+                                    continue
 
-                                    # For TypeVars commonly used in Generic classes, add TypeVar import
-                                    if re.match(r"^[A-Z][A-Za-z0-9_]*$", inner_type) and not inner_type.endswith(
-                                        ("Type", "Any", "Dict", "List")
-                                    ):
-                                        self.extra_type_imports.add("TypeVar")
+                                # Add to extra_type_imports if it can't be imported from a module
+                                self.extra_type_imports.add(custom_type)
 
-                            # Check for Generic usage
-                            if "Generic[" in field_type_str:
-                                self.extra_type_imports.add("Generic")
-                                # Extract the TypeVars used in Generic
-                                generic_match = re.search(r"Generic\[([\w, ]+)\]", field_type_str)
-                                if generic_match:
-                                    type_vars = generic_match.group(1).split(",")
-                                    for tv in type_vars:
-                                        tv = tv.strip()
-                                        if tv and not tv.startswith(
-                                            ("str", "int", "float", "bool", "list", "dict", "Any")
-                                        ):
-                                            self.extra_type_imports.add(tv)
-                                            self.extra_type_imports.add("TypeVar")
+                            # Also handle is_optional and is_list flags
+                            if field_context.is_optional:
+                                self.extra_type_imports.add("Optional")
+                            if field_context.is_list:
+                                self.extra_type_imports.add("List")
                 else:
                     logger.warning(f"Skipping model {pydantic_model.__name__} due to errors")
 
@@ -468,7 +451,14 @@ class StaticDjangoModelGenerator:
             model_def = self.generate_model_definition(carrier)
             # Only generate context class if there are context fields
             if carrier.model_context.context_fields:
-                context_def = self.generate_context_class(carrier.model_context)
+                # Create a context generator to capture imports
+                context_generator = ContextClassGenerator(jinja_env=self.jinja_env)
+                # Generate the context class and capture imports in one step
+                context_def = context_generator.generate_context_class(carrier.model_context)
+                # Update our imports
+                imports = context_generator.get_imports()
+                self.extra_type_imports.update(imports["typing"])
+                self.context_class_imports.update(imports["context"])
                 return model_def, context_def
             else:
                 return model_def, ""
@@ -657,269 +647,14 @@ class StaticDjangoModelGenerator:
         Generate a context class for a Django model.
 
         Args:
-            model: The Django model class
             model_context: The ModelContext instance for the model
 
         Returns:
             String representation of the context class
         """
-        if model_context is None or not hasattr(model_context, "django_model") or model_context.django_model is None:
-            logger.warning("Cannot generate context class for None model_context or missing django_model")
-            return ""
-
-        # Skip generating context class if there are no context fields
-        if not model_context.context_fields:
-            logger.info(f"Skipping context class for {model_context.django_model.__name__} - no context fields")
-            return ""
-
-        template = self.jinja_env.get_template("context_class.py.j2")
-
-        # Prepare field definitions
-        field_definitions = []
-        if hasattr(model_context, "context_fields"):
-            for field_context in model_context.context_fields:
-                # Detect Callable types
-                type_str = str(field_context.field_type)
-
-                # Check for Callable types
-                if "Callable" in type_str or "typing.Callable" in type_str:
-                    type_name = "Callable"
-                    self.extra_type_imports.add("Callable")
-                # Handle typing module references with unclosed brackets
-                elif "typing." in type_str and ("[" in type_str and type_str.count("[") > type_str.count("]")):
-                    # Extract the base typing construct (Type, Optional, etc)
-                    typing_construct = type_str.split("typing.", 1)[1].split("[", 1)[0]
-
-                    # Add the rest of the content, making sure brackets are balanced
-                    if "[" in type_str:
-                        # Extract everything after the first opening bracket
-                        content_part = type_str.split(f"typing.{typing_construct}[", 1)[1]
-
-                        # Clean up tildes and ensure brackets are balanced
-                        content_part = re.sub(r"~", "", content_part)
-
-                        # Add any missing closing brackets
-                        if content_part.count("[") > content_part.count("]"):
-                            content_part += "]" * (content_part.count("[") - content_part.count("]"))
-                        # If no brackets at all, add a closing bracket
-                        elif "]" not in content_part:
-                            content_part += "]"
-
-                        # Process module paths in the content
-                        content_part = self._handle_type_with_module_path(content_part)
-
-                        type_name = f"{typing_construct}[{content_part}"
-                    else:
-                        type_name = typing_construct
-
-                    # Add import for the typing construct
-                    self.extra_type_imports.add(typing_construct)
-                # Handle typing.Type expressions specifically
-                elif "typing.Type[" in type_str:
-                    # Extract the content inside the brackets using a more robust approach
-                    type_content = type_str.split("typing.Type[", 1)[1]
-
-                    # Find the correct closing bracket by tracking bracket depth
-                    bracket_depth = 1
-                    content_end = 0
-                    for i, char in enumerate(type_content):
-                        if char == "[":
-                            bracket_depth += 1
-                        elif char == "]":
-                            bracket_depth -= 1
-                            if bracket_depth == 0:
-                                content_end = i
-                                break
-
-                    # If we didn't find a closing bracket, use all content and fix later
-                    if content_end == 0:
-                        content_end = len(type_content)
-                        if not type_content.endswith("]"):
-                            type_content += "]"
-
-                    # Extract the inner type and clean it
-                    inner_type = type_content[:content_end]
-
-                    # Clean up the inner type - remove module prefixes, tildes, etc.
-                    inner_type = re.sub(r"~", "", inner_type)
-
-                    # Handle module paths in the inner type
-                    inner_type = self._handle_type_with_module_path(inner_type)
-
-                    # Check if this is a TypeVar and we need to import it separately
-                    if not inner_type.startswith(("str", "int", "float", "bool", "dict", "list", "Any")):
-                        # This could be a TypeVar or other custom type - try to add it to imports
-                        self._maybe_add_type_to_imports(inner_type)
-
-                        # For TypeVars commonly used in Generic classes, add TypeVar import
-                        if re.match(r"^[A-Z][A-Za-z0-9_]*$", inner_type) and not inner_type.endswith(
-                            ("Type", "Any", "Dict", "List")
-                        ):
-                            self.extra_type_imports.add("TypeVar")
-
-                    type_name = f"Type[{inner_type}]"
-                    self.extra_type_imports.add("Type")
-                # Handle Type[] expressions without typing. prefix
-                elif type_str.startswith("Type[") and "[" in type_str:
-                    # Extract the content inside the brackets using a more robust approach
-                    type_content = type_str.split("Type[", 1)[1]
-
-                    # Find the correct closing bracket by tracking bracket depth
-                    bracket_depth = 1
-                    content_end = 0
-                    for i, char in enumerate(type_content):
-                        if char == "[":
-                            bracket_depth += 1
-                        elif char == "]":
-                            bracket_depth -= 1
-                            if bracket_depth == 0:
-                                content_end = i
-                                break
-
-                    # If we couldn't find a closing bracket, use the whole content
-                    if content_end == 0:
-                        content_end = len(type_content)
-                        # Add closing bracket if needed
-                        if not type_content.endswith("]"):
-                            type_content += "]"
-
-                    # Extract the inner type and clean it
-                    inner_type = type_content[:content_end]
-
-                    # Clean up the inner type - remove module prefixes, tildes, etc.
-                    inner_type = re.sub(r"~", "", inner_type)
-
-                    # Handle module paths in the inner type
-                    inner_type = self._handle_type_with_module_path(inner_type)
-
-                    # Check if this is a TypeVar and we need to import it separately
-                    if not inner_type.startswith(("str", "int", "float", "bool", "dict", "list", "Any")):
-                        # This could be a TypeVar or other custom type - try to add it to imports
-                        self._maybe_add_type_to_imports(inner_type)
-
-                        # For TypeVars commonly used in Generic classes, add TypeVar import
-                        if re.match(r"^[A-Z][A-Za-z0-9_]*$", inner_type) and not inner_type.endswith(
-                            ("Type", "Any", "Dict", "List")
-                        ):
-                            self.extra_type_imports.add("TypeVar")
-
-                    type_name = f"Type[{inner_type}]"
-                    self.extra_type_imports.add("Type")
-                # Handle TypeVar instances with tilde notation (Type[~TypeVarName])
-                elif "~" in type_str or "TypeVar" in type_str:
-                    # First, try to get the module and base type name if available
-                    if hasattr(field_context.field_type, "__module__") and hasattr(
-                        field_context.field_type, "__name__"
-                    ):
-                        module_name = field_context.field_type.__module__
-                        type_name = field_context.field_type.__name__
-                        # If it's a typing.Type[...], extract just "Type"
-                        if module_name == "typing" and type_name == "Type":
-                            # Try to get the base bound class of the TypeVar
-                            args = get_args(field_context.field_type)
-                            if args and len(args) > 0:
-                                if hasattr(args[0], "__bound__") and args[0].__bound__:
-                                    # Get the bound class of the TypeVar
-                                    bound_class = args[0].__bound__
-                                    if hasattr(bound_class, "__name__"):
-                                        type_name = f"Type[{bound_class.__name__}]"
-                                    else:
-                                        type_name = "Type"
-                                else:
-                                    # Use simple Type if we can't extract the bound
-                                    type_name = "Type"
-                            else:
-                                type_name = "Type"
-                        else:
-                            # Use the type name directly
-                            type_name = type_name
-                    else:
-                        # Clean up the type string, remove tildes and fix unclosed brackets
-                        type_name = re.sub(r"~", "", type_str)
-                        # Make sure brackets are balanced
-                        if "[" in type_name and "]" not in type_name:
-                            type_name = type_name + "]"
-                        # Fix "Type[Type[X]]" issues
-                        if "Type[Type[" in type_name:
-                            type_name = re.sub(r"Type\[Type\[([^\]]+)\]\]", r"Type[\1]", type_name)
-
-                    # Make sure we import Type if using it
-                    if "Type" in type_name:
-                        self.extra_type_imports.add("Type")
-                # Handle Optional types better by examining the string representation
-                elif "Optional" in type_str and field_context.is_optional:
-                    # Extract what's inside Optional[...]
-                    inner_match = re.search(r"Optional\[(.*?)\]", type_str)
-                    if inner_match:
-                        inner_type = inner_match.group(1)
-                        # Remove any nested Optional
-                        if inner_type.startswith("Optional["):
-                            inner_match2 = re.search(r"Optional\[(.*?)\]", inner_type)
-                            if inner_match2:
-                                inner_type = inner_match2.group(1)
-                        type_name = inner_type
-                    else:
-                        # Just use a simple type name if we can't parse it
-                        if hasattr(field_context.field_type, "__name__"):
-                            type_name = field_context.field_type.__name__
-                        else:
-                            type_name = "Any"
-                            self.extra_type_imports.add("Any")
-                # Default case - use the type's name if available
-                elif hasattr(field_context.field_type, "__name__"):
-                    type_name = field_context.field_type.__name__
-                # Last resort - use string representation
-                else:
-                    # Start by replacing angle brackets with square brackets
-                    type_name = type_str.replace("<", "[").replace(">", "]")
-
-                    # Fix "Optional[Optional]" issues
-                    if "Optional[Optional]" in type_name:
-                        type_name = type_name.replace("Optional[Optional]", "Optional")
-
-                    # Handle module paths in the type string
-                    type_name = self._handle_type_with_module_path(type_name)
-
-                    # Fix any unclosed brackets
-                    if type_name.count("[") > type_name.count("]"):
-                        type_name += "]" * (type_name.count("[") - type_name.count("]"))
-
-                # Clean up any remaining angle brackets that could cause rendering issues
-                type_name = type_name.replace("<", "[").replace(">", "]")
-                # Remove any remaining tildes
-                type_name = type_name.replace("~", "")
-
-                # Handle any special characters that might cause formatting issues
-                type_name = type_name.strip().replace(",", ", ")
-
-                # Check for any type names that should be imported
-                # This catches types that weren't handled by the specific cases above
-                self._extract_import_types_from_string(type_name)
-
-                # Ensure metadata is a dict and doesn't contain problematic characters
-                metadata = {}
-                if field_context.additional_metadata:
-                    for k, v in field_context.additional_metadata.items():
-                        if isinstance(v, str):
-                            metadata[k] = v.replace("\n", " ").replace("\r", "")
-                        else:
-                            metadata[k] = v
-
-                field_def = {
-                    "name": field_context.field_name,
-                    "type": type_name,
-                    "is_optional": field_context.is_optional,
-                    "is_list": field_context.is_list,
-                    "metadata": metadata,
-                }
-                field_definitions.append(field_def)
-
-        return template.render(
-            model_name=self._clean_generic_type(model_context.django_model.__name__),
-            pydantic_class=self._clean_generic_type(model_context.pydantic_class.__name__),
-            pydantic_module=model_context.pydantic_class.__module__,
-            field_definitions=field_definitions,
-        )
+        # This method is maintained for backward compatibility
+        # but now just delegates to the ModelContext class method
+        return ModelContext.generate_context_class_code(model_context, jinja_env=self.jinja_env)
 
     def _clean_generic_type(self, name: str) -> str:
         """
@@ -935,73 +670,6 @@ class StaticDjangoModelGenerator:
             return re.sub(r"\[.*\]", "", name)
         return name
 
-    def _handle_type_with_module_path(self, type_str: str) -> str:
-        """
-        Extract just the class name from a fully qualified module path.
-
-        Args:
-            type_str: A string containing a module path like 'module.submodule.ClassName'
-
-        Returns:
-            Just the class name portion, e.g. 'ClassName'
-        """
-        # For simple cases, just take the last part after the dot
-        if "." in type_str and not ("[" in type_str or "<" in type_str):
-            return type_str.split(".")[-1]
-
-        # For complex cases with brackets, we need to be more careful
-        if "[" in type_str or "<" in type_str:
-            # Replace angle brackets with square brackets for consistency
-            type_str = type_str.replace("<", "[").replace(">", "]")
-
-            # Extract the main type and its parameters
-            bracket_pos = type_str.find("[")
-            if bracket_pos > 0:
-                main_type = type_str[:bracket_pos]
-                params = type_str[bracket_pos:]
-
-                # Get just the class name from the main type
-                if "." in main_type:
-                    main_type = main_type.split(".")[-1]
-
-                # For each parameter with module path, recursively extract the class name
-                if "." in params:
-                    # This is a complex case with nested module paths in parameters
-                    # Parse the parameters section, ensuring we respect bracket nesting
-                    processed_params = ""
-                    current_token = ""
-                    bracket_depth = 0
-
-                    for char in params:
-                        if char == "[":
-                            bracket_depth += 1
-                            processed_params += char
-                        elif char == "]":
-                            bracket_depth -= 1
-                            processed_params += char
-                        elif char == "," and bracket_depth == 1:
-                            # At top level parameter separator, process the token
-                            if "." in current_token:
-                                processed_params += current_token.split(".")[-1] + ","
-                            else:
-                                processed_params += current_token + ","
-                            current_token = ""
-                        elif bracket_depth >= 1:
-                            current_token += char
-                        else:
-                            processed_params += char
-
-                    # Handle the last token if any
-                    if current_token and "." in current_token:
-                        processed_params = processed_params[:-1] + current_token.split(".")[-1] + "]"
-
-                    return main_type + processed_params
-
-                return main_type + params
-
-        # Fall back to the original string if we couldn't parse it
-        return type_str
-
     def _maybe_add_type_to_imports(self, type_name: str) -> None:
         """
         Add a type to the import list if it's not already present.
@@ -1011,42 +679,6 @@ class StaticDjangoModelGenerator:
         """
         if type_name not in self.extra_type_imports:
             self.extra_type_imports.add(type_name)
-
-    def _extract_import_types_from_string(self, type_name: str) -> None:
-        """
-        Extract and add type names from a string representation.
-
-        Args:
-            type_name: The type name to extract from
-        """
-        # Handle common type patterns
-        type_str = str(type_name)
-
-        # Create a clean type name for importing
-        # Take the last part if it's a module path
-        if "." in type_str:
-            clean_type_name = type_str.split(".")[-1]
-        else:
-            clean_type_name = type_str
-
-        # Remove any generic parameters
-        if "[" in clean_type_name:
-            clean_type_name = clean_type_name.split("[")[0]
-
-        # Clean up the type name
-        clean_type_name = clean_type_name.strip()
-
-        # Special case for Callable
-        if "Callable" in type_str:
-            clean_type_name = "Callable"
-
-        # Add the extracted type name to the import list if it's not a basic Python type
-        if (
-            clean_type_name
-            and not clean_type_name.startswith(("str", "int", "float", "bool", "dict", "list", "None", "Any"))
-            and not clean_type_name.startswith(("Optional", "List", "Dict", "Union", "Tuple"))
-        ):
-            self._maybe_add_type_to_imports(clean_type_name)
 
 
 def main():

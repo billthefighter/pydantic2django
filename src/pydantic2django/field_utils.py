@@ -347,3 +347,19 @@ def is_pydantic_model_field_optional(field_type: Any) -> bool:
     Check if a Pydantic model field is optional.
     """
     return get_origin(field_type) is Union and type(None) in get_args(field_type)
+
+
+def balanced(s: str) -> bool:
+    """
+    Check if a string has balanced brackets.
+    """
+    pairs = {"{": "}", "(": ")", "[": "]"}
+    stack = []
+    for c in s:
+        if c in "{[(":
+            stack.append(c)
+        elif stack and c == pairs[stack[-1]]:
+            stack.pop()
+        else:
+            return False
+    return len(stack) == 0

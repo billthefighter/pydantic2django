@@ -18,14 +18,15 @@ from .admin import (
 from .base_django_model import Pydantic2DjangoBaseClass
 from .discovery import (
     ModelDiscovery,
-    topological_sort,
     find_missing_models,
+    topological_sort,
 )
 from .factory import DjangoModelFactory
 from .field_type_mapping import (
     TypeMapper,
     TypeMappingDefinition,
 )
+from .type_handler import configure_type_handler_logging
 
 __all__ = [
     # Type-safe model creation
@@ -43,4 +44,6 @@ __all__ = [
     # Type mapping
     "TypeMapper",
     "TypeMappingDefinition",
+    # Logging
+    "configure_type_handler_logging",
 ]

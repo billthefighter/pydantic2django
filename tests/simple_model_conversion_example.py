@@ -4,6 +4,7 @@ from uuid import uuid4
 import logging
 from enum import Enum
 
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("model_conversion")
@@ -12,7 +13,34 @@ logger = logging.getLogger("model_conversion")
 T = TypeVar("T")
 PromptType = TypeVar("PromptType", bound=Enum)
 
+# Configure Django settings before importing any Django-related modules
+import os
+import django
+from django.conf import settings
 
+# Configure Django settings if not already configured
+if not settings.configured:
+    settings.configure(
+        INSTALLED_APPS=[
+            "django.contrib.contenttypes",
+            "django.contrib.auth",
+        ],
+        DATABASES={
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": ":memory:",
+            }
+        },
+        DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
+    )
+    django.setup()
+
+# Now import other modules that depend on Django
+from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
+from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
+from inspect import isclass
+from mock_discovery import MockDiscovery, register_model, get_discovered_models
+from pydantic2django import configure_type_handler_logging
 class BasePrompt(BaseModel):
     prompt: str
 
@@ -73,33 +101,7 @@ def is_persistent_model(obj: Any) -> bool:
     return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample)
 
 
-# Configure Django settings before importing any Django-related modules
-import os
-import django
-from django.conf import settings
 
-# Configure Django settings if not already configured
-if not settings.configured:
-    settings.configure(
-        INSTALLED_APPS=[
-            "django.contrib.contenttypes",
-            "django.contrib.auth",
-        ],
-        DATABASES={
-            "default": {
-                "ENGINE": "django.db.backends.sqlite3",
-                "NAME": ":memory:",
-            }
-        },
-        DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
-    )
-    django.setup()
-
-# Now import other modules that depend on Django
-from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
-from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
-from inspect import isclass
-from mock_discovery import MockDiscovery, register_model, get_discovered_models
 
 
 def setup_relationships():
@@ -131,7 +133,7 @@ def generate_models():
     Generate Django models from Pydantic models using the mock discovery system.
     """
     logger.info("Starting model generation process")
-
+    configure_type_handler_logging(level=logging.DEBUG)
     # Clear any previous registered models
     from mock_discovery import clear
 
