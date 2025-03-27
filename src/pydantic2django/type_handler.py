@@ -441,21 +441,46 @@ class TypeHandler:
         # General case implementation for other patterns
         result: dict[str, list[str]] = {"typing": [], "custom": [], "explicit": []}
 
+        # Handle module prefix in type string by extracting class name and module
+        if "." in type_str:
+            # Handle explicit module references like llmaestro.chains.chains.ChainNode
+            module_parts = type_str.split(".")
+            class_name = module_parts[-1]
+            module_path = ".".join(module_parts[:-1])
+
+            # Add to explicit imports
+            if not module_path.startswith("typing"):
+                # Only add if it's not from typing module
+                explicit_import = f"from {module_path} import {class_name}"
+                if explicit_import not in result["explicit"]:
+                    result["explicit"].append(explicit_import)
+
+                # Also add class name to custom types for reference
+                if class_name not in result["custom"]:
+                    result["custom"].append(class_name)
+
+                # Return early as we've handled the fully qualified name
+                return result
+
         # Extract typing constructs
         for construct in TypeHandler.TYPING_CONSTRUCTS:
-            if construct in type_str:
+            if construct in type_str and construct not in result["typing"]:
                 result["typing"].append(construct)
 
         # Extract basic types that need to be imported from typing
-        if "Dict[" in type_str:
+        if "typing.Dict" in type_str or "Dict[" in type_str:
             if "Dict" not in result["typing"]:
                 result["typing"].append("Dict")
-        if "List[" in type_str:
+        if "typing.List" in type_str or "List[" in type_str:
             if "List" not in result["typing"]:
                 result["typing"].append("List")
-        if "Any" in type_str:
+        if "typing.Any" in type_str or "Any" in type_str:
             if "Any" not in result["typing"]:
                 result["typing"].append("Any")
+
+        # Always add typing itself for generic constructs like typing.Dict
+        if "typing." in type_str:
+            result["explicit"].append("import typing")
 
         # Extract custom types (anything capitalized that isn't in our known lists)
         custom_types = re.findall(r"\b([A-Z][a-zA-Z0-9_]*)\b", type_str)
@@ -464,8 +489,9 @@ class TypeHandler:
                 ctype not in TypeHandler.TYPING_CONSTRUCTS
                 and ctype not in TypeHandler.BASIC_TYPES
                 and ctype not in result["custom"]
-                and ctype != "T"
-            ):  # Exclude TypeVar T
+                and ctype != "T"  # Exclude TypeVar T
+                and not any(ctype in imp for imp in result["explicit"])  # Skip if already in explicit imports
+            ):
                 result["custom"].append(ctype)
 
         return result

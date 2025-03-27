@@ -15,7 +15,12 @@ from pydantic import BaseModel
 from pydantic2django.base_django_model import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject
 from pydantic2django.context_storage import ModelContext, FieldContext
 
-# Additional type imports
+{% if 'import typing' in context_class_imports %}
+# Import typing module for full type reference
+import typing
+{% endif %}
+
+# Additional type imports from typing module
 {% if extra_type_imports %}
 from typing import {{ extra_type_imports|join(', ') }}
 {% endif %}
@@ -27,7 +32,9 @@ from typing import {{ extra_type_imports|join(', ') }}
 
 # Context class field type imports
 {% for import_line in context_class_imports %}
+{% if not import_line.startswith('import typing') %}
 {{ import_line }}
+{% endif %}
 {% endfor %}
 
 # Type variable for model classes

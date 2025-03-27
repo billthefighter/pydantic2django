@@ -304,6 +304,10 @@ class ContextClassGenerator:
         required_imports = model_context.get_required_imports()
         self.extra_type_imports.update(required_imports["typing"])
 
+        # Add explicit typing import if we use typing-specific constructs
+        if any(imp in required_imports["typing"] for imp in ["Dict", "List", "Optional", "Union"]):
+            self.context_class_imports.add("import typing")
+
         # Add custom types to imports if they're not already imported
         for custom_type in required_imports["custom"]:
             self._maybe_add_type_to_imports(custom_type)
@@ -318,13 +322,35 @@ class ContextClassGenerator:
             # Extract the field type information
             field_type = field_context.field_type
 
-            # Use centralized method to process field type and get imports
-            type_name, explicit_imports = TypeHandler.process_field_type(field_type)
+            # Format the type string representation:
+            # 1. If it's a string already, use it directly
+            # 2. If it's a class, use its proper import path
+            if isinstance(field_type, str):
+                type_str = field_type
+            elif hasattr(field_type, "__module__") and hasattr(field_type, "__name__"):
+                # Handle class objects by using their module path and name
+                module = field_type.__module__
+                name = field_type.__name__
 
-            # Add any explicit imports to our collection
-            for import_stmt in explicit_imports:
-                if import_stmt.startswith("from ") and " import " in import_stmt:
-                    self.context_class_imports.add(import_stmt)
+                # Handle special case for typing module
+                if module == "typing":
+                    type_str = name
+                else:
+                    # Add explicit import for this class
+                    self.context_class_imports.add(f"from {module} import {name}")
+                    type_str = name
+            else:
+                # For other objects, get string representation and clean it up
+                type_str = str(field_type)
+                # Remove class angle brackets <class '...'> if present
+                if type_str.startswith("<class '") and type_str.endswith("'>"):
+                    type_str = type_str[8:-2]  # Remove "<class '" and "'>"
+                    # Add import for this class if it has a module path
+                    if "." in type_str:
+                        module_path = ".".join(type_str.split(".")[:-1])
+                        class_name = type_str.split(".")[-1]
+                        self.context_class_imports.add(f"from {module_path} import {class_name}")
+                        type_str = class_name
 
             # Ensure metadata is a dict and doesn't contain problematic characters
             metadata = {}
@@ -337,7 +363,7 @@ class ContextClassGenerator:
 
             field_def = {
                 "name": field_context.field_name,
-                "type": type_name,
+                "type": type_str,
                 "is_optional": field_context.is_optional,
                 "is_list": field_context.is_list,
                 "metadata": metadata,

@@ -84,6 +84,7 @@ class DjangoModelFactoryCarrier:
                     continue
                 else:
                     optional = is_pydantic_model_field_optional(field_info.annotation)
+                    # Add field directly - type handling will be done by ModelContext
                     model_context.add_field(
                         field_name=field_name, field_type=field_info.annotation, is_optional=optional
                     )
