@@ -16,7 +16,11 @@ class {{ model_name }}({{ base_model_name }}):
     """
 
     {% for field_def in fields %}
+    {% if field_def is string %}
     {{ field_def }}
+    {% else %}
+    {{ field_def[0] }} = {{ field_def[1] }}
+    {% endif %}
     {% endfor %}
 
     class Meta({{ base_model_name }}.Meta):

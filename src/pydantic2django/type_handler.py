@@ -1,6 +1,7 @@
 import logging
 import re
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Union
 
 # Configure logger
 logger = logging.getLogger("pydantic2django.type_handler")
@@ -468,7 +469,24 @@ class TypeHandler:
         Returns:
             A clean type string for template use that preserves complex type information
         """
-        # Instead of just using get_class_name which truncates complex types
-        # we use process_field_type which correctly preserves the full type signature
+        # For complex typing objects like Optional, Callable, etc.
+        if hasattr(type_obj, "__origin__") and hasattr(type_obj, "__args__"):
+            origin = type_obj.__origin__
+            args = type_obj.__args__
+
+            # Handle common typing patterns
+            if origin == Union:
+                # Check if this is an Optional (Union with None)
+                has_none = type(None) in args
+                if len(args) == 2 and has_none:
+                    non_none_type = args[0] if args[1] is type(None) else args[1]
+                    return f"Optional[{TypeHandler.clean_field_type_for_template(non_none_type)}]"
+
+            # Handle Callable types specially
+            if origin == Callable:
+                if len(args) == 2:  # Standard callable with args and return type
+                    return f"Callable[{args}]"
+
+        # For other types, use the standard process_field_type
         type_str, _ = TypeHandler.process_field_type(type_obj)
         return type_str

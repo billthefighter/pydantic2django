@@ -6,8 +6,9 @@ mapping back to Pydantic objects. It handles the storage and retrieval of contex
 information needed for field reconstruction.
 """
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional, TypeVar
+from typing import Any, Optional, TypeVar, Union
 
 from django.db import models
 from pydantic import BaseModel
@@ -327,33 +328,50 @@ class ContextClassGenerator:
             if import_stmt.startswith("from ") and " import " in import_stmt:
                 self.context_class_imports.add(import_stmt)
 
+        # Handle is_optional and is_list flags
+        for field_name, field_context in model_context.context_fields.items():  # noqa: B007
+            if field_context.is_optional:
+                self.context_class_imports.add("Optional")
+            if field_context.is_list:
+                self.context_class_imports.add("List")
+
         # Generate field definitions for the template
         for field_name, field_context in model_context.context_fields.items():
             # Extract the field type information
             field_type = field_context.field_type
 
-            # Special handling for each type of field
-            if hasattr(field_type, "__name__") and not isinstance(field_type, str):
-                # Extract class name
+            # Initialize type_str to a default value
+            type_str = "Any"
+            self.context_class_imports.add("from typing import Any")
+
+            # Use a safer approach to handle type annotations
+            if isinstance(field_type, type) and not isinstance(field_type, str):
+                # For simple type objects like RetryStrategy, use the type directly
+                if hasattr(field_type, "__name__"):
+                    type_str = field_type.__name__
+
+                    # Add import for the class if needed
+                    if hasattr(field_type, "__module__") and field_type.__module__ not in ["builtins", "typing"]:
+                        self.context_class_imports.add(f"from {field_type.__module__} import {type_str}")
+            elif field_type in [Any, Optional, Callable, list, dict, Union]:
+                # For basic typing constructs, use their names
                 type_str = field_type.__name__
-
-                # Add import for the class if needed
-                if hasattr(field_type, "__module__") and field_type.__module__ not in ["builtins", "typing"]:
-                    self.context_class_imports.add(f"from {field_type.__module__} import {type_str}")
-
-            elif isinstance(field_type, str) and field_type.startswith("<class '"):
-                # Extract class name from string representation
-                class_path = field_type[8:-2]  # Remove "<class '" prefix and "'>" suffix
-                type_str = class_path.split(".")[-1]
-
-                # Add import for the class
-                if "." in class_path:
-                    module_path = ".".join(class_path.split(".")[:-1])
-                    self.context_class_imports.add(f"from {module_path} import {type_str}")
-
+                self.context_class_imports.add(f"from typing import {type_str}")
             else:
-                # For all other types, use TypeHandler's process_field_type to preserve the full type signature
-                type_str, _ = TypeHandler.process_field_type(field_type)
+                # For complex types or string representations, use a simplified representation
+                # that works in Python code but doesn't try to preserve the full type structure
+                if field_context.is_optional:
+                    type_str = "Optional[Callable]"
+                    self.context_class_imports.add("from typing import Optional, Callable")
+                elif "Callable" in str(field_type):
+                    type_str = "Callable"
+                    self.context_class_imports.add("from typing import Callable")
+                elif "type" in str(field_type).lower():
+                    type_str = "type"
+                else:
+                    # Use a simple string for other complex types
+                    type_str = "Any"
+                    self.context_class_imports.add("from typing import Any")
 
             # Ensure metadata is a dict and doesn't contain problematic characters
             metadata = {}
