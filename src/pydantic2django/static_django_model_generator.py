@@ -576,12 +576,27 @@ class StaticDjangoModelGenerator:
 
         # Render the model definition template
         template = self.jinja_env.get_template("model_definition.py.j2")
+
+        # Determine the base model name - this should be the parent class of the Django model
+        base_model_name = "Pydantic2DjangoBaseClass"
+        if carrier.django_model.__bases__:
+            base_parent = carrier.django_model.__bases__[0]
+            if base_parent.__name__ != "Pydantic2DjangoBaseClass":
+                base_model_name = base_parent.__name__
+
+        # Determine the context class name if applicable
+        context_class_name = (
+            f"{model_name}Context" if carrier.model_context and carrier.model_context.context_fields else ""
+        )
+
         return template.render(
             model_name=model_name,
+            pydantic_model_name=pydantic_model_name,  # Use this instead of original_name
+            base_model_name=base_model_name,
+            context_class_name=context_class_name,
             fields=fields,
             meta=meta,
             module_path=module_path,
-            original_name=pydantic_model_name,
             context_fields=context_fields,
         )
 
@@ -683,37 +698,3 @@ class StaticDjangoModelGenerator:
         """
         if type_name not in self.extra_type_imports:
             self.extra_type_imports.add(type_name)
-
-
-def main():
-    """
-    Command-line interface for the StaticDjangoModelGenerator.
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Generate static Django models from Pydantic models")
-    parser.add_argument("--output", "-o", default="generated_models.py", help="Output file path")
-    parser.add_argument(
-        "--packages",
-        "-p",
-        nargs="+",
-        required=True,
-        help="Packages to scan for Pydantic models",
-    )
-    parser.add_argument("--app-label", "-a", default="django_app", help="Django app label")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
-
-    args = parser.parse_args()
-
-    generator = StaticDjangoModelGenerator(
-        output_path=args.output,
-        packages=args.packages,
-        app_label=args.app_label,
-        verbose=args.verbose,
-    )
-
-    generator.generate()
-
-
-if __name__ == "__main__":
-    main()

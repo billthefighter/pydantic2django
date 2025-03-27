@@ -456,13 +456,19 @@ class TypeHandler:
     @staticmethod
     def clean_field_type_for_template(type_obj: Any) -> str:
         """
-        Process a field type for use in a template, extracting class name for class objects
-        and properly formatting type strings.
+        Process a field type for use in a template, preserving complex type information.
+
+        This method ensures that complex types like Optional[Callable[[ChainContext, Any], Dict[str, Any]]]
+        have their full structure preserved for use in templates. This is critical for correctly generating
+        context classes that maintain type information.
 
         Args:
             type_obj: The type object to process
 
         Returns:
-            A clean type string for template use
+            A clean type string for template use that preserves complex type information
         """
-        return TypeHandler.get_class_name(type_obj)
+        # Instead of just using get_class_name which truncates complex types
+        # we use process_field_type which correctly preserves the full type signature
+        type_str, _ = TypeHandler.process_field_type(type_obj)
+        return type_str

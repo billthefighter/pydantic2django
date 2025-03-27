@@ -352,8 +352,8 @@ class ContextClassGenerator:
                     self.context_class_imports.add(f"from {module_path} import {type_str}")
 
             else:
-                # For all other types, use TypeHandler to get clean name
-                type_str = TypeHandler.get_class_name(field_type)
+                # For all other types, use TypeHandler's process_field_type to preserve the full type signature
+                type_str, _ = TypeHandler.process_field_type(field_type)
 
             # Ensure metadata is a dict and doesn't contain problematic characters
             metadata = {}
