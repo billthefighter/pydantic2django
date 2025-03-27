@@ -16,11 +16,13 @@ from django.db import models
 from pydantic import BaseModel
 from pydantic2django.discovery import ModelDiscovery
 from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
+from pydantic2django.context_storage import ModelContext
 
 # Storage for discovered models
 _discovered_models: dict[str, type[BaseModel]] = {}
 _django_models: dict[str, type[models.Model]] = {}
 _model_has_context: dict[str, bool] = {}
+_model_contexts: dict[str, ModelContext] = {}  # Store context objects
 
 # Initialize relationships
 _relationships = RelationshipConversionAccessor()
@@ -131,6 +133,7 @@ class MockDiscovery(ModelDiscovery):
         self.filtered_models = {}  # Will hold the filtered models
         self.relationship_accessor = _relationships  # Use the global relationship accessor
         self.field_overrides = _field_overrides  # Access field overrides
+        self.contexts = _model_contexts  # Store context objects
 
         # Add our pydantic models to the relationship accessor directly
         # Instead of using add_pydantic_model which might have different signature
@@ -364,9 +367,34 @@ def get_field_override(model_name: str, field_name: str) -> Optional[dict]:
 
 
 def clear() -> None:
-    """Clear all registered models and relationships."""
+    """Clear all stored models and relationships."""
+    global _discovered_models, _django_models, _model_has_context, _relationships, _field_overrides, _model_contexts
     logger.debug("Clearing all registered models and relationships")
-    _discovered_models.clear()
-    _django_models.clear()
-    _model_has_context.clear()
-    _relationships.available_relationships.clear()
+    _discovered_models = {}
+    _django_models = {}
+    _model_has_context = {}
+    _field_overrides = {}
+    _model_contexts = {}
+    _relationships = RelationshipConversionAccessor()
+
+
+def register_context(name: str, context: ModelContext) -> None:
+    """
+    Register a model context for a model.
+
+    Args:
+        name: The name of the model
+        context: The ModelContext instance
+    """
+    _model_contexts[name] = context
+    logger.debug(f"Registered context for model: {name}")
+
+
+def get_model_contexts() -> dict[str, ModelContext]:
+    """
+    Get all registered model contexts.
+
+    Returns:
+        Dict mapping model names to ModelContext instances
+    """
+    return _model_contexts

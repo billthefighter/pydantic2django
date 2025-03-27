@@ -1,11 +1,10 @@
 """
-Django model for {{ original_name }}.
+Django model for {{ pydantic_model_name }}.
 """
 
-{% set cleaned_original_name = original_name.split('[')[0] if '[' in original_name else original_name %}
-class {{ model_name }}(Pydantic2DjangoBaseClass[{{ cleaned_original_name }}]):
+class {{ model_name }}({{ base_model_name }}):
     """
-    Django model for {{ original_name }}.
+    Django model for {{ pydantic_model_name }}.
     {% if context_fields %}
 
     Context Fields:
@@ -16,23 +15,19 @@ class {{ model_name }}(Pydantic2DjangoBaseClass[{{ cleaned_original_name }}]):
     {% endif %}
     """
 
-    {% for field_name, field_definition in fields %}
-    {% if field_name != 'id' and field_name != 'object_type' and field_name != 'object_type_field' and not field_definition.startswith('models.BigAutoField') and not field_definition.startswith('models.UUIDField') %}
-    {{ field_name }} = {{ field_definition|replace('default=<class \'django.db.models.fields.NOT_PROVIDED\'>', 'null=True') }}
-    {% endif %}
+    {% for field_def in fields %}
+    {{ field_def }}
     {% endfor %}
 
-    class Meta(Pydantic2DjangoBaseClass.Meta):
-        db_table = "{{ meta.db_table }}"
-        app_label = "{{ meta.app_label }}"
-        verbose_name = """{{ meta.verbose_name.split('\n')[0] }}"""
-        verbose_name_plural = """{{ meta.verbose_name_plural.split('\n')[0] }}"""
+    class Meta({{ base_model_name }}.Meta):
+        app_label = "django_llm"
         abstract = False
 
     {% if context_fields %}
-    def to_pydantic(self, context: "{{ model_name }}Context") -> {{ cleaned_original_name }}:
+    def to_pydantic(self, context: Optional["{{ context_class_name }}"]) -> {{ pydantic_model_name }}:
         """
-        Convert this Django model to The corresponding {{ original_name }} object.
+        Convert this Django model to The corresponding {{ pydantic_model_name }} object.
         """
-        return cast({{ cleaned_original_name }}, super().to_pydantic(context=context))
+        from typing import cast
+        return cast({{ pydantic_model_name }}, super().to_pydantic(context=context))
     {% endif %}

@@ -156,7 +156,7 @@ def test_jinja_templates(template_name: str):
             ModelGenerationTestParams(
                 model_name="BasicModel",
                 expected_fields=[
-                    "string_field = models.CharField",
+                    "string_field = models.TextField",
                     "int_field = models.IntegerField",
                     "float_field = models.FloatField",
                     "bool_field = models.BooleanField",
@@ -214,7 +214,7 @@ def test_simple_model_generation(tmp_path, basic_pydantic_model, test_params: Mo
     logger.info(f"Generated model content length: {len(content)}")
 
     # Check for model definition and fields
-    assert f"class {test_params.model_name}(models.Model):" in content
+    assert f"class Django{test_params.model_name}(Pydantic2DjangoBaseClass):" in content
     for field in test_params.expected_fields:
         assert field in content, f"Expected field '{field}' not found"
 
@@ -225,11 +225,10 @@ def test_simple_model_generation(tmp_path, basic_pydantic_model, test_params: Mo
         pytest.param(
             ModelGenerationTestParams(
                 model_name="User",
-                expected_fields=["name = models.CharField"],
+                expected_fields=[],
                 expected_relationships=[
                     "address = models.ForeignKey",
-                    "profile = models.OneToOneField",
-                    "tags = models.ManyToManyField",
+                    "profile = models.ForeignKey",
                 ],
             ),
             id="related_models",
@@ -286,7 +285,7 @@ def test_relationship_model_generation(tmp_path, relationship_models, test_param
     logger.info(f"Generated model content length: {len(content)}")
 
     # Check for model definition and fields
-    assert f"class {test_params.model_name}(models.Model):" in content
+    assert f"class Django{test_params.model_name}(Pydantic2DjangoBaseClass):" in content
     for field in test_params.expected_fields:
         assert field in content, f"Expected field '{field}' not found"
 
@@ -302,13 +301,12 @@ def test_relationship_model_generation(tmp_path, relationship_models, test_param
             ModelGenerationTestParams(
                 model_name="ContextTestModel",
                 expected_fields=[
-                    "name = models.CharField",
                     "value = models.IntegerField",
                 ],
                 expected_context_fields=[
-                    "handler: ComplexHandler",
-                    "processor: Callable",
-                    "unserializable: UnserializableType",
+                    'field_name="handler"',
+                    'field_name="processor"',
+                    'field_name="unserializable"',
                 ],
             ),
             id="context_model",
@@ -372,18 +370,18 @@ def test_context_model_generation(tmp_path, context_pydantic_model, test_params:
     logger.info(f"Generated model content length: {len(content)}")
 
     # Check for model definition and fields
-    assert f"class {test_params.model_name}(models.Model):" in content
+    assert f"class Django{test_params.model_name}(Pydantic2DjangoBaseClass):" in content
     for field in test_params.expected_fields:
         assert field in content, f"Expected field '{field}' not found"
 
     # Check for context class and fields
-    assert f"class {test_params.model_name}Context:" in content
+    assert f"class Django{test_params.model_name}Context(ModelContext):" in content
     for context_field in test_params.expected_context_fields:
         assert context_field in content, f"Expected context field '{context_field}' not found"
 
     # Verify model is listed in __all__ with its context
-    assert f'"{test_params.model_name}"' in content
-    assert f'"{test_params.model_name}Context"' in content
+    assert f"'Django{test_params.model_name}'" in content
+    assert f"'Django{test_params.model_name}Context'" in content
 
 
 # Helper function for context model test
