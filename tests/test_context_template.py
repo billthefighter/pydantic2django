@@ -20,6 +20,22 @@ from pydantic import BaseModel
 from pydantic2django.context_storage import FieldContext, ModelContext
 
 
+# Create mock class objects for testing class reference handling
+class MockChainNode:
+    __module__ = "llmaestro.chains.chains"
+    __name__ = "ChainNode"
+
+
+class MockConversationNode:
+    __module__ = "llmaestro.core.conversations"
+    __name__ = "ConversationNode"
+
+
+class MockChainContext:
+    __module__ = "llmaestro.chains.chains"
+    __name__ = "ChainContext"
+
+
 def get_template_environment():
     """Create a Jinja2 environment with the templates directory."""
     package_templates_dir = os.path.join(
@@ -327,8 +343,90 @@ class test_module:
         # Verify field handling
         for field_name in ["simple_field", "optional_field", "list_field", "complex_field"]:
             assert f'"{field_name}"' in file_content, f"Field {field_name} not found in generated code"
-            assert f'self.context_fields["{field_name}"]' in file_content
+            assert "for field_name, field_context in self.context_fields.items()" in file_content
 
     finally:
         # Clean up
+        os.unlink(temp_filename)
+
+
+@pytest.mark.parametrize(
+    "field_config",
+    [
+        # Test for class object representation handling (the main issue we found)
+        {
+            "name": "source",
+            "type": MockChainNode(),
+            "is_optional": False,
+        },
+        # Test for class object with full module path
+        {
+            "name": "target",
+            "type": MockConversationNode(),
+            "is_optional": False,
+        },
+        # Test for class object references as string with angle brackets
+        {
+            "name": "context",
+            "type": "<class 'llmaestro.chains.chains.ChainContext'>",
+            "is_optional": False,
+        },
+        # Test for typing complex type with dotted notation
+        {
+            "name": "nodes",
+            "type": "typing.Dict[str, llmaestro.chains.chains.ChainNode]",
+            "is_optional": False,
+        },
+    ],
+    ids=["class_object", "module_class_object", "angle_bracket_class_string", "dotted_type_notation"],
+)
+def test_class_reference_type_handling(field_config):
+    """Test that the template properly handles class object references."""
+    # Get the template
+    jinja_env = get_template_environment()
+    template = jinja_env.get_template("context_class.py.j2")
+
+    # Create field definition with the problematic type
+    field_def = {
+        "name": field_config["name"],
+        "type": field_config["type"],
+        "is_optional": field_config["is_optional"],
+        "is_list": False,
+        "metadata": {},
+    }
+
+    # Render the template
+    rendered = template.render(
+        model_name="ClassRefModel",
+        pydantic_class="ClassRefModel",
+        pydantic_module="test.module",
+        field_definitions=[field_def],
+    )
+
+    # Write to temporary file for debugging
+    with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+        f.write(rendered.encode())
+        temp_filename = f.name
+
+    try:
+        # Verify the output is valid Python code
+        try:
+            ast.parse(rendered)
+        except SyntaxError as e:
+            pytest.fail(f"Generated code has syntax errors: {e}\nGenerated code:\n{rendered}")
+
+        # Check for proper string quoting of type in field_type parameter
+        if isinstance(field_config["type"], str) and field_config["type"].startswith("<class '"):
+            # For angle bracket notation, should be converted to just the class name
+            class_name = field_config["type"].split(".")[-1].rstrip("'>")
+            assert f'field_type="{class_name}"' in rendered
+        elif hasattr(field_config["type"], "__name__"):
+            # For class objects, should use the class name
+            assert f'field_type="{field_config["type"].__name__}"' in rendered
+        else:
+            # For regular string types, should be quoted properly
+            assert f'field_type="{field_config["type"]}"' in rendered
+
+    finally:
+        # Clean up the temporary file
         os.unlink(temp_filename)

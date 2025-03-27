@@ -7,11 +7,31 @@ class {{ model_name }}Context(ModelContext):
     model_name: str = "{{ model_name }}"
     pydantic_class: Type = {{ pydantic_class }}
     django_model: Type[models.Model]
-    context_fields: list[FieldContext] = field(default_factory=list)
+    context_fields: dict[str, FieldContext] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize context fields after instance creation."""
         {% for field in field_definitions %}
+        {% if field.type.__class__.__name__ == 'str' and field.type.startswith("<class '") %}
+        # Extract class name for angle bracket notation
+        self.add_field(
+            field_name="{{ field.name }}",
+            field_type="{{ field.type.split('.')[-1].rstrip("'>") }}",
+            is_optional={{ field.is_optional }},
+            is_list={{ field.is_list }},
+            additional_metadata={{ field.metadata }}
+        )
+        {% elif field.type.__class__.__name__ != 'str' and field.type.__class__.__name__ != 'MockFieldDefinition' and field.type.__name__ is defined %}
+        # Use __name__ for class objects
+        self.add_field(
+            field_name="{{ field.name }}",
+            field_type="{{ field.type.__name__ }}",
+            is_optional={{ field.is_optional }},
+            is_list={{ field.is_list }},
+            additional_metadata={{ field.metadata }}
+        )
+        {% else %}
+        # Default handling
         self.add_field(
             field_name="{{ field.name }}",
             field_type="{{ field.type }}",
@@ -19,13 +39,13 @@ class {{ model_name }}Context(ModelContext):
             is_list={{ field.is_list }},
             additional_metadata={{ field.metadata }}
         )
+        {% endif %}
         {% endfor %}
 {% if field_definitions %}
     @classmethod
-    def create(cls,
-        django_model: Type[models.Model],
-{% for field in field_definitions %}        {{ field.name }}: {% if field.is_optional %}Optional["{{ field.type }}"]{% else %}"{{ field.type }}"{% endif %}{% if not loop.last %},
-{% endif %}{% endfor %}) -> "{{ model_name }}Context":
+    def create(cls, django_model: Type[models.Model]{% if field_definitions %},{% endif %}
+{% for field in field_definitions %}        {{ field.name }}: {% if field.is_optional %}Optional["{{ field.type }}"]{% else %}"{{ field.type }}"{% endif %}{% if not loop.last %},{% endif %}
+{% endfor %}):
         """
         Create a context instance with the required field values.
 
@@ -40,4 +60,17 @@ class {{ model_name }}Context(ModelContext):
         context.set_value("{{ field.name }}", {{ field.name }})
         {% endfor %}
         return context
+
+    def to_dict(self) -> dict:
+        """
+        Convert this context to a dictionary.
+
+        Returns:
+            Dictionary representation of the context values
+        """
+        result = {}
+        for field_name, field_context in self.context_fields.items():
+            if field_context.value is not None:
+                result[field_name] = field_context.value
+        return result
 {% endif %}

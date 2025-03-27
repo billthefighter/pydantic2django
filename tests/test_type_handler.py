@@ -514,5 +514,157 @@ class TestGeneratedModelsLinterErrors:
         ), "Failed to properly format Callable with trailing type var"
 
 
+class TestTypeHandlerImportCategorization:
+    """Test TypeHandler's ability to correctly categorize imports from different sources."""
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="llmaestro.chains.chains.ChainNode",
+                    expected_output={
+                        "typing": [],
+                        "custom": ["ChainNode"],
+                        "explicit": ["from llmaestro.chains.chains import ChainNode"],
+                    },
+                    test_id="fully-qualified-module-path",
+                ),
+                id="fully-qualified-module-path",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="typing.Dict[str, llmaestro.chains.chains.ChainNode]",
+                    expected_output={
+                        "typing": ["Dict"],
+                        "custom": ["ChainNode"],
+                        "explicit": ["import typing", "from llmaestro.chains.chains import ChainNode"],
+                    },
+                    test_id="typing-with-module-path",
+                ),
+                id="typing-with-module-path",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="typing.Optional[typing.Dict[str, llmaestro.core.conversations.ConversationNode]]",
+                    expected_output={
+                        "typing": ["Optional", "Dict"],
+                        "custom": ["ConversationNode"],
+                        "explicit": ["import typing", "from llmaestro.core.conversations import ConversationNode"],
+                    },
+                    test_id="complex-typing-with-module-path",
+                ),
+                id="complex-typing-with-module-path",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="<class 'llmaestro.chains.chains.ChainContext'>",
+                    expected_output={
+                        "typing": [],
+                        "custom": ["ChainContext"],
+                        "explicit": ["from llmaestro.chains.chains import ChainContext"],
+                    },
+                    test_id="angle-bracket-class-string",
+                ),
+                id="angle-bracket-class-string",
+            ),
+        ],
+    )
+    def test_get_required_imports_for_module_paths(self, params: TypeHandlerTestParams):
+        """Test that TypeHandler correctly identifies imports from fully qualified module paths."""
+        # Get imports from the type string
+        result = TypeHandler.get_required_imports(params.input_type)
+
+        # Sort lists for consistent comparison
+        for k in result:
+            if isinstance(result[k], list):
+                result[k] = sorted(result[k])
+
+        expected = params.expected_output
+        for k in expected:
+            if isinstance(expected[k], list):
+                expected[k] = sorted(expected[k])
+
+        # Check each category of imports
+        assert set(result["typing"]) == set(
+            expected["typing"]
+        ), f"Typing imports don't match: {result['typing']} != {expected['typing']}"
+        assert set(result["custom"]) == set(
+            expected["custom"]
+        ), f"Custom type imports don't match: {result['custom']} != {expected['custom']}"
+
+        # Explicit imports may contain module paths that need special handling
+        for exp_import in expected["explicit"]:
+            matching_imports = [
+                imp for imp in result["explicit"] if self._normalize_import(imp) == self._normalize_import(exp_import)
+            ]
+            assert matching_imports, f"Expected import '{exp_import}' not found in {result['explicit']}"
+
+    def _normalize_import(self, import_stmt: str) -> str:
+        """Normalize import statements to handle slight format differences."""
+        if import_stmt.startswith("from ") and " import " in import_stmt:
+            parts = import_stmt.split(" import ")
+            module = parts[0].replace("from ", "")
+            imports = parts[1].split(", ")
+            return f"from {module} import {', '.join(sorted(imports))}"
+        return import_stmt
+
+
+class TestTypeHandlerProcessFieldTypeWithComplexObjects:
+    """Test the TypeHandler's process_field_type method with complex object references."""
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="<class 'llmaestro.chains.chains.ChainNode'>",
+                    expected_output=("ChainNode", ["from llmaestro.chains.chains import ChainNode"]),
+                    test_id="class-object-angle-brackets",
+                ),
+                id="class-object-angle-brackets",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="typing.Dict[str, typing.List[str]]",
+                    expected_output=("Dict[str, List[str]]", ["import typing", "from typing import Dict, List"]),
+                    test_id="nested-typing-with-module",
+                ),
+                id="nested-typing-with-module",
+            ),
+        ],
+    )
+    def test_process_field_type_with_angle_brackets(self, params: TypeHandlerTestParams):
+        """Test that process_field_type correctly handles class references with angle brackets."""
+        type_name, imports = TypeHandler.process_field_type(params.input_type)
+
+        # Check type name
+        assert (
+            type_name == params.expected_output[0]
+        ), f"Type name doesn't match: {type_name} != {params.expected_output[0]}"
+
+        # Check imports (some flexibility in format allowed)
+        expected_imports = sorted(params.expected_output[1])
+        actual_imports = sorted(imports)
+
+        for exp_import in expected_imports:
+            found = False
+            for act_import in actual_imports:
+                # Normalize imports to handle format differences
+                if self._normalize_import(exp_import) == self._normalize_import(act_import):
+                    found = True
+                    break
+            assert found, f"Expected import '{exp_import}' not found in {actual_imports}"
+
+    def _normalize_import(self, import_stmt: str) -> str:
+        """Normalize import statements to handle slight format differences."""
+        if import_stmt.startswith("from ") and " import " in import_stmt:
+            parts = import_stmt.split(" import ")
+            module = parts[0].replace("from ", "")
+            imports = parts[1].split(", ")
+            return f"from {module} import {', '.join(sorted(imports))}"
+        return import_stmt
+
+
 if __name__ == "__main__":
     pytest.main(["-v", "test_type_handler.py"])

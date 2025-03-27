@@ -46,11 +46,13 @@ class ModelContext:
 
     django_model: type[models.Model]
     pydantic_class: type[BaseModel]
-    context_fields: list[FieldContext] = field(default_factory=list)
+    context_fields: dict[str, FieldContext] = field(default_factory=dict)
 
     @property
     def required_context_keys(self) -> set[str]:
-        required_fields = {x.field_name for x in self.context_fields if not x.is_optional}
+        required_fields = {
+            field_name for field_name, field_context in self.context_fields.items() if not field_context.is_optional
+        }
         return required_fields
 
     def add_field(self, field_name: str, field_type: type[Any], **kwargs) -> None:
@@ -70,7 +72,7 @@ class ModelContext:
                 # Add the import for this custom type
                 field_context.required_imports.append(f"from {field_type.__module__} import {field_type.__name__}")
 
-        self.context_fields.append(field_context)
+        self.context_fields[field_name] = field_context
 
     def validate_context(self, context: dict[str, Any]) -> None:
         """
@@ -97,10 +99,8 @@ class ModelContext:
         Returns:
             The field type if it exists in the context, None otherwise
         """
-        for field_context in self.context_fields:
-            if field_context.field_name == field_name:
-                return field_context.field_type
-        return None
+        field_context = self.context_fields.get(field_name)
+        return field_context.field_type if field_context else None
 
     def get_field_by_name(self, field_name: str) -> Optional[FieldContext]:
         """
@@ -112,10 +112,7 @@ class ModelContext:
         Returns:
             The FieldContext if found, None otherwise
         """
-        for field_context in self.context_fields:
-            if field_context.field_name == field_name:
-                return field_context
-        return None
+        return self.context_fields.get(field_name)
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -124,7 +121,11 @@ class ModelContext:
         Returns:
             Dictionary containing all context values
         """
-        return {field.field_name: field.value for field in self.context_fields if field.value is not None}
+        return {
+            field_name: field_context.value
+            for field_name, field_context in self.context_fields.items()
+            if field_context.value is not None
+        }
 
     def set_value(self, field_name: str, value: Any) -> None:
         """
@@ -185,7 +186,7 @@ class ModelContext:
         imports = {"typing": [], "custom": [], "explicit": []}
 
         # Process each field
-        for field_context in self.context_fields:
+        for _, field_context in self.context_fields.items():
             # Use TypeHandler to get all required imports for this field type
             _, field_imports = TypeHandler.process_field_type(field_context.field_type)
             imports["explicit"].extend(field_imports)
@@ -318,39 +319,32 @@ class ContextClassGenerator:
                 self.context_class_imports.add(import_stmt)
 
         # Generate field definitions for the template
-        for field_context in model_context.context_fields:
+        for field_name, field_context in model_context.context_fields.items():
             # Extract the field type information
             field_type = field_context.field_type
 
-            # Format the type string representation:
-            # 1. If it's a string already, use it directly
-            # 2. If it's a class, use its proper import path
-            if isinstance(field_type, str):
-                type_str = field_type
-            elif hasattr(field_type, "__module__") and hasattr(field_type, "__name__"):
-                # Handle class objects by using their module path and name
-                module = field_type.__module__
-                name = field_type.__name__
+            # Special handling for each type of field
+            if hasattr(field_type, "__name__") and not isinstance(field_type, str):
+                # Extract class name
+                type_str = field_type.__name__
 
-                # Handle special case for typing module
-                if module == "typing":
-                    type_str = name
-                else:
-                    # Add explicit import for this class
-                    self.context_class_imports.add(f"from {module} import {name}")
-                    type_str = name
+                # Add import for the class if needed
+                if hasattr(field_type, "__module__") and field_type.__module__ not in ["builtins", "typing"]:
+                    self.context_class_imports.add(f"from {field_type.__module__} import {type_str}")
+
+            elif isinstance(field_type, str) and field_type.startswith("<class '"):
+                # Extract class name from string representation
+                class_path = field_type[8:-2]  # Remove "<class '" prefix and "'>" suffix
+                type_str = class_path.split(".")[-1]
+
+                # Add import for the class
+                if "." in class_path:
+                    module_path = ".".join(class_path.split(".")[:-1])
+                    self.context_class_imports.add(f"from {module_path} import {type_str}")
+
             else:
-                # For other objects, get string representation and clean it up
-                type_str = str(field_type)
-                # Remove class angle brackets <class '...'> if present
-                if type_str.startswith("<class '") and type_str.endswith("'>"):
-                    type_str = type_str[8:-2]  # Remove "<class '" and "'>"
-                    # Add import for this class if it has a module path
-                    if "." in type_str:
-                        module_path = ".".join(type_str.split(".")[:-1])
-                        class_name = type_str.split(".")[-1]
-                        self.context_class_imports.add(f"from {module_path} import {class_name}")
-                        type_str = class_name
+                # For all other types, use TypeHandler to get clean name
+                type_str = TypeHandler.get_class_name(field_type)
 
             # Ensure metadata is a dict and doesn't contain problematic characters
             metadata = {}
@@ -362,7 +356,7 @@ class ContextClassGenerator:
                         metadata[k] = v
 
             field_def = {
-                "name": field_context.field_name,
+                "name": field_name,
                 "type": type_str,
                 "is_optional": field_context.is_optional,
                 "is_list": field_context.is_list,

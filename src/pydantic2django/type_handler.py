@@ -38,6 +38,44 @@ class TypeHandler:
     TYPING_CONSTRUCTS = ("Optional", "List", "Dict", "Union", "Tuple", "Type", "Callable", "Generic", "NoneType")
 
     @staticmethod
+    def get_class_name(type_obj: Any) -> str:
+        """
+        Extract the clean class name from various class reference formats.
+
+        Args:
+            type_obj: The type object to extract class name from
+
+        Returns:
+            A clean class name string
+        """
+        # Handle strings with angle bracket notation like "<class 'module.ClassName'>"
+        if isinstance(type_obj, str) and type_obj.startswith("<class '") and type_obj.endswith("'>"):
+            # Extract just the class name from the end of the path
+            class_path = type_obj.removeprefix("<class '").removesuffix("'>")
+            return class_path.split(".")[-1]
+
+        # Handle object instances with __name__ attribute
+        if not isinstance(type_obj, str) and hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+
+        # Handle object instances without __name__ but with __class__.__name__
+        if not isinstance(type_obj, str) and hasattr(type_obj, "__class__") and hasattr(type_obj.__class__, "__name__"):
+            return type_obj.__class__.__name__
+
+        # Convert to string for other cases
+        type_str = str(type_obj)
+
+        # Clean up object memory references
+        if " object at 0x" in type_str:
+            type_str = re.sub(r" object at 0x[0-9a-f]+", "", type_str)
+
+        # Handle module paths by taking the last part
+        if "." in type_str:
+            return type_str.split(".")[-1]
+
+        return type_str
+
+    @staticmethod
     def format_type_string(type_obj: Any) -> str:
         """
         Convert a type object to a clean, properly formatted type string.
