@@ -14,7 +14,7 @@ class {{ model_name }}Context(ModelContext):
         {% for field in field_definitions %}
         self.add_field(
             field_name="{{ field.name }}",
-            field_type={{ field.type }},
+            field_type="{{ field.type | clean_field_type_for_template }}",
             is_optional={{ field.is_optional }},
             is_list={{ field.is_list }},
             additional_metadata={{ field.metadata }}
@@ -23,7 +23,7 @@ class {{ model_name }}Context(ModelContext):
 {% if field_definitions %}
     @classmethod
     def create(cls, django_model: Type[models.Model]{% if field_definitions %},{% endif %}
-{% for field in field_definitions %}        {{ field.name }}: {{ field.type|replace('"', '') }}{% if not loop.last %},{% endif %}
+{% for field in field_definitions %}        {{ field.name }}: "{{ field.type | clean_field_type_for_template }}"{% if not loop.last %},{% endif %}
 {% endfor %}):
         """
         Create a context instance with the required field values.

@@ -159,6 +159,44 @@ class TypeHandler:
         return type_str
 
     @staticmethod
+    def clean_field_type_for_template(type_obj: Any) -> str:
+        """
+        Process a field type for use in a template, extracting class name for class objects
+        and properly formatting type strings.
+
+        Args:
+            type_obj: The type object to process
+
+        Returns:
+            A clean type string for template use
+        """
+        # Handle class objects and string class references
+        if isinstance(type_obj, str) and type_obj.startswith("<class '") and type_obj.endswith("'>"):
+            # Extract just the class name from angle bracket notation
+            class_path = type_obj.removeprefix("<class '").removesuffix("'>")
+            return class_path.split(".")[-1]
+
+        # Handle object instances with __name__ attribute
+        if not isinstance(type_obj, str) and hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+
+        # Handle object instances without __name__ but with __class__.__name__
+        if not isinstance(type_obj, str) and hasattr(type_obj, "__class__") and hasattr(type_obj.__class__, "__name__"):
+            return type_obj.__class__.__name__
+
+        # Convert to string for other cases
+        type_str = str(type_obj)
+
+        # Clean up object memory references
+        if " object at 0x" in type_str:
+            class_path = re.sub(r" object at 0x[0-9a-f]+", "", type_str)
+            if "." in class_path:
+                return class_path.split(".")[-1]
+            return class_path
+
+        return type_str
+
+    @staticmethod
     def balance_brackets(type_str: str) -> str:
         """
         Ensure brackets are properly balanced in a type string.
@@ -533,3 +571,25 @@ class TypeHandler:
                 result["custom"].append(ctype)
 
         return result
+
+    @staticmethod
+    def clean_field_for_template(field_type: Any) -> str:
+        """
+        Clean a field type for safe use in a template.
+        Ensures field types with spaces or commas are properly quoted.
+
+        Args:
+            field_type: The field type to clean
+
+        Returns:
+            A string representation of the field type, properly quoted if needed
+        """
+        # Convert to string if not already
+        type_str = str(field_type)
+
+        # Check if the type has problematic characters that would break Python syntax
+        if "," in type_str or " " in type_str or "[" in type_str:
+            # Ensure proper quoting for template use
+            return f'"{type_str}"'
+
+        return type_str

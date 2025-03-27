@@ -11,13 +11,14 @@ import jinja2
 from django.db import models
 from pydantic import BaseModel
 
-from pydantic2django.context_storage import ContextClassGenerator, ModelContext, TypeHandler
+from pydantic2django.context_storage import ContextClassGenerator, ModelContext
 
 # Import the base class for Django models
 from pydantic2django.discovery import ModelDiscovery
 from pydantic2django.factory import DjangoFieldFactory, DjangoModelFactory, DjangoModelFactoryCarrier
 from pydantic2django.field_utils import FieldSerializer
 from pydantic2django.relationships import RelationshipConversionAccessor
+from pydantic2django.type_handler import TypeHandler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -92,6 +93,9 @@ class StaticDjangoModelGenerator:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+
+        # Register custom filters
+        self.jinja_env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
 
     def generate(self) -> str:
         """

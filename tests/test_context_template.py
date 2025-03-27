@@ -18,6 +18,7 @@ import pytest
 from pydantic import BaseModel
 
 from pydantic2django.context_storage import FieldContext, ModelContext
+from pydantic2django.type_handler import TypeHandler
 
 
 # Create mock class objects for testing class reference handling
@@ -41,11 +42,14 @@ def get_template_environment():
     package_templates_dir = os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "src", "pydantic2django", "templates"
     )
-    return jinja2.Environment(
+    env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(package_templates_dir),
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # Register the filter for type handling
+    env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+    return env
 
 
 @dataclass

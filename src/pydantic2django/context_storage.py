@@ -270,8 +270,17 @@ class ContextClassGenerator:
                 trim_blocks=True,
                 lstrip_blocks=True,
             )
+            # Register custom filters
+            from pydantic2django.type_handler import TypeHandler
+
+            self.jinja_env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
         else:
             self.jinja_env = jinja_env
+            # Ensure the filter is registered in the provided env
+            if "clean_field_type_for_template" not in self.jinja_env.filters:
+                from pydantic2django.type_handler import TypeHandler
+
+                self.jinja_env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
 
         # Collection for imports that need to be added to the final template
         self.extra_type_imports: set[str] = set()
