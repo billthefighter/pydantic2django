@@ -17,6 +17,7 @@ from pydantic2django.context_storage import ContextClassGenerator, ModelContext
 from pydantic2django.discovery import ModelDiscovery
 from pydantic2django.factory import DjangoFieldFactory, DjangoModelFactory, DjangoModelFactoryCarrier
 from pydantic2django.field_utils import FieldSerializer
+from pydantic2django.import_handler import ImportHandler
 from pydantic2django.relationships import RelationshipConversionAccessor
 from pydantic2django.type_handler import TypeHandler
 
@@ -75,10 +76,8 @@ class StaticDjangoModelGenerator:
         self.django_model_factory = DjangoModelFactory(field_factory=self.field_factory)
         self.carriers: list[DjangoModelFactoryCarrier] = []
 
-        # Track imports for models
-        self.extra_type_imports: set[str] = set()
-        self.pydantic_imports: set[str] = set()
-        self.context_class_imports: set[str] = set()
+        # Use the ImportHandler to manage imports
+        self.import_handler = ImportHandler()
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory
@@ -147,18 +146,6 @@ class StaticDjangoModelGenerator:
         self.discover_models()
         self.discovery.analyze_dependencies(self.app_label)
 
-        # Clear import collections
-        self.extra_type_imports = set()
-        self.pydantic_imports = set()
-        self.context_class_imports = set()
-
-        # Tracking dictionaries to prevent duplicate imports
-        pydantic_imported_names = {}
-        context_field_imported_names = {}
-
-        # Track all imported types to avoid duplicates across different import sections
-        all_imported_types = set()
-
         # Get registration order
         models_in_registration_order = self.discovery.get_models_in_registration_order()
 
@@ -201,18 +188,8 @@ class StaticDjangoModelGenerator:
                         # Map Django model name to Pydantic model name
                         django_model_to_pydantic[django_model_name] = model_name
 
-                    # Add import for the Pydantic model (avoid duplicates)
-                    module_path = pydantic_model.__module__
-                    # Clean up any parametrized generic types in model names for imports
-                    cleaned_model_name = self._clean_generic_type(model_name)
-
-                    if (
-                        cleaned_model_name not in pydantic_imported_names
-                        and cleaned_model_name not in all_imported_types
-                    ):
-                        self.pydantic_imports.add(f"from {module_path} import {cleaned_model_name}")
-                        pydantic_imported_names[cleaned_model_name] = module_path
-                        all_imported_types.add(cleaned_model_name)
+                    # Add import for the Pydantic model
+                    self.import_handler.add_pydantic_model_import(pydantic_model)
 
                     # Check if this model has a non-empty context class
                     has_context = bool(context_def.strip())
@@ -225,67 +202,16 @@ class StaticDjangoModelGenerator:
                             context_class_name = f"{carrier.django_model.__name__}Context"
                             context_class_names.append(f"'{context_class_name}'")
 
-                        # Track any special type imports needed for context fields
+                        # Process context fields to gather imports
                         for _, field_context in carrier.model_context.context_fields.items():
-                            field_type_str = str(field_context.field_type)
+                            # Add imports for the field type and its dependencies
+                            self.import_handler.add_context_field_type_import(field_context.field_type)
 
-                            # Add import for context field type if it's a class
-                            try:
-                                if hasattr(field_context.field_type, "__module__") and hasattr(
-                                    field_context.field_type, "__name__"
-                                ):
-                                    type_module = field_context.field_type.__module__
-                                    type_name = field_context.field_type.__name__
-                                    if not type_module.startswith("typing") and type_name not in [
-                                        "str",
-                                        "int",
-                                        "float",
-                                        "bool",
-                                        "dict",
-                                        "list",
-                                    ]:
-                                        # Clean up any parametrized generic types
-                                        if "[" in type_name or "<" in type_name:
-                                            type_name = re.sub(r"\[.*\]", "", type_name)
-
-                                        # Avoid duplicate context field imports by checking if it's already imported
-                                        # as a Pydantic model or other context field type
-                                        if (
-                                            type_name not in context_field_imported_names
-                                            and type_name not in pydantic_imported_names
-                                            and type_name not in all_imported_types
-                                        ):
-                                            self.context_class_imports.add(f"from {type_module} import {type_name}")
-                                            context_field_imported_names[type_name] = type_module
-                                            all_imported_types.add(type_name)
-                            except (AttributeError, TypeError):
-                                pass
-
-                            # Use TypeHandler to analyze the field type and get required imports
-                            field_imports = TypeHandler.get_required_imports(field_type_str)
-
-                            # Add typing imports
-                            for typing_import in field_imports["typing"]:
-                                self.extra_type_imports.add(typing_import)
-
-                            # Add custom type imports if they're not already imported
-                            for custom_type in field_imports["custom"]:
-                                # Skip if it's already in our imports
-                                if (
-                                    custom_type in context_field_imported_names
-                                    or custom_type in pydantic_imported_names
-                                    or custom_type in all_imported_types
-                                ):
-                                    continue
-
-                                # Add to extra_type_imports if it can't be imported from a module
-                                self.extra_type_imports.add(custom_type)
-
-                            # Also handle is_optional and is_list flags
+                            # Handle is_optional and is_list flags
                             if field_context.is_optional:
-                                self.extra_type_imports.add("Optional")
+                                self.import_handler.extra_type_imports.add("Optional")
                             if field_context.is_list:
-                                self.extra_type_imports.add("List")
+                                self.import_handler.extra_type_imports.add("List")
                 else:
                     logger.warning(f"Skipping model {pydantic_model.__name__} due to errors")
 
@@ -313,8 +239,8 @@ class StaticDjangoModelGenerator:
             else:
                 unique_model_definitions.append(model_def)
 
-        # De-duplicate imports by combining them
-        pydantic_and_context_imports = self._deduplicate_imports(self.pydantic_imports, self.context_class_imports)
+        # Get de-duplicated imports
+        pydantic_and_context_imports = self.import_handler.deduplicate_imports()
 
         # Render the models file template
         template = self.jinja_env.get_template("models_file.py.j2")
@@ -326,70 +252,10 @@ class StaticDjangoModelGenerator:
             django_model_names=django_model_names,  # Pass actual Django model names
             context_class_names=context_class_names,  # Pass context class names
             model_has_context=model_has_context,
-            extra_type_imports=sorted(self.extra_type_imports),
+            extra_type_imports=sorted(self.import_handler.extra_type_imports),
             pydantic_imports=sorted(pydantic_and_context_imports["pydantic"]),
-            context_class_imports=sorted(pydantic_and_context_imports["context"]),
+            context_imports=sorted(pydantic_and_context_imports["context"]),
         )
-
-    def _deduplicate_imports(self, pydantic_imports: set, context_imports: set) -> dict:
-        """
-        De-duplicate imports between Pydantic models and context field types.
-
-        Args:
-            pydantic_imports: Set of Pydantic import statements
-            context_imports: Set of context field import statements
-
-        Returns:
-            Dict with de-duplicated import sets
-        """
-        # Extract class names and modules from import statements
-        pydantic_classes = {}
-        context_classes = {}
-
-        for import_stmt in pydantic_imports:
-            if import_stmt.startswith("from ") and " import " in import_stmt:
-                module, classes = import_stmt.split(" import ")
-                module = module.replace("from ", "")
-                for cls in classes.split(", "):
-                    # Clean up any parameterized generic types in class names
-                    cls = self._clean_generic_type(cls)
-                    pydantic_classes[cls] = module
-
-        for import_stmt in context_imports:
-            if import_stmt.startswith("from ") and " import " in import_stmt:
-                module, classes = import_stmt.split(" import ")
-                module = module.replace("from ", "")
-                for cls in classes.split(", "):
-                    # Clean up any parameterized generic types in class names
-                    cls = self._clean_generic_type(cls)
-                    # If this class is already imported in pydantic imports, skip it
-                    if cls in pydantic_classes:
-                        continue
-                    context_classes[cls] = module
-
-        # Rebuild import statements
-        module_to_classes = {}
-        for cls, module in pydantic_classes.items():
-            if module not in module_to_classes:
-                module_to_classes[module] = []
-            module_to_classes[module].append(cls)
-
-        deduplicated_pydantic_imports = set()
-        for module, classes in module_to_classes.items():
-            deduplicated_pydantic_imports.add(f"from {module} import {', '.join(sorted(classes))}")
-
-        # Same for context imports
-        module_to_classes = {}
-        for cls, module in context_classes.items():
-            if module not in module_to_classes:
-                module_to_classes[module] = []
-            module_to_classes[module].append(cls)
-
-        deduplicated_context_imports = set()
-        for module, classes in module_to_classes.items():
-            deduplicated_context_imports.add(f"from {module} import {', '.join(sorted(classes))}")
-
-        return {"pydantic": deduplicated_pydantic_imports, "context": deduplicated_context_imports}
 
     def discover_models(self) -> None:
         """
@@ -459,10 +325,6 @@ class StaticDjangoModelGenerator:
                 context_generator = ContextClassGenerator(jinja_env=self.jinja_env)
                 # Generate the context class and capture imports in one step
                 context_def = context_generator.generate_context_class(carrier.model_context)
-                # Update our imports
-                imports = context_generator.get_imports()
-                self.extra_type_imports.update(imports["typing"])
-                self.context_class_imports.update(imports["context"])
                 return model_def, context_def
             else:
                 return model_def, ""
@@ -557,13 +419,8 @@ class StaticDjangoModelGenerator:
             or f"{model_name}s",
         }
 
-        # Add import for the original Pydantic model
-        pydantic_model_name = carrier.pydantic_model.__name__
-        # Clean up any generic parameters in the name
-        pydantic_model_name = self._clean_generic_type(pydantic_model_name)
-
-        module_path = carrier.pydantic_model.__module__
-        self.pydantic_imports.add(f"from {module_path} import {pydantic_model_name}")
+        # Add import for the original Pydantic model using the import handler
+        self.import_handler.add_pydantic_model_import(carrier.pydantic_model)
 
         # Extract context fields if they exist
         context_fields = []
@@ -591,7 +448,7 @@ class StaticDjangoModelGenerator:
 
         return template.render(
             model_name=model_name,
-            pydantic_model_name=pydantic_model_name,  # Use this instead of original_name
+            pydantic_model_name=carrier.pydantic_model.__name__,
             base_model_name=base_model_name,
             context_class_name=context_class_name,
             fields=fields,
@@ -688,13 +545,3 @@ class StaticDjangoModelGenerator:
         if "[" in name or "<" in name:
             return re.sub(r"\[.*\]", "", name)
         return name
-
-    def _maybe_add_type_to_imports(self, type_name: str) -> None:
-        """
-        Add a type to the import list if it's not already present.
-
-        Args:
-            type_name: The type name to add to the import list
-        """
-        if type_name not in self.extra_type_imports:
-            self.extra_type_imports.add(type_name)

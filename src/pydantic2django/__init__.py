@@ -26,6 +26,7 @@ from .field_type_mapping import (
     TypeMapper,
     TypeMappingDefinition,
 )
+from .import_handler import ImportHandler
 from .type_handler import configure_type_handler_logging
 
 __all__ = [
@@ -44,6 +45,8 @@ __all__ = [
     # Type mapping
     "TypeMapper",
     "TypeMappingDefinition",
+    # Import handling
+    "ImportHandler",
     # Logging
     "configure_type_handler_logging",
 ]

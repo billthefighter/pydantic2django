@@ -11,9 +11,16 @@ from pydantic import BaseModel, ConfigDict, Field
 # Add the project root to sys.path to make the tests module importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Import the dummy models for demonstrating import functionality
+from tests.dummy_models import ProviderCapabilities, RateLimitConfig  # noqa: E402
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("model_conversion")
+
+# Configure more detailed logging for the import handler
+import_handler_logger = logging.getLogger("pydantic2django.import_handler")
+import_handler_logger.setLevel(logging.DEBUG)
 
 # Type variable for model classes
 T = TypeVar("T")
@@ -88,6 +95,17 @@ class EnumExample(BaseModel):
     enum_field: EnumValues
 
 
+class Provider(BaseModel):
+    """
+    Example model using imported types to demonstrate import functionality.
+    """
+
+    name: str
+    api_base: str
+    capabilities: ProviderCapabilities = Field(default_factory=ProviderCapabilities)
+    rate_limits: RateLimitConfig = Field(default_factory=RateLimitConfig)
+
+
 class ComplexTypingExample(BaseModel, Generic[PromptType, T]):
     text: str
     prompt: type[PromptType]
@@ -98,15 +116,16 @@ class ComplexTypingExample(BaseModel, Generic[PromptType, T]):
 
 def is_persistent_model(obj: Any) -> bool:
     """
-    Filter function that returns True if the object is a ChainStep or RetryStrategy class.
+    Filter function that returns True if the object is a ChainStep, RetryStrategy,
+    EnumExample, or Provider class.
 
     Args:
         obj: The object to check
 
     Returns:
-        bool: True if obj is ChainStep or RetryStrategy, False otherwise
+        bool: True if obj is one of the specified model classes, False otherwise
     """
-    return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample)
+    return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample or obj is Provider)
 
 
 def setup_relationships():
@@ -119,10 +138,12 @@ def setup_relationships():
     logger.info("Setting up model relationships")
 
     # Register models with the mock discovery
-    logger.debug("Registering ChainStep and RetryStrategy models")
+    logger.debug("Registering models")
     register_model("ChainStep", ChainStep, has_context=True)
     register_model("RetryStrategy", RetryStrategy, has_context=False)
     register_model("EnumExample", EnumExample, has_context=False)
+    register_model("Provider", Provider, has_context=True)
+
     # Create a relationship accessor
     relationship_accessor = RelationshipConversionAccessor()
 
@@ -130,6 +151,7 @@ def setup_relationships():
     relationship_accessor.add_pydantic_model(ChainStep)
     relationship_accessor.add_pydantic_model(RetryStrategy)
     relationship_accessor.add_pydantic_model(EnumExample)
+    relationship_accessor.add_pydantic_model(Provider)
     return relationship_accessor
 
 
@@ -156,6 +178,7 @@ def generate_models():
     register_model("RetryStrategy", RetryStrategy, has_context=False)
     register_model("ComplexTypingExample", ComplexTypingExample, has_context=True)
     register_model("ChainStep", ChainStep, has_context=True)
+    register_model("Provider", Provider, has_context=True)
 
     from tests.mock_discovery import set_field_override
 
@@ -175,6 +198,7 @@ def generate_models():
     relationship_accessor.available_relationships.append(RelationshipMapper(EnumExample, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(RetryStrategy, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(ChainStep, None, None))
+    relationship_accessor.available_relationships.append(RelationshipMapper(Provider, None, None))
 
     # Set up Django models as well to establish the relationships
 
