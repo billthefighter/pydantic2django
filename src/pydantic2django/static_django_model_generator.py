@@ -226,7 +226,7 @@ class StaticDjangoModelGenerator:
                             context_class_names.append(f"'{context_class_name}'")
 
                         # Track any special type imports needed for context fields
-                        for field_context in carrier.model_context.context_fields:
+                        for _, field_context in carrier.model_context.context_fields.items():
                             field_type_str = str(field_context.field_type)
 
                             # Add import for context field type if it's a class
@@ -568,11 +568,11 @@ class StaticDjangoModelGenerator:
         # Extract context fields if they exist
         context_fields = []
         if carrier.model_context and carrier.model_context.context_fields:
-            for field_context in carrier.model_context.context_fields:
+            for field_name, field_context in carrier.model_context.context_fields.items():
                 # Get a readable type name
                 type_name = self._get_readable_type_name(field_context.field_type)
                 # Create a tuple of (field_name, type_name)
-                context_fields.append((field_context.field_name, type_name))
+                context_fields.append((field_name, type_name))
 
         # Render the model definition template
         template = self.jinja_env.get_template("model_definition.py.j2")
