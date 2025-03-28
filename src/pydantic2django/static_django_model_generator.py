@@ -369,6 +369,10 @@ class StaticDjangoModelGenerator:
                 if field.name in ["id", "name", "object_type", "object_type_field", "created_at", "updated_at"]:
                     continue
 
+                # Check if related_name exists on the field object from _meta
+                rn = getattr(field, "related_name", "NOT_FOUND")
+                logger.debug(f"GENERATOR_LOOP: Field '{field.name}' has related_name: {rn}")
+
                 field_definition = self.generate_field_definition(field)
                 # Replace NOT_PROVIDED with null=True
                 field_definition = field_definition.replace(

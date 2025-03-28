@@ -175,6 +175,11 @@ class FieldSerializer:
             except Exception:
                 params.append("on_delete=models.CASCADE")  # Default to CASCADE
 
+            # Add related_name if present - Access it via remote_field
+            related_name = getattr(field.remote_field, "related_name", None)
+            if related_name:
+                params.append(f"related_name='{sanitize_related_name(related_name)}'")
+
         if isinstance(field, models.ManyToManyField):
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
@@ -231,7 +236,9 @@ class FieldSerializer:
             params.append("is_relationship=True")
 
         # Join parameters and return definition
-        return f"models.{field_type}({', '.join(params)})"
+        final_def = f"models.{field_type}({', '.join(params)})"
+        logger.debug(f"SERIALIZE_FIELD: Final definition for {field.name}: {final_def}")
+        return final_def
 
 
 def get_model_fields(model_class: type[BaseModel]) -> dict[str, FieldInfo]:

@@ -46,6 +46,7 @@ class DjangoModelFactoryCarrier:
         existing_model: Optional existing Django model to update with new fields.
         class_name_prefix: Prefix to use for the generated Django model class name. Defaults to "Django".
         strict: If True, raise errors on field collisions; if False, keep base model fields. Defaults to False.
+        used_related_names_per_target: A dictionary to track used related names per target.
     """
 
     pydantic_model: type[BaseModel]
@@ -54,6 +55,7 @@ class DjangoModelFactoryCarrier:
     existing_model: Optional[type[models.Model]] = None
     class_name_prefix: str = "Django"
     strict: bool = False
+    used_related_names_per_target: dict[str, set[str]] = field(default_factory=dict)
 
     def __post_init__(self):
         self.django_fields: dict[str, models.Field] = {}
@@ -112,18 +114,6 @@ class FieldConversionResult:
     context_field: Optional[FieldInfo] = None
     error_str: Optional[str] = None
 
-    @property
-    def rendered_django_field(self) -> models.Field:
-        if self.django_field and self.type_mapping_definition:
-            return self.type_mapping_definition.get_django_field(self.field_kwargs)
-        else:
-            errorstr = "Django field or type mapping definition not found: "
-            if not self.django_field:
-                errorstr += "django_field is None"
-            if not self.type_mapping_definition:
-                errorstr += "type_mapping_definition is None"
-            raise ValueError(errorstr)
-
     def __str__(self):
         return (
             f"FieldConversionResult(field_name={self.field_name}, "
@@ -148,6 +138,8 @@ class DjangoFieldFactory:
         self,
         field_name: str,
         field_info: FieldInfo,
+        source_model_name: str,
+        carrier: "DjangoModelFactoryCarrier",
         app_label: str = "django_llm",
     ) -> FieldConversionResult:
         """
@@ -157,6 +149,8 @@ class DjangoFieldFactory:
         Args:
             field_name: The name of the field
             field_info: The Pydantic field info
+            source_model_name: The name of the Pydantic model containing this field
+            carrier: The carrier object containing necessary information
             app_label: The app label to use for model registration
             model_name: The name of the model to reference (for relationships)
 
@@ -202,7 +196,7 @@ class DjangoFieldFactory:
 
             # For relationship fields, use RelationshipFieldHandler
             if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
-                result = self.handle_relationship_field(result)
+                result = self.handle_relationship_field(result, source_model_name, carrier)
                 if not result.django_field:
                     logger.warning(f"Could not create relationship field for {field_name}, must be contextual")
                     # Mark unmappable relationship fields as context fields
@@ -213,8 +207,13 @@ class DjangoFieldFactory:
             # Try to create a Django field from the mapping
             if result.type_mapping_definition and not result.django_field:
                 try:
-                    # Instantiate the field class instead of just assigning the class itself
-                    result.django_field = result.type_mapping_definition.get_django_field(result.field_kwargs)
+                    # First populate the field, then create it
+                    field_kwargs = result.field_kwargs
+                    logger.debug(
+                        f"Instantiating relationship field '{field_name}' ({result.type_mapping_definition.django_field.__name__}) "  # noqa: E501
+                        f"with kwargs: {field_kwargs}"
+                    )
+                    result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
                 except Exception as e:
                     # Don't silently fall back to contextual fields for parameter errors
                     # These indicate a bug that should be fixed
@@ -303,7 +302,9 @@ class DjangoFieldFactory:
             result.context_field = field_info
             return result
 
-    def handle_relationship_field(self, result: FieldConversionResult) -> FieldConversionResult:
+    def handle_relationship_field(
+        self, result: FieldConversionResult, source_model_name: str, carrier: "DjangoModelFactoryCarrier"
+    ) -> FieldConversionResult:
         field_info = result.field_info
         field_kwargs = result.field_kwargs
         field_type = field_info.annotation
@@ -369,14 +370,66 @@ class DjangoFieldFactory:
         else:
             target_model_name = django_model_class.__name__
 
-        # Get the related name
-        related_name = sanitize_related_name(
-            getattr(field_info, "related_name", ""),
-            target_model_name or "",
-            field_name,
-        )
+        # Get the related name: Use user-provided if available, otherwise generate default
+        user_provided_related_name = getattr(field_info, "related_name", None)
 
-        field_kwargs["related_name"] = related_name
+        if user_provided_related_name:
+            # Sanitize user-provided name using target model context
+            related_name_base = user_provided_related_name
+            # Use target_model_name for context when sanitizing user input
+            sanitized_name = sanitize_related_name(related_name_base, target_model_name or "", field_name)
+        else:
+            # Generate default based on source model and field name for uniqueness
+            related_name_base = f"{source_model_name.lower()}_{field_name}_related"
+            # Sanitize the generated name (less critical but good practice, no model/field context needed)
+            sanitized_name = sanitize_related_name(related_name_base)
+
+        # <<< Start Debug Logging >>>
+        logger.debug(f"[REL_NAME] Processing: {source_model_name}.{field_name} -> {target_model_name}")
+        logger.debug(f"[REL_NAME] Initial sanitized name: '{sanitized_name}'")
+        if target_model_name:  # Check before accessing tracker
+            tracker_before = carrier.used_related_names_per_target.get(target_model_name, set())
+            logger.debug(f"[REL_NAME] Tracker state for '{target_model_name}' (before): {tracker_before}")
+        else:
+            logger.debug("[REL_NAME] Cannot check tracker state: target_model_name is None")
+        # <<< End Debug Logging >>>
+
+        # Ensure uniqueness of related_name within the target model scope for this source model
+        if target_model_name:  # Check if target_model_name is not None
+            final_related_name = sanitized_name
+            counter = 1
+            target_related_names = carrier.used_related_names_per_target.setdefault(target_model_name, set())
+            clash_detected = False  # Debug flag
+            while final_related_name in target_related_names:
+                clash_detected = True  # Debug flag
+                counter += 1
+                final_related_name = f"{sanitized_name}_{counter}"
+                # <<< Debug Logging >>>
+                logger.debug(f"[REL_NAME]   Clash detected! Trying new name: '{final_related_name}'")
+                # <<< End Debug Logging >>>
+
+            # <<< Debug Logging >>>
+            if not clash_detected:
+                logger.debug(f"[REL_NAME]   No clash detected for '{final_related_name}'")
+            # <<< End Debug Logging >>>
+
+            target_related_names.add(final_related_name)
+            field_kwargs["related_name"] = final_related_name
+
+            # <<< Debug Logging >>>
+            # No need to check target_model_name again here, as we are inside the if block
+            tracker_after = carrier.used_related_names_per_target.get(target_model_name, set())
+            logger.debug(f"[REL_NAME]   Final assigned name: '{final_related_name}'")
+            logger.debug(f"[REL_NAME] Tracker state for '{target_model_name}' (after): {tracker_after}")
+            # <<< End Debug Logging >>>
+
+        else:
+            # If target model name couldn't be determined, use the sanitized name directly
+            # This might lead to conflicts if multiple fields point to an unknown target
+            logger.warning(
+                f"Target model name not found for field '{field_name}', cannot guarantee related_name uniqueness."
+            )
+            field_kwargs["related_name"] = sanitized_name
 
         # Handle to_field behavior using app_label from Django model
         app_label = (
@@ -397,6 +450,10 @@ class DjangoFieldFactory:
         if result.type_mapping_definition and result.type_mapping_definition.django_field:
             try:
                 # First populate the field, then create it
+                logger.debug(
+                    f"Instantiating relationship field '{field_name}' ({result.type_mapping_definition.django_field.__name__}) "  # noqa: E501
+                    f"with kwargs: {field_kwargs}"
+                )
                 result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
             except Exception as e:
                 # Log the error
@@ -667,7 +724,7 @@ class DjangoModelFactory:
 
     def assemble_django_model(self, carrier: DjangoModelFactoryCarrier):
         # Create the model attributes
-        model_attrs = {**carrier.django_fields}
+        model_attrs: dict[str, Any] = {**carrier.django_fields}
         if carrier.django_meta_class:
             model_attrs["Meta"] = carrier.django_meta_class
         if carrier.pydantic_model.__module__:
@@ -706,6 +763,8 @@ class DjangoModelFactory:
                 conversion_result = self.field_factory.convert_field(
                     field_name=field_name,
                     field_info=field_info,
+                    source_model_name=carrier.pydantic_model.__name__,
+                    carrier=carrier,
                     app_label=carrier.meta_app_label,
                 )
 
@@ -721,12 +780,19 @@ class DjangoModelFactory:
                     continue
 
                 # Only try to render the Django field if we have a type mapping definition
-                try:
-                    django_field = conversion_result.rendered_django_field
-                    carrier.django_fields[field_name] = django_field
-                except ValueError as e:
-                    # If we can't render the field, treat it as contextual
-                    logger.warning(f"Could not render Django field for '{field_name}': {e}")
+                # Directly use the pre-instantiated django_field if it exists
+                if conversion_result.django_field:
+                    carrier.django_fields[field_name] = conversion_result.django_field
+                elif conversion_result.type_mapping_definition:
+                    # This path might indicate an issue where a field was expected but not created
+                    logger.warning(
+                        f"Field '{field_name}' had type mapping but no Django field was created-Treating as contextual."
+                    )
+                    carrier.context_fields[field_name] = field_info
+                else:
+                    # This case should already be handled (marked as contextual earlier if no mapping)
+                    # but adding for completeness
+                    logger.info(f"Field '{field_name}' has no mapping and no field, treated as contextual.")
                     carrier.context_fields[field_name] = field_info
 
             except (ValueError, TypeError) as e:

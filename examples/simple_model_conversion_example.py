@@ -155,6 +155,14 @@ class SpecificGraph(SimpleGenericBase[ConcreteNode, ConcreteEdge]):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
+class DoubleRelationModel(BaseModel):
+    """A model with two fields pointing to the same related model."""
+
+    related_1: BasePrompt
+    related_2: BasePrompt
+    description: str
+
+
 # +++ End Generic Example Models +++
 
 
@@ -231,6 +239,7 @@ def generate_models():
     register_model("ConcreteNode", ConcreteNode, has_context=False)
     register_model("ConcreteEdge", ConcreteEdge, has_context=False)
     register_model("SpecificGraph", SpecificGraph, has_context=True)  # Register the specific implementation
+    register_model("DoubleRelationModel", DoubleRelationModel, has_context=False)  # Register the new model
 
     from tests.mock_discovery import set_field_override
 
@@ -251,6 +260,9 @@ def generate_models():
     relationship_accessor.available_relationships.append(RelationshipMapper(RetryStrategy, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(ChainStep, None, None))
     relationship_accessor.available_relationships.append(RelationshipMapper(Provider, None, None))
+    relationship_accessor.available_relationships.append(
+        RelationshipMapper(DoubleRelationModel, None, None)
+    )  # Add new model here
 
     # Set up Django models as well to establish the relationships
 

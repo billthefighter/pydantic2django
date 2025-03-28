@@ -11,7 +11,7 @@ from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, get_args, get_origin
+from typing import Optional, Union, get_args, get_origin
 
 from django.db import models
 from pydantic import BaseModel
@@ -392,19 +392,43 @@ class ModelDiscovery:
             for _, field in pydantic_model.model_fields.items():
                 annotation = field.annotation
                 if annotation is not None:
-                    # Handle direct model references
+                    # Handle Optional[T] by extracting T
+                    origin = get_origin(annotation)
+                    if origin is Union:
+                        args = get_args(annotation)
+                        # Check if it's Optional[T]
+                        if type(None) in args and len(args) == 2:
+                            # Use the non-None type for dependency analysis
+                            annotation = next(arg for arg in args if arg is not type(None))
+                            # Update origin and args after unwrapping Optional
+                            origin = get_origin(annotation)
+                            args = get_args(annotation)
+                        # Note: Other Union types are not explicitly handled for dependency here
+
+                    # Handle direct model references (after potential Optional unwrap)
                     if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
                         dep_name = normalize_model_reference(annotation.__name__)
                         self.dependencies[model_name].add(dep_name)
                     # Handle generic types (List, Dict, etc.)
-                    elif hasattr(annotation, "__origin__"):
-                        origin = get_origin(annotation)
+                    # Check origin *again* in case annotation was unwrapped from Optional
+                    elif origin is not None:
+                        # Ensure args is available for this block
                         args = get_args(annotation)
-                        if origin in (list, dict):
+                        if origin in (list, dict, set):
                             for arg in args:
                                 if inspect.isclass(arg) and issubclass(arg, BaseModel):
                                     dep_name = normalize_model_reference(arg.__name__)
                                     self.dependencies[model_name].add(dep_name)
+                                # Check if the argument itself is Optional[Model]
+                                elif get_origin(arg) is Union:
+                                    nested_args = get_args(arg)
+                                    if type(None) in nested_args and len(nested_args) == 2:
+                                        nested_model_type = next(t for t in nested_args if t is not type(None))
+                                        if inspect.isclass(nested_model_type) and issubclass(
+                                            nested_model_type, BaseModel
+                                        ):
+                                            dep_name = normalize_model_reference(nested_model_type.__name__)
+                                            self.dependencies[model_name].add(dep_name)
 
     def validate_dependencies(self) -> list[str]:
         """
