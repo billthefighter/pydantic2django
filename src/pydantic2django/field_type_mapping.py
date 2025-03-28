@@ -162,19 +162,26 @@ class TypeMappingDefinition:
         If this field has additional kwargs, they will be merged with the kwargs passed in.
         This is the preferred way to access the field type.
         Args:
-            kwargs: Additional kwargs for the field
+            kwargs: Additional kwargs for the field (e.g., from factory.py)
 
         Returns:
             The Django field type
         """
-        if kwargs is None:
-            kwargs = {}
-        # Merge the kwargs with the field_kwargs
-        kwargs.update(self.field_kwargs)
-        # If this is a CharField, set the max_length
-        if self.django_field == models.CharField and "max_length" not in kwargs and self.max_length is not None:
-            kwargs["max_length"] = self.max_length
-        return self.django_field(**kwargs)
+        # Start with the mapping's default kwargs
+        final_kwargs = self.field_kwargs.copy()
+
+        # Update with the kwargs passed in (these should take precedence)
+        if kwargs:
+            final_kwargs.update(kwargs)
+
+        # If this is a CharField, set the max_length if not provided
+        if self.django_field == models.CharField and "max_length" not in final_kwargs and self.max_length is not None:
+            final_kwargs["max_length"] = self.max_length
+
+        # Log the final kwargs before instantiation for debugging
+        logger.debug(f"Instantiating {self.django_field.__name__} with final kwargs: {final_kwargs}")
+
+        return self.django_field(**final_kwargs)
 
     def matches_type(self, python_type: Any) -> bool:
         """Check if this definition matches the given Python type."""

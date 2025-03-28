@@ -203,8 +203,13 @@ class DjangoFieldFactory:
             # Try to create a Django field from the mapping
             if result.type_mapping_definition and not result.django_field:
                 try:
-                    # Instantiate the field class instead of just assigning the class itself
-                    result.django_field = result.type_mapping_definition.get_django_field(result.field_kwargs)
+                    # First populate the field, then create it
+                    field_kwargs = result.field_kwargs
+                    logger.debug(
+                        f"Instantiating relationship field '{field_name}' ({result.type_mapping_definition.django_field.__name__}) "  # noqa: E501
+                        f"with kwargs: {field_kwargs}"
+                    )
+                    result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
                 except Exception as e:
                     # Don't silently fall back to contextual fields for parameter errors
                     # These indicate a bug that should be fixed
@@ -394,6 +399,11 @@ class DjangoFieldFactory:
         if result.type_mapping_definition and result.type_mapping_definition.django_field:
             try:
                 # First populate the field, then create it
+                field_kwargs = result.field_kwargs
+                logger.debug(
+                    f"Instantiating relationship field '{field_name}' ({result.type_mapping_definition.django_field.__name__}) "  # noqa: E501
+                    f"with kwargs: {field_kwargs}"
+                )
                 result.django_field = result.type_mapping_definition.get_django_field(field_kwargs)
             except Exception as e:
                 # Log the error
