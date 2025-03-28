@@ -51,6 +51,7 @@ class StaticDjangoModelGenerator:
         filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
         verbose: bool = False,
         discovery_module: Optional[ModelDiscovery] = None,
+        module_mappings: Optional[dict[str, str]] = None,
     ):
         """
         Initialize the generator.
@@ -62,6 +63,7 @@ class StaticDjangoModelGenerator:
             filter_function: Optional function to filter which models to include
             verbose: Print verbose output
             discovery_module: Optional ModelDiscovery instance to use
+            module_mappings: Optional mapping of modules to remap (e.g. {"__main__": "my_app.models"})
         """
         self.output_path = output_path
         self.packages = packages or ["pydantic_models"]
@@ -77,7 +79,7 @@ class StaticDjangoModelGenerator:
         self.carriers: list[DjangoModelFactoryCarrier] = []
 
         # Use the ImportHandler to manage imports
-        self.import_handler = ImportHandler()
+        self.import_handler = ImportHandler(module_mappings=module_mappings)
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory

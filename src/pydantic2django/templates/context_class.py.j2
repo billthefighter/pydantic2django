@@ -5,8 +5,8 @@ class {{ model_name }}Context(ModelContext):
     Contains non-serializable fields that need to be provided when converting from Django to Pydantic.
     """
     model_name: str = "{{ model_name }}"
-    pydantic_class: Type = {{ pydantic_class }}
-    django_model: Type[models.Model]
+    pydantic_class: type = {{ pydantic_class }}
+    django_model: type[models.Model]
     context_fields: dict[str, FieldContext] = field(default_factory=dict)
 
     def __post_init__(self):

@@ -204,12 +204,18 @@ def generate_models():
 
     # Set up base classes for our Django models
 
+    # Define module mappings to fix imports
+    module_mappings = {
+        "__main__": "myapp.models",  # Replace __main__ imports with myapp.models
+    }
+
     generator = StaticDjangoModelGenerator(
         output_path="generated_models.py",
         packages=["tests.django_llm"],
         app_label="django_llm",
         filter_function=is_persistent_model,
         discovery_module=MockDiscovery(),
+        module_mappings=module_mappings,
     )
     generator.generate()
 

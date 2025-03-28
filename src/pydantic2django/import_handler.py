@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.import_handler")
@@ -13,8 +13,13 @@ class ImportHandler:
     dependencies are included.
     """
 
-    def __init__(self):
-        """Initialize empty collections for different types of imports."""
+    def __init__(self, module_mappings: Optional[dict[str, str]] = None):
+        """
+        Initialize empty collections for different types of imports.
+
+        Args:
+            module_mappings: Optional mapping of modules to remap (e.g. {"__main__": "my_app.models"})
+        """
         # Track imports by category
         self.extra_type_imports: set[str] = set()  # For typing and other utility imports
         self.pydantic_imports: set[str] = set()  # For Pydantic model imports
@@ -26,7 +31,12 @@ class ImportHandler:
         # For tracking field type dependencies we've already processed
         self.processed_field_types: set[str] = set()
 
+        # Module mappings to remap imports (e.g. "__main__" -> "my_app.models")
+        self.module_mappings = module_mappings or {}
+
         logger.info("ImportHandler initialized")
+        if self.module_mappings:
+            logger.info(f"Using module mappings: {self.module_mappings}")
 
     def add_pydantic_model_import(self, model_class: type) -> None:
         """
@@ -41,6 +51,12 @@ class ImportHandler:
 
         module_path = model_class.__module__
         model_name = self._clean_generic_type(model_class.__name__)
+
+        # Apply module mappings if needed
+        if module_path in self.module_mappings:
+            actual_module = self.module_mappings[module_path]
+            logger.debug(f"Remapping module import: {module_path} -> {actual_module}")
+            module_path = actual_module
 
         logger.debug(f"Processing Pydantic model import: {model_name} from {module_path}")
 
@@ -91,6 +107,12 @@ class ImportHandler:
                 type_module = field_type.__module__
                 type_name = field_type.__name__
 
+                # Apply module mappings if needed
+                if type_module in self.module_mappings:
+                    actual_module = self.module_mappings[type_module]
+                    logger.debug(f"Remapping module import: {type_module} -> {actual_module}")
+                    type_module = actual_module
+
                 logger.debug(f"Examining type: {type_name} from module {type_module}")
 
                 # Skip built-in types and typing module types
@@ -100,6 +122,11 @@ class ImportHandler:
                     or type_name in ["str", "int", "float", "bool", "dict", "list"]
                 ):
                     logger.debug(f"Skipping built-in or typing type: {type_name}")
+                    return
+
+                # Skip TypeVar definitions to avoid conflicts
+                if type_name == "T" or type_name == "TypeVar":
+                    logger.debug(f"Skipping TypeVar definition: {type_name} - will be defined locally")
                     return
 
                 # Clean up any parametrized generic types
@@ -251,11 +278,25 @@ class ImportHandler:
         pydantic_classes = {}
         context_classes = {}
 
+        # Handle special case for TypeVar imports
+        typevars = set()
+
         for import_stmt in self.pydantic_imports:
             if import_stmt.startswith("from ") and " import " in import_stmt:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
+
+                # Skip __main__ and rewrite to real module paths if possible
+                if module == "__main__":
+                    logger.warning(f"Skipping __main__ import: {import_stmt} - these won't work when imported")
+                    continue
+
                 for cls in classes.split(", "):
+                    # Check if it's a TypeVar to handle duplicate definitions
+                    if cls == "T" or cls == "TypeVar":
+                        typevars.add(cls)
+                        continue
+
                     # Clean up any parameterized generic types in class names
                     cls = self._clean_generic_type(cls)
                     pydantic_classes[cls] = module
@@ -264,7 +305,18 @@ class ImportHandler:
             if import_stmt.startswith("from ") and " import " in import_stmt:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
+
+                # Skip __main__ imports or rewrite to real module paths if possible
+                if module == "__main__":
+                    logger.warning(f"Skipping __main__ import: {import_stmt} - these won't work when imported")
+                    continue
+
                 for cls in classes.split(", "):
+                    # Check if it's a TypeVar to handle duplicate definitions
+                    if cls == "T" or cls == "TypeVar":
+                        typevars.add(cls)
+                        continue
+
                     # Clean up any parameterized generic types in class names
                     cls = self._clean_generic_type(cls)
                     # If this class is already imported in pydantic imports, skip it
@@ -297,6 +349,10 @@ class ImportHandler:
 
         logger.info(f"Final pydantic imports: {deduplicated_pydantic_imports}")
         logger.info(f"Final context imports: {deduplicated_context_imports}")
+
+        # Log any TypeVar names we're skipping
+        if typevars:
+            logger.info(f"Skipping TypeVar imports: {typevars} - these will be defined locally")
 
         return {"pydantic": deduplicated_pydantic_imports, "context": deduplicated_context_imports}
 

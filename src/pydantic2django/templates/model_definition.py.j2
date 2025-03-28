@@ -32,6 +32,5 @@ class {{ model_name }}({{ base_model_name }}):
         """
         Convert this Django model to The corresponding {{ pydantic_model_name }} object.
         """
-        from typing import cast
         return cast({{ pydantic_model_name }}, super().to_pydantic(context=context))
     {% endif %}
