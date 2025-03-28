@@ -384,17 +384,45 @@ class DjangoFieldFactory:
             # Sanitize the generated name (less critical but good practice, no model/field context needed)
             sanitized_name = sanitize_related_name(related_name_base)
 
+        # <<< Start Debug Logging >>>
+        logger.debug(f"[REL_NAME] Processing: {source_model_name}.{field_name} -> {target_model_name}")
+        logger.debug(f"[REL_NAME] Initial sanitized name: '{sanitized_name}'")
+        if target_model_name:  # Check before accessing tracker
+            tracker_before = carrier.used_related_names_per_target.get(target_model_name, set())
+            logger.debug(f"[REL_NAME] Tracker state for '{target_model_name}' (before): {tracker_before}")
+        else:
+            logger.debug("[REL_NAME] Cannot check tracker state: target_model_name is None")
+        # <<< End Debug Logging >>>
+
         # Ensure uniqueness of related_name within the target model scope for this source model
         if target_model_name:  # Check if target_model_name is not None
             final_related_name = sanitized_name
             counter = 1
             target_related_names = carrier.used_related_names_per_target.setdefault(target_model_name, set())
+            clash_detected = False  # Debug flag
             while final_related_name in target_related_names:
+                clash_detected = True  # Debug flag
                 counter += 1
                 final_related_name = f"{sanitized_name}_{counter}"
+                # <<< Debug Logging >>>
+                logger.debug(f"[REL_NAME]   Clash detected! Trying new name: '{final_related_name}'")
+                # <<< End Debug Logging >>>
+
+            # <<< Debug Logging >>>
+            if not clash_detected:
+                logger.debug(f"[REL_NAME]   No clash detected for '{final_related_name}'")
+            # <<< End Debug Logging >>>
 
             target_related_names.add(final_related_name)
             field_kwargs["related_name"] = final_related_name
+
+            # <<< Debug Logging >>>
+            # No need to check target_model_name again here, as we are inside the if block
+            tracker_after = carrier.used_related_names_per_target.get(target_model_name, set())
+            logger.debug(f"[REL_NAME]   Final assigned name: '{final_related_name}'")
+            logger.debug(f"[REL_NAME] Tracker state for '{target_model_name}' (after): {tracker_after}")
+            # <<< End Debug Logging >>>
+
         else:
             # If target model name couldn't be determined, use the sanitized name directly
             # This might lead to conflicts if multiple fields point to an unknown target
