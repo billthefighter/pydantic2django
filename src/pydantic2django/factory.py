@@ -399,7 +399,6 @@ class DjangoFieldFactory:
         if result.type_mapping_definition and result.type_mapping_definition.django_field:
             try:
                 # First populate the field, then create it
-                field_kwargs = result.field_kwargs
                 logger.debug(
                     f"Instantiating relationship field '{field_name}' ({result.type_mapping_definition.django_field.__name__}) "  # noqa: E501
                     f"with kwargs: {field_kwargs}"
