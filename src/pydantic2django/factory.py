@@ -148,6 +148,7 @@ class DjangoFieldFactory:
         self,
         field_name: str,
         field_info: FieldInfo,
+        source_model_name: str,
         app_label: str = "django_llm",
     ) -> FieldConversionResult:
         """
@@ -157,6 +158,7 @@ class DjangoFieldFactory:
         Args:
             field_name: The name of the field
             field_info: The Pydantic field info
+            source_model_name: The name of the Pydantic model containing this field
             app_label: The app label to use for model registration
             model_name: The name of the model to reference (for relationships)
 
@@ -202,7 +204,7 @@ class DjangoFieldFactory:
 
             # For relationship fields, use RelationshipFieldHandler
             if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
-                result = self.handle_relationship_field(result)
+                result = self.handle_relationship_field(result, source_model_name)
                 if not result.django_field:
                     logger.warning(f"Could not create relationship field for {field_name}, must be contextual")
                     # Mark unmappable relationship fields as context fields
@@ -303,7 +305,7 @@ class DjangoFieldFactory:
             result.context_field = field_info
             return result
 
-    def handle_relationship_field(self, result: FieldConversionResult) -> FieldConversionResult:
+    def handle_relationship_field(self, result: FieldConversionResult, source_model_name: str) -> FieldConversionResult:
         field_info = result.field_info
         field_kwargs = result.field_kwargs
         field_type = field_info.annotation
@@ -369,14 +371,21 @@ class DjangoFieldFactory:
         else:
             target_model_name = django_model_class.__name__
 
-        # Get the related name
-        related_name = sanitize_related_name(
-            getattr(field_info, "related_name", ""),
-            target_model_name or "",
-            field_name,
-        )
+        # Get the related name: Use user-provided if available, otherwise generate default
+        user_provided_related_name = getattr(field_info, "related_name", None)
 
-        field_kwargs["related_name"] = related_name
+        if user_provided_related_name:
+            # Sanitize user-provided name using target model context
+            related_name_base = user_provided_related_name
+            # Use target_model_name for context when sanitizing user input
+            sanitized_name = sanitize_related_name(related_name_base, target_model_name or "", field_name)
+        else:
+            # Generate default based on source model and field name for uniqueness
+            related_name_base = f"{source_model_name.lower()}_{field_name}_related"
+            # Sanitize the generated name (less critical but good practice, no model/field context needed)
+            sanitized_name = sanitize_related_name(related_name_base)
+
+        field_kwargs["related_name"] = sanitized_name
 
         # Handle to_field behavior using app_label from Django model
         app_label = (
@@ -667,7 +676,7 @@ class DjangoModelFactory:
 
     def assemble_django_model(self, carrier: DjangoModelFactoryCarrier):
         # Create the model attributes
-        model_attrs = {**carrier.django_fields}
+        model_attrs: dict[str, Any] = {**carrier.django_fields}
         if carrier.django_meta_class:
             model_attrs["Meta"] = carrier.django_meta_class
         if carrier.pydantic_model.__module__:
@@ -706,6 +715,7 @@ class DjangoModelFactory:
                 conversion_result = self.field_factory.convert_field(
                     field_name=field_name,
                     field_info=field_info,
+                    source_model_name=carrier.pydantic_model.__name__,
                     app_label=carrier.meta_app_label,
                 )
 
