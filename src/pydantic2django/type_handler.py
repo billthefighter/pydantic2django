@@ -398,6 +398,35 @@ class TypeHandler:
         if type_str == "Callable[[ChainContext, Any], Dict[str, Any]]":
             return {"typing": ["Callable"], "custom": ["ChainContext"], "explicit": []}
 
+        # Handle type[TypeVar] cases more comprehensively
+        if "type[" in type_str.lower():
+            type_match = re.search(r"type\[(.*?)\]", type_str, re.IGNORECASE)
+            if type_match:
+                inner_type = type_match.group(1)
+                # If the inner type has a module path, extract it
+                if "." in inner_type:
+                    module_parts = inner_type.split(".")
+                    type_name = module_parts[-1]
+                    module_path = ".".join(module_parts[:-1])
+
+                    # Add explicit import
+                    if module_path:
+                        explicit_import = f"from {module_path} import {type_name}"
+                        result["explicit"].append(explicit_import)
+                else:
+                    # If no module path, assume it's a TypeVar or similar
+                    type_name = inner_type
+
+                # Add the generic type to custom types
+                if type_name not in result["custom"]:
+                    result["custom"].append(type_name)
+
+                # Make sure Type is imported from typing
+                if "Type" not in result["typing"]:
+                    result["typing"].append("Type")
+
+                return result
+
         # Extract typing constructs
         for construct in TypeHandler.TYPING_CONSTRUCTS:
             if construct in type_str and construct not in result["typing"]:

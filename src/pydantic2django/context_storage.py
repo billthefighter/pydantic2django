@@ -6,6 +6,7 @@ mapping back to Pydantic objects. It handles the storage and retrieval of contex
 information needed for field reconstruction.
 """
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional, TypeVar, Union
@@ -30,6 +31,7 @@ class FieldContext:
 
     field_name: str
     field_type: type[Any]
+    field_str: Optional[str] = None
     is_optional: bool = False
     is_list: bool = False
     additional_metadata: dict[str, Any] = field(default_factory=dict)
@@ -344,8 +346,19 @@ class ContextClassGenerator:
             type_str = "Any"
             self.context_class_imports.add("from typing import Any")
 
+            # Check if a string representation was explicitly set
+            if field_context.field_str:
+                type_str = field_context.field_str
+                # Add Type import for field_str that contains type[]
+                if "type[" in type_str:
+                    self.context_class_imports.add("from typing import Type")
+                    # Try to extract inner type name to add import
+                    matches = re.search(r"type\[(.*?)\]", type_str)
+                    if matches:
+                        inner_type = matches.group(1)
+                        self.context_class_imports.add(f"from typing import {inner_type}")
             # Use a safer approach to handle type annotations
-            if isinstance(field_type, type) and not isinstance(field_type, str):
+            elif isinstance(field_type, type) and not isinstance(field_type, str):
                 # For simple type objects like RetryStrategy, use the type directly
                 if hasattr(field_type, "__name__"):
                     type_str = field_type.__name__
@@ -360,7 +373,32 @@ class ContextClassGenerator:
             else:
                 # For complex types or string representations, use a simplified representation
                 # that works in Python code but doesn't try to preserve the full type structure
-                if field_context.is_optional:
+                type_str_repr = str(field_type)
+
+                # Handle type[PromptType] cases
+                if type_str_repr.startswith("typing.") and "type[" in type_str_repr.lower():
+                    # Special handling for type[TypeVar] cases
+                    matches = re.search(r"type\[(.*?)\]", type_str_repr, re.IGNORECASE)
+                    if matches:
+                        inner_type = matches.group(1)
+
+                        # Extract inner type name
+                        if "." in inner_type:
+                            inner_type = inner_type.split(".")[-1]
+
+                        # If it's a TypeVar, preserve the full name
+                        self.context_class_imports.add("from typing import TypeVar")
+
+                        # Add the specific TypeVar to imports if we can determine it
+                        if hasattr(field_type, "__args__") and field_type.__args__:
+                            arg_type = field_type.__args__[0]
+                            if hasattr(arg_type, "__name__"):
+                                inner_type = arg_type.__name__
+                                self.context_class_imports.add(f"{inner_type} = TypeVar('{inner_type}')")
+
+                        type_str = f'"type[{inner_type}]"'
+                        self.context_class_imports.add("from typing import Type")
+                elif field_context.is_optional:
                     type_str = "Optional[Callable]"
                     self.context_class_imports.add("from typing import Optional, Callable")
                 elif "Callable" in str(field_type):

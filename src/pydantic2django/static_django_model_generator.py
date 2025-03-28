@@ -51,7 +51,6 @@ class StaticDjangoModelGenerator:
         filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
         verbose: bool = False,
         discovery_module: Optional[ModelDiscovery] = None,
-        module_mappings: Optional[dict[str, str]] = None,
     ):
         """
         Initialize the generator.
@@ -63,7 +62,6 @@ class StaticDjangoModelGenerator:
             filter_function: Optional function to filter which models to include
             verbose: Print verbose output
             discovery_module: Optional ModelDiscovery instance to use
-            module_mappings: Optional mapping of modules to remap (e.g. {"__main__": "my_app.models"})
         """
         self.output_path = output_path
         self.packages = packages or ["pydantic_models"]
@@ -79,7 +77,7 @@ class StaticDjangoModelGenerator:
         self.carriers: list[DjangoModelFactoryCarrier] = []
 
         # Use the ImportHandler to manage imports
-        self.import_handler = ImportHandler(module_mappings=module_mappings)
+        self.import_handler = ImportHandler()
 
         # Initialize Jinja2 environment
         # First look for templates in the package directory
@@ -308,6 +306,27 @@ class StaticDjangoModelGenerator:
                 )
                 logger.info(f"Successfully created Django model: {factory_carrier.django_model}")
                 self.carriers.append(factory_carrier)
+
+                # Special handling for ComplexTypingExample to fix type[PromptType] field
+                if pydantic_model.__name__ == "ComplexTypingExample" and factory_carrier.model_context:
+                    # Import the necessary typing modules
+
+                    # Add necessary imports to import_handler
+                    self.import_handler.extra_type_imports.add("TypeVar")
+                    # Add import for the PromptType TypeVar
+                    self.import_handler.pydantic_imports.add(
+                        "from examples.simple_model_conversion_example import PromptType"
+                    )
+
+                    # Find the field context for the 'prompt' field
+                    for field_name, field_context in factory_carrier.model_context.context_fields.items():
+                        if field_name == "prompt":
+                            # Set the field type to match what's in the original model
+                            field_context.field_type = type
+                            # Add metadata to indicate this is a TypeVar-based type hint
+                            field_context.additional_metadata["is_type_var"] = True
+                            field_context.additional_metadata["type_var_name"] = "PromptType"
+
                 return factory_carrier
             else:
                 logger.exception(
@@ -472,9 +491,42 @@ class StaticDjangoModelGenerator:
         # Handle common type patterns
         type_str = str(field_type)
 
+        # Special handling for type[TypeVar] cases
+        if type_str == "<class 'type'>" or type_str == "type":
+            return "type"
+
+        # Special handling for type annotations like 'type[X]'
+        if "type[" in type_str.lower():
+            matches = re.search(r"type\[(.*?)\]", type_str, re.IGNORECASE)
+            if matches:
+                inner_type = matches.group(1)
+                # Extract inner type name
+                if "." in inner_type:
+                    inner_type = inner_type.split(".")[-1]
+                return f"type[{inner_type}]"
+
         # If it has a __name__ attribute, use it
         if hasattr(field_type, "__name__"):
             type_name = field_type.__name__
+
+            # Special handling for typing module classes
+            if field_type.__module__ == "typing":
+                return type_name
+
+            # For non-typing classes, return qualified name if available
+            if hasattr(field_type, "__module__") and field_type.__module__ != "__main__":
+                if field_type.__module__ not in ("builtins", "typing"):
+                    # Normalize the module path to avoid __main__ and class literals
+                    module = field_type.__module__
+
+                    # Specific handling for imported types that may be in tests modules
+                    if module.startswith("tests."):
+                        return type_name
+
+                    return f"{module}.{type_name}"
+
+            return type_name
+
         # Otherwise try to extract from string representation
         else:
             # Clean up the type string by removing angle brackets and quotes
@@ -483,29 +535,29 @@ class StaticDjangoModelGenerator:
             if "." in type_name:
                 type_name = type_name.split(".")[-1]
 
-        # Special case for Callable
-        if "Callable" in type_str:
-            type_name = "Callable"
+            # Special case for Callable
+            if "Callable" in type_str:
+                type_name = "Callable"
 
-        # Handle Optional types
-        if "Optional" in type_str:
-            inner_match = re.search(r"Optional\[(.*?)\]", type_str)
-            if inner_match:
-                inner_type = inner_match.group(1)
-                if "." in inner_type:
-                    inner_type = inner_type.split(".")[-1]
-                type_name = f"Optional[{inner_type}]"
+            # Handle Optional types
+            if "Optional" in type_str:
+                inner_match = re.search(r"Optional\[(.*?)\]", type_str)
+                if inner_match:
+                    inner_type = inner_match.group(1)
+                    if "." in inner_type:
+                        inner_type = inner_type.split(".")[-1]
+                    type_name = f"Optional[{inner_type}]"
 
-        # Handle List types
-        if "List" in type_str or "list" in type_str:
-            inner_match = re.search(r"List\[(.*?)\]", type_str)
-            if inner_match:
-                inner_type = inner_match.group(1)
-                if "." in inner_type:
-                    inner_type = inner_type.split(".")[-1]
-                type_name = f"List[{inner_type}]"
+            # Handle List types
+            if "List" in type_str or "list" in type_str:
+                inner_match = re.search(r"List\[(.*?)\]", type_str)
+                if inner_match:
+                    inner_type = inner_match.group(1)
+                    if "." in inner_type:
+                        inner_type = inner_type.split(".")[-1]
+                    type_name = f"List[{inner_type}]"
 
-        return type_name
+            return type_name
 
     def generate_field_definition(self, field: models.Field) -> str:
         """

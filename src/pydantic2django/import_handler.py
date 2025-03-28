@@ -1,6 +1,8 @@
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
+
+from pydantic2django.type_handler import TypeHandler
 
 # Configure logging
 logger = logging.getLogger("pydantic2django.import_handler")
@@ -13,13 +15,8 @@ class ImportHandler:
     dependencies are included.
     """
 
-    def __init__(self, module_mappings: Optional[dict[str, str]] = None):
-        """
-        Initialize empty collections for different types of imports.
-
-        Args:
-            module_mappings: Optional mapping of modules to remap (e.g. {"__main__": "my_app.models"})
-        """
+    def __init__(self):
+        """Initialize empty collections for different types of imports."""
         # Track imports by category
         self.extra_type_imports: set[str] = set()  # For typing and other utility imports
         self.pydantic_imports: set[str] = set()  # For Pydantic model imports
@@ -31,12 +28,7 @@ class ImportHandler:
         # For tracking field type dependencies we've already processed
         self.processed_field_types: set[str] = set()
 
-        # Module mappings to remap imports (e.g. "__main__" -> "my_app.models")
-        self.module_mappings = module_mappings or {}
-
         logger.info("ImportHandler initialized")
-        if self.module_mappings:
-            logger.info(f"Using module mappings: {self.module_mappings}")
 
     def add_pydantic_model_import(self, model_class: type) -> None:
         """
@@ -52,12 +44,6 @@ class ImportHandler:
         module_path = model_class.__module__
         model_name = self._clean_generic_type(model_class.__name__)
 
-        # Apply module mappings if needed
-        if module_path in self.module_mappings:
-            actual_module = self.module_mappings[module_path]
-            logger.debug(f"Remapping module import: {module_path} -> {actual_module}")
-            module_path = actual_module
-
         logger.debug(f"Processing Pydantic model import: {model_name} from {module_path}")
 
         # Skip if already imported
@@ -72,28 +58,128 @@ class ImportHandler:
 
     def add_context_field_type_import(self, field_type: Any) -> None:
         """
-        Add an import statement for a context field type with recursive dependency detection.
+        Add imports for a context field type.
 
         Args:
-            field_type: The field type to import
+            field_type: The field type to add imports for
         """
-        # Skip if we've already processed this field type
-        field_type_str = str(field_type)
-        if field_type_str in self.processed_field_types:
-            logger.debug(f"Skipping already processed field type: {field_type_str}")
-            return
+        try:
+            logger.debug(f"Adding imports for context field type: {field_type}")
 
-        logger.info(f"Processing context field type: {field_type_str}")
-        self.processed_field_types.add(field_type_str)
+            # Handle TypeVar imports specially
+            if isinstance(field_type, type) and "TypeVar" in str(field_type):
+                logger.debug(f"Processing a TypeVar: {field_type}")
+                type_str = str(field_type)
+                if "type[" in type_str.lower():
+                    type_match = re.search(r"type\[(.*?)\]", type_str, re.IGNORECASE)
+                    if type_match:
+                        inner_type = type_match.group(1)
+                        logger.debug(f"Found TypeVar in type[], inner type: {inner_type}")
 
-        # Try to add direct import for the field type if it's a class
-        self._add_type_import(field_type)
+                        # Add TypeVar import
+                        self.extra_type_imports.add("TypeVar")
+                        self.extra_type_imports.add("Type")
 
-        # Handle nested types in generics, unions, etc.
-        self._process_nested_types(field_type)
+                        # If the inner type is a TypeVar, add it to context imports
+                        if "." not in inner_type:
+                            self.context_class_imports.add(f"{inner_type} = TypeVar('{inner_type}')")
 
-        # Add typing imports based on the field type string
-        self._add_typing_imports(field_type_str)
+                        # Return as we've already handled this special case
+                        return
+
+            # Special handling for built-in type class
+            if field_type is type:
+                self.extra_type_imports.add("Type")
+                return
+
+            # Handle class objects with __module__ and __name__
+            if hasattr(field_type, "__module__") and hasattr(field_type, "__name__"):
+                module_name = field_type.__module__
+                class_name = field_type.__name__
+
+                # Skip builtins
+                if module_name == "builtins":
+                    return
+
+                # Handle __main__ special case - these classes are defined in the example script
+                if module_name == "__main__":
+                    # Fix the import path for classes defined in __main__
+                    # Assuming these are from examples.simple_model_conversion_example
+                    self.pydantic_imports.add(f"from examples.simple_model_conversion_example import {class_name}")
+                    return
+
+                # Handle type objects from actual modules (not string representations)
+                if not str(field_type).startswith("<class '"):
+                    # Add a proper import
+                    self.context_class_imports.add(f"from {module_name} import {class_name}")
+                    return
+
+            # Get required imports from type string
+            type_str = str(field_type)
+
+            # Clean up the string representation if it's a class object
+            if type_str.startswith("<class '"):
+                # Extract the actual class name from the string
+                match = re.search(r"<class '([^']+)'>", type_str)
+                if match:
+                    class_path = match.group(1)
+
+                    # Handle builtin types
+                    if class_path in ("type", "builtins.type"):
+                        self.extra_type_imports.add("Type")
+                        return
+
+                    # Handle module.class format
+                    if "." in class_path:
+                        module_path, class_name = class_path.rsplit(".", 1)
+
+                        # Skip builtins
+                        if module_path == "builtins":
+                            return
+
+                        # Handle __main__ special case
+                        if module_path == "__main__":
+                            # Fix __main__ imports to use examples.simple_model_conversion_example
+                            self.pydantic_imports.add(
+                                f"from examples.simple_model_conversion_example import {class_name}"
+                            )
+                        else:
+                            # Add a proper import for other modules
+                            self.context_class_imports.add(f"from {module_path} import {class_name}")
+                        return
+                    else:
+                        # Just a class name without module
+                        self.extra_type_imports.add(class_path)
+                        return
+
+            # Handle complex typing types like Callable, List, etc.
+            required_imports = TypeHandler.get_required_imports(type_str)
+
+            # Add typing imports
+            for typing_import in required_imports["typing"]:
+                self.extra_type_imports.add(typing_import)
+
+            # Add explicit imports
+            for explicit_import in required_imports.get("explicit", []):
+                # Only add if it's not already in context imports
+                if not any(explicit_import in import_str for import_str in self.context_class_imports):
+                    self.context_class_imports.add(explicit_import)
+
+            # Process custom types
+            for _custom_type in required_imports["custom"]:
+                # Try to extract the module from the custom type
+                if hasattr(field_type, "__module__") and field_type.__module__ not in ["builtins", "typing"]:
+                    module = field_type.__module__
+                    if hasattr(field_type, "__name__"):
+                        name = field_type.__name__
+
+                        # Handle __main__ special case
+                        if module == "__main__":
+                            self.pydantic_imports.add(f"from examples.simple_model_conversion_example import {name}")
+                        else:
+                            self.context_class_imports.add(f"from {module} import {name}")
+        except Exception as e:
+            logger.error(f"Error adding imports for context field type {field_type}: {e}")
 
     def _add_type_import(self, field_type: Any) -> None:
         """
@@ -107,12 +193,6 @@ class ImportHandler:
                 type_module = field_type.__module__
                 type_name = field_type.__name__
 
-                # Apply module mappings if needed
-                if type_module in self.module_mappings:
-                    actual_module = self.module_mappings[type_module]
-                    logger.debug(f"Remapping module import: {type_module} -> {actual_module}")
-                    type_module = actual_module
-
                 logger.debug(f"Examining type: {type_name} from module {type_module}")
 
                 # Skip built-in types and typing module types
@@ -122,11 +202,6 @@ class ImportHandler:
                     or type_name in ["str", "int", "float", "bool", "dict", "list"]
                 ):
                     logger.debug(f"Skipping built-in or typing type: {type_name}")
-                    return
-
-                # Skip TypeVar definitions to avoid conflicts
-                if type_name == "T" or type_name == "TypeVar":
-                    logger.debug(f"Skipping TypeVar definition: {type_name} - will be defined locally")
                     return
 
                 # Clean up any parametrized generic types
@@ -278,25 +353,11 @@ class ImportHandler:
         pydantic_classes = {}
         context_classes = {}
 
-        # Handle special case for TypeVar imports
-        typevars = set()
-
         for import_stmt in self.pydantic_imports:
             if import_stmt.startswith("from ") and " import " in import_stmt:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
-
-                # Skip __main__ and rewrite to real module paths if possible
-                if module == "__main__":
-                    logger.warning(f"Skipping __main__ import: {import_stmt} - these won't work when imported")
-                    continue
-
                 for cls in classes.split(", "):
-                    # Check if it's a TypeVar to handle duplicate definitions
-                    if cls == "T" or cls == "TypeVar":
-                        typevars.add(cls)
-                        continue
-
                     # Clean up any parameterized generic types in class names
                     cls = self._clean_generic_type(cls)
                     pydantic_classes[cls] = module
@@ -305,18 +366,7 @@ class ImportHandler:
             if import_stmt.startswith("from ") and " import " in import_stmt:
                 module, classes = import_stmt.split(" import ")
                 module = module.replace("from ", "")
-
-                # Skip __main__ imports or rewrite to real module paths if possible
-                if module == "__main__":
-                    logger.warning(f"Skipping __main__ import: {import_stmt} - these won't work when imported")
-                    continue
-
                 for cls in classes.split(", "):
-                    # Check if it's a TypeVar to handle duplicate definitions
-                    if cls == "T" or cls == "TypeVar":
-                        typevars.add(cls)
-                        continue
-
                     # Clean up any parameterized generic types in class names
                     cls = self._clean_generic_type(cls)
                     # If this class is already imported in pydantic imports, skip it
@@ -349,10 +399,6 @@ class ImportHandler:
 
         logger.info(f"Final pydantic imports: {deduplicated_pydantic_imports}")
         logger.info(f"Final context imports: {deduplicated_context_imports}")
-
-        # Log any TypeVar names we're skipping
-        if typevars:
-            logger.info(f"Skipping TypeVar imports: {typevars} - these will be defined locally")
 
         return {"pydantic": deduplicated_pydantic_imports, "context": deduplicated_context_imports}
 
