@@ -159,6 +159,7 @@ class StaticDjangoModelGenerator:
         model_has_context = {}  # Track which models have context classes
         django_model_to_pydantic = {}  # Map Django model names to Pydantic model names
         context_class_names = []  # List to store context class names for __all__
+        seen_context_classes = set()  # Track seen context class names to avoid duplicates
 
         # Track models that only have context fields for logging
         context_only_models = []
@@ -198,13 +199,17 @@ class StaticDjangoModelGenerator:
                     model_has_context[model_name] = has_context
 
                     if has_context and carrier.model_context is not None:
-                        context_definitions.append(context_def)
-                        # Add context class name to __all__ list
+                        # Add context class name to __all__ list and check for duplicates
                         if carrier.django_model:
                             # Clean the base Django model name before creating the context class name
                             cleaned_django_model_name = self._clean_generic_type(carrier.django_model.__name__)
                             context_class_name = f"{cleaned_django_model_name}Context"
-                            context_class_names.append(f"'{context_class_name}'")
+
+                            # Only add definition and name if not seen before
+                            if context_class_name not in seen_context_classes:
+                                context_definitions.append(context_def)
+                                context_class_names.append(f"'{context_class_name}'")
+                                seen_context_classes.add(context_class_name)
 
                         # Process context fields to gather imports
                         for _, field_context in carrier.model_context.context_fields.items():
