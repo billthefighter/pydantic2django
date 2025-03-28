@@ -201,7 +201,9 @@ class StaticDjangoModelGenerator:
                         context_definitions.append(context_def)
                         # Add context class name to __all__ list
                         if carrier.django_model:
-                            context_class_name = f"{carrier.django_model.__name__}Context"
+                            # Clean the base Django model name before creating the context class name
+                            cleaned_django_model_name = self._clean_generic_type(carrier.django_model.__name__)
+                            context_class_name = f"{cleaned_django_model_name}Context"
                             context_class_names.append(f"'{context_class_name}'")
 
                         # Process context fields to gather imports

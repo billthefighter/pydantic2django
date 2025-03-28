@@ -114,6 +114,50 @@ class ComplexTypingExample(BaseModel, Generic[PromptType, T]):
     retry_strategy: RetryStrategy
 
 
+# +++ Add Generic Example Models +++
+NodeT = TypeVar("NodeT")
+EdgeT = TypeVar("EdgeT")
+
+
+class SimpleGenericBase(BaseModel, Generic[NodeT, EdgeT]):
+    """A simple generic base model for testing."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    nodes: list[NodeT]  # Use List from typing
+    edges: list[EdgeT]  # Use List from typing
+    # Add a context field to the base
+    base_context_field: Callable[[str], int] = Field(exclude=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class ConcreteNode(BaseModel):
+    """A concrete node type."""
+
+    node_id: str
+    data: str
+
+
+class ConcreteEdge(BaseModel):
+    """A concrete edge type."""
+
+    edge_id: str
+    from_node: str
+    to_node: str
+
+
+class SpecificGraph(SimpleGenericBase[ConcreteNode, ConcreteEdge]):
+    """A specific graph implementation inheriting from the generic base."""
+
+    graph_name: str
+    description: Optional[str] = None
+    # Add a specific context field
+    specific_context_field: Callable[[int], str] = Field(exclude=True)  # Exclude from Django model
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+# +++ End Generic Example Models +++
+
+
 def is_persistent_model(obj: Any) -> bool:
     """
     Filter function that returns True if the object is a ChainStep, RetryStrategy,
@@ -125,7 +169,9 @@ def is_persistent_model(obj: Any) -> bool:
     Returns:
         bool: True if obj is one of the specified model classes, False otherwise
     """
-    return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample or obj is Provider)
+    # return isclass(obj) and (obj is ChainStep or obj is RetryStrategy or obj is EnumExample or obj is Provider)
+    # Temporarily include all models for testing generics
+    return isclass(obj) and issubclass(obj, BaseModel)
 
 
 def setup_relationships():
@@ -179,6 +225,12 @@ def generate_models():
     register_model("ComplexTypingExample", ComplexTypingExample, has_context=True)
     register_model("ChainStep", ChainStep, has_context=True)
     register_model("Provider", Provider, has_context=True)
+    # Register generic models
+    # register_model("SimpleGenericBase", SimpleGenericBase, has_context=True)
+    # # Don't register the base generic directly? Let's see.
+    register_model("ConcreteNode", ConcreteNode, has_context=False)
+    register_model("ConcreteEdge", ConcreteEdge, has_context=False)
+    register_model("SpecificGraph", SpecificGraph, has_context=True)  # Register the specific implementation
 
     from tests.mock_discovery import set_field_override
 
@@ -211,11 +263,13 @@ def generate_models():
 
     generator = StaticDjangoModelGenerator(
         output_path="generated_models.py",
-        packages=["tests.django_llm"],
+        packages=["tests.django_llm"],  # This might need adjustment if models are defined here
         app_label="django_llm",
-        filter_function=is_persistent_model,
+        # filter_function=is_persistent_model, # Use the modified filter temporarily
+        filter_function=None,  # Remove filter to ensure all registered models are included
         discovery_module=MockDiscovery(),
         module_mappings=module_mappings,
+        verbose=True,  # Add verbose logging
     )
     generator.generate()
 
