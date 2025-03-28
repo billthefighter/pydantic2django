@@ -112,18 +112,6 @@ class FieldConversionResult:
     context_field: Optional[FieldInfo] = None
     error_str: Optional[str] = None
 
-    @property
-    def rendered_django_field(self) -> models.Field:
-        if self.django_field and self.type_mapping_definition:
-            return self.type_mapping_definition.get_django_field(self.field_kwargs)
-        else:
-            errorstr = "Django field or type mapping definition not found: "
-            if not self.django_field:
-                errorstr += "django_field is None"
-            if not self.type_mapping_definition:
-                errorstr += "type_mapping_definition is None"
-            raise ValueError(errorstr)
-
     def __str__(self):
         return (
             f"FieldConversionResult(field_name={self.field_name}, "
@@ -731,12 +719,19 @@ class DjangoModelFactory:
                     continue
 
                 # Only try to render the Django field if we have a type mapping definition
-                try:
-                    django_field = conversion_result.rendered_django_field
-                    carrier.django_fields[field_name] = django_field
-                except ValueError as e:
-                    # If we can't render the field, treat it as contextual
-                    logger.warning(f"Could not render Django field for '{field_name}': {e}")
+                # Directly use the pre-instantiated django_field if it exists
+                if conversion_result.django_field:
+                    carrier.django_fields[field_name] = conversion_result.django_field
+                elif conversion_result.type_mapping_definition:
+                    # This path might indicate an issue where a field was expected but not created
+                    logger.warning(
+                        f"Field '{field_name}' had type mapping but no Django field was created-Treating as contextual."
+                    )
+                    carrier.context_fields[field_name] = field_info
+                else:
+                    # This case should already be handled (marked as contextual earlier if no mapping)
+                    # but adding for completeness
+                    logger.info(f"Field '{field_name}' has no mapping and no field, treated as contextual.")
                     carrier.context_fields[field_name] = field_info
 
             except (ValueError, TypeError) as e:
