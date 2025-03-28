@@ -46,6 +46,7 @@ class DjangoModelFactoryCarrier:
         existing_model: Optional existing Django model to update with new fields.
         class_name_prefix: Prefix to use for the generated Django model class name. Defaults to "Django".
         strict: If True, raise errors on field collisions; if False, keep base model fields. Defaults to False.
+        used_related_names_per_target: A dictionary to track used related names per target.
     """
 
     pydantic_model: type[BaseModel]
@@ -54,6 +55,7 @@ class DjangoModelFactoryCarrier:
     existing_model: Optional[type[models.Model]] = None
     class_name_prefix: str = "Django"
     strict: bool = False
+    used_related_names_per_target: dict[str, set[str]] = field(default_factory=dict)
 
     def __post_init__(self):
         self.django_fields: dict[str, models.Field] = {}
@@ -137,6 +139,7 @@ class DjangoFieldFactory:
         field_name: str,
         field_info: FieldInfo,
         source_model_name: str,
+        carrier: "DjangoModelFactoryCarrier",
         app_label: str = "django_llm",
     ) -> FieldConversionResult:
         """
@@ -147,6 +150,7 @@ class DjangoFieldFactory:
             field_name: The name of the field
             field_info: The Pydantic field info
             source_model_name: The name of the Pydantic model containing this field
+            carrier: The carrier object containing necessary information
             app_label: The app label to use for model registration
             model_name: The name of the model to reference (for relationships)
 
@@ -192,7 +196,7 @@ class DjangoFieldFactory:
 
             # For relationship fields, use RelationshipFieldHandler
             if result.type_mapping_definition and result.type_mapping_definition.is_relationship:
-                result = self.handle_relationship_field(result, source_model_name)
+                result = self.handle_relationship_field(result, source_model_name, carrier)
                 if not result.django_field:
                     logger.warning(f"Could not create relationship field for {field_name}, must be contextual")
                     # Mark unmappable relationship fields as context fields
@@ -298,7 +302,9 @@ class DjangoFieldFactory:
             result.context_field = field_info
             return result
 
-    def handle_relationship_field(self, result: FieldConversionResult, source_model_name: str) -> FieldConversionResult:
+    def handle_relationship_field(
+        self, result: FieldConversionResult, source_model_name: str, carrier: "DjangoModelFactoryCarrier"
+    ) -> FieldConversionResult:
         field_info = result.field_info
         field_kwargs = result.field_kwargs
         field_type = field_info.annotation
@@ -378,7 +384,24 @@ class DjangoFieldFactory:
             # Sanitize the generated name (less critical but good practice, no model/field context needed)
             sanitized_name = sanitize_related_name(related_name_base)
 
-        field_kwargs["related_name"] = sanitized_name
+        # Ensure uniqueness of related_name within the target model scope for this source model
+        if target_model_name:  # Check if target_model_name is not None
+            final_related_name = sanitized_name
+            counter = 1
+            target_related_names = carrier.used_related_names_per_target.setdefault(target_model_name, set())
+            while final_related_name in target_related_names:
+                counter += 1
+                final_related_name = f"{sanitized_name}_{counter}"
+
+            target_related_names.add(final_related_name)
+            field_kwargs["related_name"] = final_related_name
+        else:
+            # If target model name couldn't be determined, use the sanitized name directly
+            # This might lead to conflicts if multiple fields point to an unknown target
+            logger.warning(
+                f"Target model name not found for field '{field_name}', cannot guarantee related_name uniqueness."
+            )
+            field_kwargs["related_name"] = sanitized_name
 
         # Handle to_field behavior using app_label from Django model
         app_label = (
@@ -713,6 +736,7 @@ class DjangoModelFactory:
                     field_name=field_name,
                     field_info=field_info,
                     source_model_name=carrier.pydantic_model.__name__,
+                    carrier=carrier,
                     app_label=carrier.meta_app_label,
                 )
 
