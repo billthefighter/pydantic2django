@@ -1,0 +1,30 @@
+"""
+Generated Django models from Pydantic models.
+Generated at: {{ generation_timestamp }}
+"""
+
+
+{% include 'imports_block.py.j2' %}
+
+{% if context_definitions %}
+# Context classes for models with non-serializable fields
+{% for context_class in context_definitions %}
+{{ context_class }}
+{% endfor %}
+{% endif %}
+
+# Generated Django models
+{% for model_definition in model_definitions %}
+{{ model_definition }}
+{% endfor %}
+
+
+# List of all generated models
+__all__ = [
+    {% for model in django_model_names %}
+    {{ model }},
+    {% endfor %}
+    {% for context_model in context_class_names %}
+    {{ context_model }},
+    {% endfor %}
+]

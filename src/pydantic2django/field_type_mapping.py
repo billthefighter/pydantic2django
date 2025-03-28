@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -20,24 +21,59 @@ from django.db import models
 # EmailStr and IPvAnyAddress are likely from pydantic
 from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 
+# Use absolute imports to avoid circular dependencies
+# Import field_utils functions that are needed
+from pydantic2django.field_utils import is_pydantic_model_field_optional
+
 logger = getLogger(__name__)
 
+# Type alias for python types that can be either a direct type or a collection type
+PythonType = Union[type, list[type], dict[str, type]]
 
-class TypeMappingDefinition(BaseModel):
+
+@dataclass
+class TypeMappingDefinition:
     """
     Definition of a mapping between a Python/Pydantic type and a Django field type.
 
     This class represents a single mapping between a Python type and a Django field type,
-    with optional additional attributes like max_length.
+    with optional additional attributes like max_length and relationship info.
     """
 
-    python_type: type
+    python_type: PythonType
     django_field: type[models.Field]
     max_length: Optional[int] = None
+    is_relationship: bool = False
+    on_delete: Optional[Any] = None  # For ForeignKey relationships
+    field_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """
+        Post-initialization hook to set default values for max_length and field_kwargs.
+        """
+        if self.max_length is None and self.django_field == models.CharField:
+            if isinstance(self.python_type, type) and hasattr(self.python_type, "__name__"):
+                self.max_length = get_default_max_length(self.python_type.__name__, self.django_field)
+            else:
+                # Just assume 255 is fine for any CharField
+                self.max_length = 255
 
     # Class methods for creating common field types
+
+    @property
+    def relationship_type(self) -> Optional[str]:
+        """
+        Get the relationship type for this mapping.
+        """
+        if self.django_field == models.ForeignKey:
+            return "foreign_key"
+        elif self.django_field == models.ManyToManyField:
+            return "many_to_many"
+        else:
+            return None
+
     @classmethod
-    def char_field(cls, python_type: type, max_length: int = 255) -> "TypeMappingDefinition":
+    def char_field(cls, python_type: PythonType, max_length: int = 255) -> "TypeMappingDefinition":
         """Create a CharField mapping with the specified max_length."""
         return cls(
             python_type=python_type,
@@ -46,23 +82,99 @@ class TypeMappingDefinition(BaseModel):
         )
 
     @classmethod
-    def text_field(cls, python_type: type) -> "TypeMappingDefinition":
+    def text_field(cls, python_type: PythonType) -> "TypeMappingDefinition":
         """Create a TextField mapping."""
         return cls(python_type=python_type, django_field=models.TextField)
 
     @classmethod
-    def json_field(cls, python_type: type) -> "TypeMappingDefinition":
+    def json_field(cls, python_type: PythonType) -> "TypeMappingDefinition":
         """Create a JSONField mapping."""
         return cls(python_type=python_type, django_field=models.JSONField)
 
     @classmethod
-    def email_field(cls, python_type: type = EmailStr, max_length: int = 254) -> "TypeMappingDefinition":
+    def email_field(cls, python_type: PythonType = EmailStr, max_length: int = 254) -> "TypeMappingDefinition":
         """Create an EmailField mapping with the specified max_length."""
         return cls(
             python_type=python_type,
             django_field=models.EmailField,
             max_length=max_length,
         )
+
+    @classmethod
+    def foreign_key(cls, python_type: PythonType) -> "TypeMappingDefinition":
+        """Create a ForeignKey mapping."""
+        return cls(
+            python_type=python_type,
+            django_field=models.ForeignKey,
+            is_relationship=True,
+            on_delete=models.CASCADE,
+        )
+
+    @classmethod
+    def many_to_many(cls, python_type: PythonType) -> "TypeMappingDefinition":
+        """Create a ManyToManyField mapping."""
+        return cls(
+            python_type=python_type,
+            django_field=models.ManyToManyField,
+            is_relationship=True,
+        )
+
+    @classmethod
+    def enum_field(cls, python_type: type[Enum]) -> "TypeMappingDefinition":
+        """Create an EnumField mapping."""
+        # Get enum values from __members__ dictionary instead of iterating the class directly
+        # This is more reliable as direct iteration can fail in some contexts
+        enum_values = [member.value for member in python_type.__members__.values()]
+
+        # Determine the type of the enum values
+        if all(isinstance(val, int) for val in enum_values):
+            # Integer enum
+            return cls(
+                python_type=python_type,
+                django_field=models.IntegerField,
+                field_kwargs={"choices": [(member.value, name) for name, member in python_type.__members__.items()]},
+            )
+        elif all(isinstance(val, str) for val in enum_values):
+            # String enum - all values must be strings only
+            max_length = max(len(str(val)) for val in enum_values)
+            return cls(
+                python_type=python_type,
+                django_field=models.CharField,
+                max_length=max_length,
+                field_kwargs={"choices": [(member.value, name) for name, member in python_type.__members__.items()]},
+            )
+        elif all(isinstance(val, (str, int, float)) for val in enum_values):
+            # Mixed type enum - use TextField with choices
+            return cls(
+                python_type=python_type,
+                django_field=models.TextField,
+                field_kwargs={
+                    "choices": [(str(member.value), name) for name, member in python_type.__members__.items()]
+                },
+            )
+        # TODO: Add support for other enum types
+        else:
+            raise ValueError(f"Unsupported enum values: {enum_values}")
+
+    def get_django_field(self, kwargs: Optional[dict[str, Any]] = None) -> models.Field:
+        """
+        Get the Django field type with the given kwargs.
+        If this field has additional kwargs, they will be merged with the kwargs passed in.
+        This is the preferred way to access the field type.
+        Args:
+            kwargs: Additional kwargs for the field
+
+        Returns:
+            The Django field type
+        """
+        if kwargs is None:
+            kwargs = {}
+        # Merge the kwargs with the field_kwargs
+        kwargs.update(self.field_kwargs)
+        # If this is a CharField, set the max_length
+        if self.django_field == models.CharField and "max_length" not in kwargs and self.max_length is not None:
+            kwargs["max_length"] = self.max_length
+        return self.django_field(**kwargs)
 
     def matches_type(self, python_type: Any) -> bool:
         """Check if this definition matches the given Python type."""
@@ -72,6 +184,7 @@ class TypeMappingDefinition(BaseModel):
 
         # Handle complex types like List[str], Dict[str, Any], etc.
         origin = get_origin(python_type)
+        args = get_args(python_type)
         if origin is not None:
             # For Optional[T] which is Union[T, None]
             if origin is Union:
@@ -91,42 +204,103 @@ class TypeMappingDefinition(BaseModel):
                 ):
                     return True
             # For collection types, match with their base types
-            elif origin in (list, dict, set) and origin == self.python_type:
-                return True
+            elif origin in (list, dict, set):
+                # For parameterized collection types, match with the appropriate JSON field
+                if self.django_field == models.JSONField:
+                    if (
+                        (origin is set and self.python_type is set)
+                        or (origin is dict and self.python_type is dict)
+                        or (origin is list and self.python_type is list)
+                    ):
+                        return True
+
+                args = get_args(python_type)
+                # For relationship fields, check if the inner type matches
+                if self.is_relationship and args:
+                    if self.relationship_type == "many_to_many":
+                        # Get the origin and args of our python_type for comparison
+                        our_origin = get_origin(self.python_type)
+                        our_args = get_args(self.python_type)
+
+                        if origin is list and our_origin is list:
+                            # List[Model] case - check if inner types match
+                            inner_type = args[0]
+                            our_inner_type = our_args[0]
+                            # Check if inner_type is a subclass of BaseModel
+                            return (
+                                isinstance(inner_type, type)
+                                and isinstance(our_inner_type, type)
+                                and issubclass(inner_type, BaseModel)
+                                and self.django_field == models.ManyToManyField
+                            )
+                        elif origin is dict and our_origin is dict:
+                            # Dict[str, Model] case - check if key and value types match
+                            key_type, value_type = args
+                            our_key_type, our_value_type = our_args
+                            return (
+                                key_type == our_key_type
+                                and isinstance(value_type, type)
+                                and isinstance(our_value_type, type)
+                                and issubclass(value_type, BaseModel)
+                                and self.django_field == models.ManyToManyField
+                            )
+                    else:
+                        # For other relationship types
+                        inner_type = args[0]
+                        our_type = get_origin(self.python_type) or self.python_type
+                        return (
+                            isinstance(inner_type, type)
+                            and isinstance(our_type, type)
+                            and issubclass(inner_type, our_type)
+                        )
+                # For regular collection types
+                return origin == get_origin(self.python_type)
+
+        # For non-collection relationship types (e.g., ForeignKey)
+        if self.is_relationship and not origin:
+            our_type = get_origin(self.python_type) or self.python_type
+            return isinstance(python_type, type) and isinstance(our_type, type) and issubclass(python_type, BaseModel)
+
+        # For basic types, check if the python_type is a subclass of self.python_type
+        if isinstance(self.python_type, type) and isinstance(python_type, type):
+            return issubclass(python_type, self.python_type)
 
         return False
 
-    def matches_type_str(self, type_str: str) -> bool:
-        """Check if this definition matches the string representation of a type."""
-        return str(self.python_type) == type_str or type_str.endswith(str(self.python_type))
 
+def get_default_max_length(field_name: str, field_type: type[models.Field]) -> Optional[int]:
+    """
+    Get the default max_length for a field based on its name and type.
 
-# Define all type mappings as TypeMappingDefinition instances
-TYPE_MAPPINGS: list[TypeMappingDefinition] = [
-    # Basic Python types
-    TypeMappingDefinition(python_type=str, django_field=models.CharField, max_length=255),
-    TypeMappingDefinition(python_type=int, django_field=models.IntegerField),
-    TypeMappingDefinition(python_type=float, django_field=models.FloatField),
-    TypeMappingDefinition(python_type=bool, django_field=models.BooleanField),
-    TypeMappingDefinition(python_type=datetime.datetime, django_field=models.DateTimeField),
-    TypeMappingDefinition(python_type=date, django_field=models.DateField),
-    TypeMappingDefinition(python_type=time, django_field=models.TimeField),
-    TypeMappingDefinition(python_type=timedelta, django_field=models.DurationField),
-    TypeMappingDefinition(python_type=Decimal, django_field=models.DecimalField),
-    TypeMappingDefinition(python_type=UUID, django_field=models.UUIDField),
-    TypeMappingDefinition(python_type=EmailStr, django_field=models.EmailField, max_length=254),
-    TypeMappingDefinition(python_type=bytes, django_field=models.BinaryField),
-    # Collection types
-    TypeMappingDefinition.json_field(dict),
-    TypeMappingDefinition.json_field(list),
-    TypeMappingDefinition.json_field(set),
-    # Special types
-    TypeMappingDefinition(python_type=Path, django_field=models.FilePathField),
-    TypeMappingDefinition.char_field(Enum),
-    TypeMappingDefinition.char_field(type),
-    TypeMappingDefinition(python_type=IPvAnyAddress, django_field=models.GenericIPAddressField),
-    TypeMappingDefinition.json_field(Json),
-]
+    Args:
+        field_name: The name of the field
+        field_type: The Django field type
+
+    Returns:
+        The default max_length or None if not applicable
+    """
+    # Default max_length for CharField
+    if field_type == models.CharField:
+        # Special cases based on field name
+        if "email" in field_name.lower():
+            return 254  # Standard max length for email fields
+        elif "password" in field_name.lower():
+            return 128  # Common length for password fields
+        elif "phone" in field_name.lower():
+            return 20  # Reasonable length for phone numbers
+        elif "url" in field_name.lower() or "link" in field_name.lower():
+            return 200  # Reasonable length for URLs
+        elif "name" in field_name.lower() or "title" in field_name.lower():
+            return 100  # Reasonable length for names/titles
+        elif "description" in field_name.lower() or "summary" in field_name.lower():
+            return 500  # Longer text for descriptions
+        elif "code" in field_name.lower() or "id" in field_name.lower():
+            return 50  # Reasonable length for codes/IDs
+        else:
+            return 255  # Default max length
+
+    # No max_length for other field types
+    return None
 
 
 class TypeMapper:
@@ -136,6 +310,47 @@ class TypeMapper:
     This class provides static methods for converting between Python types and Django field types,
     as well as determining appropriate field attributes like max_length.
     """
+
+    # Define all type mappings as TypeMappingDefinition instances
+    TYPE_MAPPINGS: list[TypeMappingDefinition] = [
+        # Basic Python types
+        TypeMappingDefinition(
+            python_type=bool, django_field=models.BooleanField
+        ),  # Move bool before int since bool is a subclass of int
+        TypeMappingDefinition(python_type=str, django_field=models.TextField),
+        TypeMappingDefinition(python_type=int, django_field=models.IntegerField),
+        TypeMappingDefinition(python_type=float, django_field=models.FloatField),
+        TypeMappingDefinition(python_type=datetime.datetime, django_field=models.DateTimeField),
+        TypeMappingDefinition(python_type=date, django_field=models.DateField),
+        TypeMappingDefinition(python_type=time, django_field=models.TimeField),
+        TypeMappingDefinition(python_type=timedelta, django_field=models.DurationField),
+        TypeMappingDefinition(python_type=Decimal, django_field=models.DecimalField),
+        TypeMappingDefinition(python_type=UUID, django_field=models.UUIDField),
+        TypeMappingDefinition(python_type=EmailStr, django_field=models.EmailField, max_length=254),
+        TypeMappingDefinition(python_type=bytes, django_field=models.BinaryField),
+        # Enum type
+        TypeMappingDefinition.enum_field(Enum),
+        # Collection types
+        TypeMappingDefinition.json_field(dict),
+        TypeMappingDefinition.json_field(list),
+        TypeMappingDefinition.json_field(set),
+        # Special types
+        TypeMappingDefinition(python_type=Path, django_field=models.FilePathField),
+        TypeMappingDefinition.char_field(type),
+        TypeMappingDefinition(python_type=IPvAnyAddress, django_field=models.GenericIPAddressField),
+        TypeMappingDefinition.json_field(Json),
+        TypeMappingDefinition.enum_field(Enum),
+        # Relationship base types - these serve as templates for dynamic relationships
+        TypeMappingDefinition.foreign_key(BaseModel),
+        # List-based many-to-many relationships
+        TypeMappingDefinition.many_to_many(list[BaseModel]),
+        # Dict-based many-to-many relationships (for named relationships)
+        TypeMappingDefinition(
+            python_type=dict[str, BaseModel],
+            django_field=models.ManyToManyField,
+            is_relationship=True,
+        ),
+    ]
 
     class UnsupportedTypeError(Exception):
         """Exception raised when a type cannot be mapped to a Django field."""
@@ -158,26 +373,91 @@ class TypeMapper:
             # Default to JSONField for these special forms
             return TypeMappingDefinition(python_type=dict, django_field=models.JSONField)
 
-        for mapping in TYPE_MAPPINGS:
+        # Check if type is an Enum - handle this case first for more accurate matching
+        if isinstance(python_type, type) and issubclass(python_type, Enum):
+            # Create a specific enum mapping for this enum type
+            return cls.enum_field(python_type)
+
+        # Handle Optional types first
+        origin = get_origin(python_type)
+        args = get_args(python_type)
+
+        if is_pydantic_model_field_optional(python_type):
+            # Get the non-None type
+            inner_type = next(arg for arg in args if arg is not type(None))
+
+            # Check if inner type is an Enum
+            if isinstance(inner_type, type) and issubclass(inner_type, Enum):
+                enum_mapping = cls.enum_field(inner_type)
+                # Make it nullable since it's optional
+                enum_mapping.field_kwargs["null"] = True
+                enum_mapping.field_kwargs["blank"] = True
+                return enum_mapping
+
+            # Check if the inner type is a relationship type
+            inner_origin = get_origin(inner_type)
+            inner_args = get_args(inner_type)
+
+            # Handle Optional[list[Model]] for many-to-many relationships
+            if inner_origin is list and inner_args:
+                model_type = inner_args[0]
+                if isinstance(model_type, type) and issubclass(model_type, BaseModel):
+                    return TypeMappingDefinition(
+                        python_type=inner_type,
+                        django_field=models.ManyToManyField,
+                        is_relationship=True,
+                    )
+
+            # Handle Optional[Dict[str, Model]] for many-to-many relationships
+            elif inner_origin is dict and len(inner_args) == 2:
+                model_type = inner_args[1]  # Second arg is the value type
+                if isinstance(model_type, type) and issubclass(model_type, BaseModel):
+                    return TypeMappingDefinition(
+                        python_type=inner_type,
+                        django_field=models.ManyToManyField,
+                        is_relationship=True,
+                    )
+
+            # Handle Optional[Model] for foreign key relationships
+            elif isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
+                return TypeMappingDefinition(
+                    python_type=inner_type,
+                    django_field=models.ForeignKey,
+                    is_relationship=True,
+                    on_delete=models.CASCADE,
+                )
+
+            # For other Optional types, continue with the inner type
+            python_type = inner_type
+
+        # Handle list[BaseModel] and dict[str, BaseModel] for many-to-many relationships
+        if origin in (list, dict) and args:
+            inner_type = args[-1]  # Last type argument is the value type
+            if isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
+                # Find the many-to-many mapping
+                for mapping in cls.TYPE_MAPPINGS:
+                    if mapping.django_field == models.ManyToManyField:
+                        our_origin = get_origin(mapping.python_type)
+                        if our_origin == origin:
+                            return TypeMappingDefinition(
+                                python_type=python_type,
+                                django_field=models.ManyToManyField,
+                                is_relationship=True,
+                            )
+
+        # Look for an existing type mapping
+        for mapping in cls.TYPE_MAPPINGS:
             if mapping.matches_type(python_type):
+                # For relationship types, create a new mapping with is_relationship=True
+                if mapping.django_field in (models.ForeignKey, models.ManyToManyField):
+                    return TypeMappingDefinition(
+                        python_type=python_type,
+                        django_field=mapping.django_field,
+                        is_relationship=True,
+                        on_delete=mapping.on_delete,
+                    )
                 return mapping
-        return None
 
-    @classmethod
-    def get_mapping_for_type_str(cls, type_str: str) -> Optional[TypeMappingDefinition]:
-        """
-        Get the mapping definition for a type string.
-
-        Args:
-            type_str: String representation of a type
-
-        Returns:
-            TypeMappingDefinition if found, None otherwise
-        """
-        # Only check regular type mappings
-        for mapping in TYPE_MAPPINGS:
-            if mapping.matches_type_str(type_str):
-                return mapping
         return None
 
     @classmethod
@@ -191,7 +471,7 @@ class TypeMapper:
         Returns:
             List of TypeMappingDefinition instances with the specified Django field
         """
-        return [mapping for mapping in TYPE_MAPPINGS if mapping.django_field == django_field]
+        return [mapping for mapping in cls.TYPE_MAPPINGS if mapping.django_field == django_field]
 
     @classmethod
     def is_type_supported(cls, python_type: Any) -> bool:
@@ -207,79 +487,14 @@ class TypeMapper:
         return cls.get_mapping_for_type(python_type) is not None
 
     @classmethod
-    def is_type_str_supported(cls, type_str: str) -> bool:
-        """
-        Check if a type string is supported by any mapping.
-
-        Args:
-            type_str: String representation of a type
-
-        Returns:
-            True if the type string is supported, False otherwise
-        """
-        return cls.get_mapping_for_type_str(type_str) is not None
-
-    @classmethod
     def get_all_mappings(cls) -> list[TypeMappingDefinition]:
         """
         Get all available type mappings.
 
         Returns:
-            List of TYPE_MAPPINGS
+            List of self.TYPE_MAPPINGS
         """
-        return TYPE_MAPPINGS
-
-    @classmethod
-    def get_django_field_for_type(cls, python_type: Any, strict: bool = True) -> type[models.Field]:
-        """
-        Get the Django field type for a Python type.
-
-        Args:
-            python_type: The Python type to find a Django field for
-            strict: If True, raises UnsupportedTypeError when type is not supported
-
-        Returns:
-            Django field type if found
-
-        Raises:
-            UnsupportedTypeError: If strict=True and the type is not supported
-        """
-        mapping = cls.get_mapping_for_type(python_type)
-        if mapping:
-            return mapping.django_field
-
-        if strict:
-            raise cls.UnsupportedTypeError(f"No Django field mapping found for Python type: {python_type}")
-
-        # Default to JSONField as a fallback if not strict
-        logger.warning(f"No mapping found for {python_type}, defaulting to JSONField")
-        return models.JSONField
-
-    @classmethod
-    def get_django_field_for_type_str(cls, type_str: str, strict: bool = True) -> type[models.Field]:
-        """
-        Get the Django field type for a type string.
-
-        Args:
-            type_str: String representation of a type
-            strict: If True, raises UnsupportedTypeError when type is not supported
-
-        Returns:
-            Django field type if found
-
-        Raises:
-            UnsupportedTypeError: If strict=True and the type is not supported
-        """
-        mapping = cls.get_mapping_for_type_str(type_str)
-        if mapping:
-            return mapping.django_field
-
-        if strict:
-            raise cls.UnsupportedTypeError(f"No Django field mapping found for type string: {type_str}")
-
-        # Default to JSONField as a fallback if not strict
-        logger.warning(f"No mapping found for {type_str}, defaulting to JSONField")
-        return models.JSONField
+        return cls.TYPE_MAPPINGS
 
     @classmethod
     def get_field_attributes(cls, python_type: Any) -> dict[str, Any]:
@@ -292,47 +507,24 @@ class TypeMapper:
         Returns:
             Dictionary of field attributes
         """
+        field_kwargs = {}
+
+        # Handle Optional types first
+        if is_pydantic_model_field_optional(python_type):
+            # Get the non-None type
+            python_type = next(arg for arg in get_args(python_type) if arg is not type(None))
+            field_kwargs["null"] = True
+            field_kwargs["blank"] = True
+
+        # Look for an existing type mapping
         mapping = cls.get_mapping_for_type(python_type)
-        if not mapping:
-            return {}
+        if mapping:
+            if mapping.max_length is not None:
+                field_kwargs["max_length"] = mapping.max_length
+            if mapping.is_relationship and mapping.on_delete is not None:
+                field_kwargs["on_delete"] = mapping.on_delete
 
-        attributes = {}
-        if mapping.max_length is not None:
-            attributes["max_length"] = mapping.max_length
-
-        return attributes
-
-    @classmethod
-    def register_type_mapping(cls, mapping: TypeMappingDefinition) -> None:
-        """
-        Register a new type mapping.
-
-        Args:
-            mapping: The TypeMappingDefinition to register
-        """
-        # Check if mapping already exists
-        for i, existing in enumerate(TYPE_MAPPINGS):
-            if existing.python_type == mapping.python_type:
-                # Replace existing mapping
-                TYPE_MAPPINGS[i] = mapping
-                return
-
-        # Add new mapping
-        TYPE_MAPPINGS.append(mapping)
-
-    @classmethod
-    def python_to_django_field(cls, python_type: Any) -> type[models.Field]:
-        """
-        Get the Django field type for a Python type.
-        Alias for get_django_field_for_type with strict=False.
-
-        Args:
-            python_type: The Python type to find a Django field for
-
-        Returns:
-            Django field type, defaulting to JSONField if not found
-        """
-        return cls.get_django_field_for_type(python_type, strict=False)
+        return field_kwargs
 
     @classmethod
     def get_max_length(cls, field_name: str, field_type: type[models.Field]) -> Optional[int]:
@@ -344,20 +536,20 @@ class TypeMapper:
             field_type: The Django field type
 
         Returns:
-            The max_length value or None if not applicable
+            The default max_length or None if not applicable
         """
-        # Special case for email fields
-        if field_type == models.EmailField or "email" in field_name.lower():
-            return 254
+        # Use the shared utility function
+        return get_default_max_length(field_name, field_type)
 
-        # Get mappings for this field type
-        mappings = cls.filter_by_django_field(field_type)
-        if not mappings:
-            return None
+    @classmethod
+    def enum_field(cls, enum_type: type[Enum]) -> TypeMappingDefinition:
+        """
+        Create a type mapping definition for an enum type.
 
-        # Return the max_length from the first mapping that has one
-        for mapping in mappings:
-            if mapping.max_length is not None:
-                return mapping.max_length
+        Args:
+            enum_type: The enum type to create a mapping for
 
-        return None
+        Returns:
+            A TypeMappingDefinition for the enum type
+        """
+        return TypeMappingDefinition.enum_field(enum_type)

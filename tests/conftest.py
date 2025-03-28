@@ -11,7 +11,7 @@ import pytest
 from django.conf import settings
 
 # Import all fixtures
-from .fixtures import (
+from .fixtures.fixtures import (
     basic_pydantic_model,
     datetime_pydantic_model,
     optional_fields_model,
@@ -21,6 +21,8 @@ from .fixtures import (
     factory_model,
     product_django_model,
     user_django_model,
+    context_pydantic_model,
+    context_with_data,
 )
 
 # Add the project root to the Python path

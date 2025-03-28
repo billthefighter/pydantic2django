@@ -1,0 +1,127 @@
+---
+description: Git Checkin Standards
+globs: .git/hooks/pre-commit
+---
+@mdc.mdc
+
+# Git Checkin Standards
+
+Standards for ensuring proper git commit practices in the LLMaestro project.
+
+<rule>
+name: git_checkin_standards
+description: Guidelines for ensuring proper git commit practices
+
+## Pre-Commit Requirements
+
+Before committing changes to the repository, ensure:
+
+1. **Changenotes are implemented** according to the standards in `changenotes.mdc`
+2. **Pre-commit hooks pass** with all errors fixed
+3. **Code quality standards** are maintained
+
+## Changenotes Implementation
+
+For any significant changes, a changenote must be created in the `docs/changenotes` directory:
+
+1. Verify a changenote file exists for your branch/feature
+2. Ensure it follows the naming convention: `changes_from_<branch_name>_<commit_hash>.md`
+3. Confirm it includes all required sections:
+   - Title with change description and commit reference
+   - Overview of changes
+   - Detailed list of changes made
+   - Benefits of the changes
+   - Test coverage information
+   - Verification details
+
+## Pre-Commit Hook Implementation
+
+The repository should have a pre-commit hook that:
+
+1. Checks for the existence of appropriate changenotes
+2. Runs all configured pre-commit hooks
+3. Blocks commits if any checks fail
+
+### Sample Pre-Commit Hook Script
+
+```bash
+#!/bin/bash
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+echo -e "${YELLOW}Running pre-commit checks...${NC}"
+
+# Get current branch name
+BRANCH_NAME=$(git symbolic-ref --short HEAD)
+
+# Get latest commit hash (short version)
+COMMIT_HASH=$(git rev-parse --short HEAD)
+
+# Check if changenotes exist for the current branch
+CHANGENOTE_PATH="docs/changenotes/changes_from_${BRANCH_NAME}_${COMMIT_HASH}.md"
+CHANGENOTE_EXISTS=false
+
+# Check if we're on a feature branch (not main/master)
+if [[ "$BRANCH_NAME" != "main" && "$BRANCH_NAME" != "master" ]]; then
+    # Look for any changenote file that matches the branch pattern
+    if ls docs/changenotes/changes_from_${BRANCH_NAME}_*.md 1> /dev/null 2>&1; then
+        CHANGENOTE_EXISTS=true
+        echo -e "${GREEN}✓ Changenote found for branch $BRANCH_NAME${NC}"
+    else
+        echo -e "${RED}✗ No changenote found for branch $BRANCH_NAME${NC}"
+        echo -e "${YELLOW}Please create a changenote file at: $CHANGENOTE_PATH${NC}"
+        echo -e "${YELLOW}See .cursor/rules/changenotes.mdc for format requirements${NC}"
+        exit 1
+    fi
+fi
+
+# Run pre-commit hooks
+echo -e "${YELLOW}Running pre-commit hooks...${NC}"
+poetry run pre-commit run --all-files
+
+# Check the exit status of pre-commit
+if [ $? -ne 0 ]; then
+    echo -e "${RED}✗ Pre-commit hooks failed. Please fix the issues and try again.${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ All pre-commit hooks passed!${NC}"
+fi
+
+echo -e "${GREEN}All checks passed. Proceeding with commit.${NC}"
+exit 0
+```
+
+## Integration with Git Workflow
+
+To implement this pre-commit hook:
+
+1. Create the hook file at `.git/hooks/pre-commit`
+2. Make it executable: `chmod +x .git/hooks/pre-commit`
+3. Ensure all developers on the project have the hook installed
+
+Alternatively, use the pre-commit framework to manage hooks:
+
+```yaml
+# In .pre-commit-config.yaml
+- repo: local
+  hooks:
+    - id: check-changenotes
+      name: Check changenotes exist
+      entry: scripts/check_changenotes.py
+      language: python
+      pass_filenames: false
+      always_run: true
+```
+
+## Best Practices
+
+- Always run pre-commit hooks before pushing changes
+- Address all issues raised by pre-commit hooks
+- Keep changenotes up-to-date as you develop
+- Document all significant changes in changenotes
+- Ensure code quality standards are maintained
+</rule>

@@ -1,97 +1,110 @@
-from typing import Any, Generic, TypeVar, Union, cast
+"""
+Type definitions for pydantic2django.
+"""
+import inspect
+from enum import Enum
+from typing import Any, TypeVar, Union, get_args, get_origin
 
 from django.db import models
 from pydantic import BaseModel
 
+# Type variable for BaseModel subclasses
+T = TypeVar("T", bound=BaseModel)
+
 # Type alias for Django model fields
 DjangoField = Union[models.Field, type[models.Field]]
 
-T = TypeVar("T", bound=BaseModel)
 
-
-class DjangoBaseModel(models.Model, Generic[T]):
+def is_serializable_type(field_type: Any) -> bool:
     """
-    Base class for Django models generated from Pydantic models.
-    Provides type-safe conversion methods and proper IDE completion.
+    Check if a type is serializable (can be stored in the database).
+
+    A type is considered serializable if:
+    1. It's a basic Python type (str, int, float, bool, dict, list, set, NoneType)
+    2. It's a collection (list, dict, set) of serializable types
+    3. It's a Pydantic model
+    4. It's an Enum
+    5. It has __get_pydantic_core_schema__ defined
+    6. It has a serialization method (to_json, to_dict, etc.)
+
+    Args:
+        field_type: The type to check
+
+    Returns:
+        True if the type is serializable, False otherwise
     """
+    # Handle typing.Any specially - it's not serializable
+    if field_type is Any:
+        return False
 
-    class Meta:
-        abstract = True
-        managed = False  # Don't create tables for the base class
-        app_label = "pydantic2django"  # Explicitly set the app label
+    # Handle NoneType (type(None)) specially - it is serializable
+    if field_type is type(None):
+        return True
 
-    _pydantic_model: type[T]  # Class variable to store reference to Pydantic model
+    # Handle Optional types
+    origin = get_origin(field_type)
+    args = get_args(field_type)
 
-    def __new__(cls, *args, **kwargs):
-        """
-        Override __new__ to ensure subclasses are not abstract.
-        """
-        if cls is DjangoBaseModel:
-            raise TypeError("DjangoBaseModel cannot be instantiated directly")
+    if origin is Union and type(None) in args:
+        # For Optional types, check the inner type
+        inner_type = next(arg for arg in args if arg is not type(None))
+        return is_serializable_type(inner_type)
 
-        # Ensure subclasses are not abstract
-        if hasattr(cls, "Meta"):
-            cls.Meta.abstract = False
-            cls.Meta.managed = True
+    # Basic Python types that are always serializable
+    basic_types = (str, int, float, bool, dict, list, set)
+    if field_type in basic_types:
+        return True
 
-        return super().__new__(cls)
+    # Handle collection types
+    if origin in (list, dict, set):
+        # For collections, check if all type arguments are serializable
+        return all(is_serializable_type(arg) for arg in args)
 
-    def __getattr__(self, name: str) -> Any:
-        """
-        Forward method calls to the Pydantic model implementation.
-        This enables proper type checking for methods defined in the Pydantic model.
-        """
-        # Get the Pydantic model class
-        pydantic_cls = self._pydantic_model
+    # Check if the type has __get_pydantic_core_schema__ (can be serialized)
+    if hasattr(field_type, "__get_pydantic_core_schema__"):
+        return True
 
-        # Check if the attribute exists in the Pydantic model
-        if hasattr(pydantic_cls, name):
-            # Get the attribute from the Pydantic model
-            attr = getattr(pydantic_cls, name)
+    # Handle Pydantic models (they can be serialized to JSON)
+    try:
+        if inspect.isclass(field_type) and issubclass(field_type, BaseModel):
+            return True
+    except TypeError:
+        # field_type might not be a class, which is fine
+        pass
 
-            # If it's a property, we need to create an instance to access it
-            if isinstance(attr, property):
-                # Convert to Pydantic instance to access property
-                pydantic_instance = self.to_pydantic()
-                return getattr(pydantic_instance, name)
+    # Handle Enums (they can be serialized)
+    try:
+        if inspect.isclass(field_type) and issubclass(field_type, Enum):
+            return True
+    except TypeError:
+        # field_type might not be a class, which is fine
+        pass
 
-            # If it's a method, bind it to a Pydantic instance
-            elif callable(attr):
+    # For class types, check if they have a serialization method
+    if inspect.isclass(field_type):
+        # Create a dummy instance to test serialization
+        try:
+            instance = object.__new__(field_type)
+            return hasattr(instance, "to_json") or hasattr(instance, "to_dict") or hasattr(instance, "__json__")
+        except Exception:
+            # If we can't create an instance, assume it's not serializable
+            return False
 
-                def wrapped_method(*args, **kwargs):
-                    pydantic_instance = self.to_pydantic()
-                    return getattr(pydantic_instance, name)(*args, **kwargs)
+    # If none of the above conditions are met, it's not serializable
+    return False
 
-                return wrapped_method
 
-            return attr
+def is_pydantic_model(obj: Any) -> bool:
+    """
+    Check if an object is a Pydantic model class.
 
-        # If attribute not found, raise AttributeError
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+    Args:
+        obj: The object to check
 
-    @classmethod
-    def from_pydantic(cls, pydantic_instance: T) -> "DjangoBaseModel[T]":
-        """Convert a Pydantic instance to Django model instance."""
-        from .methods import convert_pydantic_to_django
-
-        # Get the app_label, defaulting to 'tests' for concrete models
-        app_label = "tests" if cls is not DjangoBaseModel else cls._meta.app_label
-
-        return cast(
-            DjangoBaseModel[T],
-            convert_pydantic_to_django(pydantic_instance, app_label=app_label),
-        )
-
-    def to_pydantic(self) -> T:
-        """Convert Django model instance to Pydantic model instance."""
-        data = {
-            field.name: getattr(self, field.name)
-            for field in self._meta.fields
-            if not field.primary_key  # Exclude primary key by default
-        }
-        return self._pydantic_model(**data)
-
-    class Config:
-        """Configuration for the base model."""
-
-        arbitrary_types_allowed = True
+    Returns:
+        True if the object is a Pydantic model class, False otherwise
+    """
+    try:
+        return issubclass(obj, BaseModel)
+    except TypeError:
+        return False

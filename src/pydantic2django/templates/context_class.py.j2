@@ -1,0 +1,55 @@
+@dataclass
+class {{ model_name }}Context(ModelContext):
+    """
+    Context class for {{ model_name }}.
+    Contains non-serializable fields that need to be provided when converting from Django to Pydantic.
+    """
+    model_name: str = "{{ model_name }}"
+    pydantic_class: type = {{ pydantic_class }}
+    django_model: type[models.Model]
+    context_fields: dict[str, FieldContext] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Initialize context fields after instance creation."""
+        {% for field in field_definitions %}
+        self.add_field(
+            field_name="{{ field.name }}",
+            field_type={{ field.type }},
+            is_optional={{ field.is_optional }},
+            is_list={{ field.is_list }},
+            additional_metadata={{ field.metadata }}
+        )
+        {% endfor %}
+{% if field_definitions %}
+    @classmethod
+    def create(cls, django_model: Type[models.Model]{% if field_definitions %},{% endif %}
+{% for field in field_definitions %}        {{ field.name }}: {{ field.type }}{% if not loop.last %},{% endif %}
+{% endfor %}):
+        """
+        Create a context instance with the required field values.
+
+        Args:
+            django_model: The Django model class
+{% for field in field_definitions %}            {{ field.name }}: Value for {{ field.name }} field
+{% endfor %}        Returns:
+            A context instance with all required field values set
+        """
+        context = cls(django_model=django_model)
+        {% for field in field_definitions %}
+        context.set_value("{{ field.name }}", {{ field.name }})
+        {% endfor %}
+        return context
+
+    def to_dict(self) -> dict:
+        """
+        Convert this context to a dictionary.
+
+        Returns:
+            Dictionary representation of the context values
+        """
+        result = {}
+        for field_name, field_context in self.context_fields.items():
+            if field_context.value is not None:
+                result[field_name] = field_context.value
+        return result
+{% endif %}
