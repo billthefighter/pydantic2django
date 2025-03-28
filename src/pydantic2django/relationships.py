@@ -57,7 +57,7 @@ class RelationshipConversionAccessor:
                 pydantic_model = getattr(pydantic_module, pydantic_class_name)
                 django_model = getattr(django_module, django_class_name)
 
-                available_relationships.append(RelationshipMapper(pydantic_model, django_model))
+                available_relationships.append(RelationshipMapper(pydantic_model, django_model, context=None))
             except Exception as e:
                 logger.warning(f"Error importing model {pydantic_mqn} or {django_mqn}: {e}")
                 continue
@@ -111,7 +111,7 @@ class RelationshipConversionAccessor:
         existing_models = [m.__name__ for m in self.available_pydantic_models]
 
         if model_name not in existing_models:
-            self.available_relationships.append(RelationshipMapper(model, None))
+            self.available_relationships.append(RelationshipMapper(model, None, context=None))
 
     def add_django_model(self, model: type[models.Model]) -> None:
         """Add a Django model to the relationship accessor"""
@@ -120,7 +120,7 @@ class RelationshipConversionAccessor:
         existing_models = [m.__name__ for m in self.available_django_models]
 
         if model_name not in existing_models:
-            self.available_relationships.append(RelationshipMapper(None, model))
+            self.available_relationships.append(RelationshipMapper(None, model, context=None))
 
     def get_django_model_for_pydantic(self, pydantic_model: type[BaseModel]) -> Optional[type[models.Model]]:
         """

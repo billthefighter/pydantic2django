@@ -88,10 +88,10 @@ class FieldSerializer:
 
         # Common field parameters
         if hasattr(field, "verbose_name") and field.verbose_name:
-            params.append(f"verbose_name='{sanitize_string(field.verbose_name)}'")
+            params.append(f"verbose_name='{sanitize_string(str(field.verbose_name))}'")
 
         if hasattr(field, "help_text") and field.help_text:
-            params.append(f"help_text='{sanitize_string(field.help_text)}'")
+            params.append(f"help_text='{sanitize_string(str(field.help_text))}'")
 
         if hasattr(field, "null") and field.null:
             params.append(f"null={field.null}")
@@ -125,8 +125,6 @@ class FieldSerializer:
             if hasattr(field, "decimal_places"):
                 params.append(f"decimal_places={field.decimal_places}")
 
-        # TODO: Add support for relationship fields
-
         return params
 
     @staticmethod
@@ -144,86 +142,108 @@ class FieldSerializer:
         params = FieldSerializer.serialize_field_attributes(field)
 
         # Handle relationship fields
-        if isinstance(field, models.ForeignKey):
+        if isinstance(field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)):
             # Get the related model name safely
             related_model_name = get_related_model_name(field)
+            related_model_name_str = None
+
             if related_model_name:
-                # Ensure the model name has the app label if needed
-                if "." not in related_model_name:
-                    # Get app label from the field's model if available
+                # Check if it's a string or a model class
+                if isinstance(related_model_name, str):
+                    related_model_name_str = related_model_name
+                elif (
+                    hasattr(related_model_name, "_meta")
+                    and hasattr(related_model_name._meta, "app_label")
+                    and hasattr(related_model_name, "__name__")
+                ):
+                    # Construct 'app_label.ModelName' format
+                    related_model_name_str = f"{related_model_name._meta.app_label}.{related_model_name.__name__}"
+                else:
+                    logger.warning(
+                        f"Could not determine qualified name for related model {related_model_name} on field {field.name}"  # noqa: E501
+                    )
+                    related_model_name_str = "self"  # Fallback
+
+                # Ensure correct 'app_label.ModelName' format for strings
+                if "." in related_model_name_str:
+                    app_label, model_name_part = related_model_name_str.split(".", 1)
+                    # Ensure model name part starts with uppercase
+                    if model_name_part and not model_name_part[0].isupper():
+                        model_name_part = model_name_part[0].upper() + model_name_part[1:]
+                    related_model_name_str = f"{app_label}.{model_name_part}"
+                # Add app_label if missing
+                elif related_model_name_str != "self":
                     app_label = None
                     if hasattr(field, "model") and hasattr(field.model, "_meta"):
                         app_label = field.model._meta.app_label
-                    # Use the related field's app label as a fallback
                     elif hasattr(field.remote_field, "model") and hasattr(field.remote_field.model, "_meta"):
                         app_label = field.remote_field.model._meta.app_label
 
                     if app_label:
-                        related_model_name = f"{app_label}.{related_model_name}"
+                        # Ensure model name part starts with uppercase
+                        model_name_part = related_model_name_str  # Use the existing string
+                        if model_name_part and not model_name_part[0].isupper():
+                            model_name_part = model_name_part[0].upper() + model_name_part[1:]
+                        related_model_name_str = f"{app_label}.{model_name_part}"
 
-                params.append(f"to='{related_model_name}'")
+                params.append(f"to='{related_model_name_str}'")
             else:
                 params.append("to='self'")  # Default to self-reference if we can't determine
 
+            # Add a unique related_name unless one is explicitly provided
+            if not any(p.startswith("related_name=") for p in params):
+                # Check if related_name is set on the field object itself
+                explicit_related_name = getattr(field, "related_name", None)
+                if explicit_related_name is None:
+                    model_name = (
+                        field.model._meta.model_name
+                        if hasattr(field, "model") and hasattr(field.model, "_meta")
+                        else "unknown_model"
+                    )
+                    unique_related_name = f"{model_name}_{field.name}_rel"
+                    params.append(f"related_name='{unique_related_name}'")
+                elif explicit_related_name != "+":  # Don't add if it's explicitly suppressed
+                    params.append(f"related_name='{explicit_related_name}'")
+
+        # Handle ForeignKey specific parameters
+        if isinstance(field, models.ForeignKey):
             # Get the on_delete behavior safely
             try:
                 on_delete = getattr(field, "on_delete", None)
                 if on_delete and hasattr(on_delete, "__name__"):
-                    params.append(f"on_delete=models.{on_delete.__name__}")
-                else:
+                    # Ensure on_delete is not already added
+                    if not any(p.startswith("on_delete=") for p in params):
+                        params.append(f"on_delete=models.{on_delete.__name__}")
+                elif not any(p.startswith("on_delete=") for p in params):
                     params.append("on_delete=models.CASCADE")  # Default to CASCADE
             except Exception:
-                params.append("on_delete=models.CASCADE")  # Default to CASCADE
+                if not any(p.startswith("on_delete=") for p in params):
+                    params.append("on_delete=models.CASCADE")  # Default to CASCADE
 
+        # Handle ManyToManyField specific parameters
         if isinstance(field, models.ManyToManyField):
-            # Get the related model name safely
-            related_model_name = get_related_model_name(field)
-            if related_model_name:
-                # Ensure the model name has the app label if needed
-                if "." not in related_model_name:
-                    # Get app label from the field's model if available
-                    app_label = None
-                    if hasattr(field, "model") and hasattr(field.model, "_meta"):
-                        app_label = field.model._meta.app_label
-                    # Use the related field's app label as a fallback
-                    elif hasattr(field.remote_field, "model") and hasattr(field.remote_field.model, "_meta"):
-                        app_label = field.remote_field.model._meta.app_label
-
-                    if app_label:
-                        related_model_name = f"{app_label}.{related_model_name}"
-
-                params.append(f"to='{related_model_name}'")
-            else:
-                raise ValueError(f"Related model not found for {field}")
-
-            # Add related_name if present - this should be sanitized since it's a Python identifier
-            related_name = getattr(field, "related_name", None)
-            if related_name:
-                params.append(f"related_name='{sanitize_related_name(related_name)}'")
-
-            # Add through model if present - use direct class reference
+            # Add through model if present
             through = getattr(field, "through", None)
-            if through:
+            if through and not any(p.startswith("through=") for p in params):
                 # Skip auto-generated through models
-                # Django's auto-created through models are instances of ManyToManyRel
-                # or have the auto_created flag set to True
                 if not (isinstance(through, models.ManyToManyRel) or getattr(through, "auto_created", False)):
-                    # If through is a string, use it directly
-                    # Otherwise, try to get the class name or fall back to string representation
                     through_name = (
                         through
                         if isinstance(through, str)
                         else (through.__name__ if hasattr(through, "__name__") else str(through))
                     )
                     if "." in through_name:
-                        # Check for and fix duplicate app labels
                         parts = through_name.split(".")
-                        if len(parts) >= 2 and parts[0] == parts[1]:
-                            # Remove duplicate app label
-                            through_name = f"{parts[0]}.{'.'.join(parts[2:])}"
+                        # Ensure ModelName is capitalized
+                        model_part = parts[-1]
+                        if model_part and not model_part[0].isupper():
+                            parts[-1] = model_part[0].upper() + model_part[1:]
+                        through_name = ".".join(parts)
                         params.append(f"through='{through_name}'")
                     else:
-                        # Direct class reference for same-app models
+                        # Ensure ModelName is capitalized for direct reference too
+                        if through_name and not through_name[0].isupper():
+                            through_name = through_name[0].upper() + through_name[1:]
                         params.append(f"through={through_name}")
 
         # Handle context fields (non-serializable fields)
