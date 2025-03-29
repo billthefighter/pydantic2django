@@ -163,6 +163,17 @@ class DoubleRelationModel(BaseModel):
     description: str
 
 
+class OptionalRelationExample(BaseModel):
+    """Model with an optional relation field that requires context."""
+
+    example_name: str
+    # Replace optional_prompt with an optional context field
+    optional_capability: Optional[ProviderCapabilities] = Field(default=None, exclude=True)
+    # Add a context field to test context generation
+    context_data: Callable[[int], int] = Field(exclude=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
 # +++ End Generic Example Models +++
 
 
@@ -240,6 +251,7 @@ def generate_models():
     register_model("ConcreteEdge", ConcreteEdge, has_context=False)
     register_model("SpecificGraph", SpecificGraph, has_context=True)  # Register the specific implementation
     register_model("DoubleRelationModel", DoubleRelationModel, has_context=False)  # Register the new model
+    register_model("OptionalRelationExample", OptionalRelationExample, has_context=True)
 
     from tests.mock_discovery import set_field_override
 
@@ -263,6 +275,7 @@ def generate_models():
     relationship_accessor.available_relationships.append(
         RelationshipMapper(DoubleRelationModel, None, None)
     )  # Add new model here
+    relationship_accessor.available_relationships.append(RelationshipMapper(OptionalRelationExample, None, None))
 
     # Set up Django models as well to establish the relationships
 

@@ -6,9 +6,8 @@ mapping back to Pydantic objects. It handles the storage and retrieval of contex
 information needed for field reconstruction.
 """
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, Optional, TypeVar
 
 from django.db import models
 from pydantic import BaseModel
@@ -287,109 +286,79 @@ class ContextClassGenerator:
         self.extra_type_imports: set[str] = set()
         self.context_class_imports: set[str] = set()
 
-    def generate_context_class(self, model_context: ModelContext) -> str:
+    def _simplify_type_string(self, type_str: str) -> str:
         """
-        Generate a context class for a Django model.
+        Simplifies a type string by removing module paths.
+        Handles standard type strings and those wrapped in <class \'...\'> recursively.
 
         Args:
-            model_context: The ModelContext instance for the model
+            type_str: The full type string (e.g., "typing.Optional[myapp.models.MyModel]",
+            "<class \'myapp.models.MyModel\'>")
 
         Returns:
-            String representation of the context class
+            The simplified type string (e.g., "Optional[MyModel]", "MyModel")
         """
-        if model_context is None or not hasattr(model_context, "django_model") or model_context.django_model is None:
-            self.logger.warning("Cannot generate context class for None model_context or missing django_model")
-            return ""
+        import re
 
-        # Skip generating context class if there are no context fields
-        if not model_context.context_fields:
-            self.logger.info(f"Skipping context class for {model_context.django_model.__name__} - no context fields")
-            return ""
+        # 1. Simplify <class 'module.path.ClassName'> occurrences to ClassName
+        def replacer_class(match):
+            full_path = match.group(1)
+            return full_path.split(".")[-1]  # Get only the ClassName
 
+        simplified = re.sub(r"<class \'([\w\.]+)\'>", replacer_class, type_str)
+
+        # 2. Simplify remaining module.path.ClassName occurrences to ClassName
+        simplified = re.sub(r"\b[\w\.]+\.(\w+)", r"\1", simplified)
+
+        # 3. Explicitly remove __main__ prefix if it remains (common in local execution)
+        simplified = simplified.replace("__main__.", "")
+
+        return simplified
+
+    def generate_context_class(self, model_context: ModelContext) -> str:
+        """
+        Generate the Python code for a context class using a Jinja template.
+
+        Args:
+            model_context: The context information for the model.
+
+        Returns:
+            The generated Python code as a string.
+        """
         template = self.jinja_env.get_template("context_class.py.j2")
-
-        # Prepare field definitions and collect required imports
         field_definitions = []
 
-        # Get required imports and add them to our import sets
-        required_imports = model_context.get_required_imports()
-        self.extra_type_imports.update(required_imports["typing"])
-
-        # Add explicit typing import if we use typing-specific constructs
-        if any(imp in required_imports["typing"] for imp in ["Dict", "List", "Optional", "Union"]):
-            self.context_class_imports.add("import typing")
-
-        # Add custom types to imports if they're not already imported
-        for custom_type in required_imports["custom"]:
-            self._maybe_add_type_to_imports(custom_type)
-
-        # Add explicit imports to the imports
-        for import_stmt in required_imports.get("explicit", []):
-            if import_stmt.startswith("from ") and " import " in import_stmt:
-                self.context_class_imports.add(import_stmt)
-
-        # Handle is_optional and is_list flags
-        for field_name, field_context in model_context.context_fields.items():  # noqa: B007
-            if field_context.is_optional:
-                self.context_class_imports.add("Optional")
-            if field_context.is_list:
-                self.context_class_imports.add("List")
-
-        # Generate field definitions for the template
         for field_name, field_context in model_context.context_fields.items():
-            # Extract the field type information
             field_type = field_context.field_type
 
-            # Initialize type_str to a default value
-            type_str = "Any"
-            self.context_class_imports.add("from typing import Any")
+            # Use TypeHandler via Jinja filter to get the full, cleaned type string
+            try:
+                full_type_str = self.jinja_env.filters["clean_field_type_for_template"](field_type)
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to get clean type string for {field_name} ({field_type}) using filter: {e}. Default 2 Any."
+                )
+                full_type_str = "Any"
+                self.extra_type_imports.add("Any")  # Ensure Any import on failure
 
-            # Use a safer approach to handle type annotations
-            if isinstance(field_type, type) and not isinstance(field_type, str):
-                # For simple type objects like RetryStrategy, use the type directly
-                if hasattr(field_type, "__name__"):
-                    type_str = field_type.__name__
+            # Simplify the string for the template context
+            simplified_type_str = self._simplify_type_string(full_type_str)
 
-                    # Add import for the class if needed
-                    if hasattr(field_type, "__module__") and field_type.__module__ not in ["builtins", "typing"]:
-                        self.context_class_imports.add(f"from {field_type.__module__} import {type_str}")
-            elif field_type in [Any, Optional, Callable, list, dict, Union]:
-                # For basic typing constructs, use their names
-                type_str = field_type.__name__
-                self.context_class_imports.add(f"from typing import {type_str}")
-            else:
-                # For complex types or string representations, use a simplified representation
-                # that works in Python code but doesn't try to preserve the full type structure
-                if field_context.is_optional:
-                    type_str = "Optional[Callable]"
-                    self.context_class_imports.add("from typing import Optional, Callable")
-                elif "Callable" in str(field_type):
-                    type_str = "Callable"
-                    self.context_class_imports.add("from typing import Callable")
-                elif "type" in str(field_type).lower():
-                    type_str = "type"
-                else:
-                    # Use a simple string for other complex types
-                    type_str = "Any"
-                    self.context_class_imports.add("from typing import Any")
-
-            # Ensure metadata is a dict and doesn't contain problematic characters
-            metadata = {}
-            if field_context.additional_metadata:
-                for k, v in field_context.additional_metadata.items():
-                    if isinstance(v, str):
-                        metadata[k] = v.replace("\n", " ").replace("\r", "")
-                    else:
-                        metadata[k] = v
+            # Ensure metadata is a dict
+            metadata = field_context.additional_metadata or {}
 
             field_def = {
                 "name": field_name,
-                "type": type_str,
+                "type": simplified_type_str,  # Use the simplified string
                 "is_optional": field_context.is_optional,
                 "is_list": field_context.is_list,
                 "metadata": metadata,
             }
             field_definitions.append(field_def)
+
+        # Add 'Callable' to typing imports if it was used in any simplified types
+        if any("Callable" in fd["type"] for fd in field_definitions):
+            self.extra_type_imports.add("Callable")
 
         model_name = self._clean_generic_type(model_context.django_model.__name__)
         pydantic_class = self._clean_generic_type(model_context.pydantic_class.__name__)
@@ -430,8 +399,11 @@ class ContextClassGenerator:
     def get_imports(self) -> dict[str, set[str]]:
         """
         Get the imports collected during context class generation.
-
-        Returns:
-            Dictionary containing typing and context-specific imports
+        Returns sets of imports.
         """
-        return {"typing": self.extra_type_imports, "context": self.context_class_imports}
+        # Imports are already collected in self.extra_type_imports and self.context_class_imports
+        # Return them directly as sets
+        return {
+            "typing": self.extra_type_imports,
+            "context": self.context_class_imports,
+        }

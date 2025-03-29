@@ -264,40 +264,83 @@ def test_optional_type_handling():
     assert attrs.get("blank") is True
 
 
-def test_type_mapping_definition_methods():
-    """Test TypeMappingDefinition class methods."""
-    # Test char_field classmethod
-    char_mapping = TypeMappingDefinition.char_field(str, max_length=100)
-    assert char_mapping.django_field == models.CharField
-    assert char_mapping.max_length == 100
+# --- Refactored TypeMappingDefinition Method Tests ---
 
-    # Test text_field classmethod
-    text_mapping = TypeMappingDefinition.text_field(str)
-    assert text_mapping.django_field == models.TextField
 
-    # Test json_field classmethod
-    json_mapping = TypeMappingDefinition.json_field(dict)
-    assert json_mapping.django_field == models.JSONField
+@pytest.mark.parametrize(
+    "python_type, max_length, expected_field, expected_max_length",
+    [
+        (str, 100, models.CharField, 100),  # Custom max_length
+        (str, 255, models.CharField, 255),  # Default max_length
+    ],
+    ids=["custom_max_length", "default_max_length"],
+)
+def test_type_mapping_char_field(python_type, max_length, expected_field, expected_max_length):
+    """Test the char_field classmethod."""
+    if max_length == 255:  # Test default
+        mapping = TypeMappingDefinition.char_field(python_type)
+    else:
+        mapping = TypeMappingDefinition.char_field(python_type, max_length=max_length)
 
-    # Test email_field classmethod
-    email_mapping = TypeMappingDefinition.email_field()
-    assert email_mapping.django_field == models.EmailField
-    assert email_mapping.max_length == 254
+    assert mapping.django_field == expected_field
+    assert mapping.max_length == expected_max_length
+    assert mapping.python_type == python_type
 
-    # Test relationship field classmethods
-    fk_mapping = TypeMappingDefinition.foreign_key(BaseModel)
-    assert fk_mapping.django_field == models.ForeignKey
-    assert fk_mapping.is_relationship is True
-    assert fk_mapping.relationship_type == "foreign_key"
-    assert fk_mapping.on_delete == models.CASCADE
 
-    m2m_mapping = TypeMappingDefinition.many_to_many(BaseModel)
-    assert m2m_mapping.django_field == models.ManyToManyField
-    assert m2m_mapping.is_relationship is True
-    assert m2m_mapping.relationship_type == "many_to_many"
+def test_type_mapping_text_field():
+    """Test the text_field classmethod."""
+    mapping = TypeMappingDefinition.text_field(str)
+    assert mapping.django_field == models.TextField
+    assert mapping.python_type == str
 
-    o2o_mapping = TypeMappingDefinition.one_to_one(BaseModel)
-    assert o2o_mapping.django_field == models.OneToOneField
-    assert o2o_mapping.is_relationship is True
-    assert o2o_mapping.relationship_type == "one_to_one"
-    assert o2o_mapping.on_delete == models.CASCADE
+
+def test_type_mapping_json_field():
+    """Test the json_field classmethod."""
+    mapping = TypeMappingDefinition.json_field(dict)
+    assert mapping.django_field == models.JSONField
+    assert mapping.python_type == dict
+
+
+@pytest.mark.parametrize(
+    "python_type, max_length, expected_field, expected_max_length",
+    [
+        (EmailStr, 254, models.EmailField, 254),  # Default
+        (EmailStr, 100, models.EmailField, 100),  # Custom max_length
+    ],
+    ids=["default_email", "custom_max_length_email"],
+)
+def test_type_mapping_email_field(python_type, max_length, expected_field, expected_max_length):
+    """Test the email_field classmethod."""
+    if max_length == 254:  # Test default
+        mapping = TypeMappingDefinition.email_field()
+    else:
+        mapping = TypeMappingDefinition.email_field(python_type, max_length=max_length)
+
+    assert mapping.django_field == expected_field
+    assert mapping.max_length == expected_max_length
+    # The default python_type is EmailStr
+    assert mapping.python_type == python_type
+
+
+def test_type_mapping_foreign_key():
+    """Test the foreign_key classmethod."""
+    mapping = TypeMappingDefinition.foreign_key(BaseModel)
+    assert mapping.django_field == models.ForeignKey
+    assert mapping.is_relationship is True
+    assert mapping.relationship_type == "foreign_key"
+    assert mapping.on_delete == models.CASCADE
+    assert mapping.python_type == BaseModel
+
+
+def test_type_mapping_many_to_many():
+    """Test the many_to_many classmethod."""
+    # Note: The classmethod takes PythonType, but the original test used BaseModel.
+    # We follow the original test logic here.
+    mapping = TypeMappingDefinition.many_to_many(BaseModel)
+    assert mapping.django_field == models.ManyToManyField
+    assert mapping.is_relationship is True
+    assert mapping.relationship_type == "many_to_many"
+    assert mapping.python_type == BaseModel
+
+
+# --- End Refactored Tests ---

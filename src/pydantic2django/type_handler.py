@@ -1,7 +1,6 @@
 import logging
 import re
-from collections.abc import Callable
-from typing import Any, Union
+from typing import Any
 
 # Configure logger
 logger = logging.getLogger("pydantic2django.type_handler")
@@ -448,45 +447,113 @@ class TypeHandler:
         type_str = TypeHandler.get_class_name(field_type)
 
         # Check if the type has problematic characters that would break Python syntax
-        if "," in type_str or " " in type_str or "[" in type_str:
-            # Ensure proper quoting for template use
-            return f'"{type_str}"'
+        if "," in type_str or " " in type_str or "[" in type_str or "<" in type_str or "{" in type_str:
+            # Ensure proper quoting for template use using repr()
+            return repr(type_str)
 
-        return type_str
+        # If no problematic characters, return the name directly (might be a variable name)
+        # However, consistently using repr() is safer. Let's switch to always using repr().
+        return repr(type_str)
+
+    @staticmethod
+    def _get_raw_type_string(type_obj: Any) -> str:
+        """Helper to get the raw string representation without final quoting."""
+        # Use builtins Ellipsis for comparison if available
+        try:
+            from builtins import Ellipsis
+        except ImportError:
+            Ellipsis = type(...)  # Python < 3.10 fallback? Check compatibility if needed.
+
+        if hasattr(type_obj, "__origin__") and hasattr(type_obj, "__args__"):
+            origin = type_obj.__origin__
+            args = type_obj.__args__
+            # Use getattr for safety, fallback to str()
+            origin_name = getattr(origin, "__name__", str(origin)).replace("typing.", "")  # Clean typing prefix
+
+            # Handle common generic types
+            if origin_name in ("Optional", "Union", "List", "Dict", "Tuple", "Type"):
+                # Recursively process arguments
+                processed_args = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args)
+                # Special case for Optional[Union[X, None]] -> Optional[X]
+                # Also handles Union[X, None] -> Optional[X]
+                if origin_name == "Union":
+                    non_none_args = [arg for arg in args if arg is not type(None)]
+                    if len(non_none_args) == 1 and len(args) >= 2 and type(None) in args:
+                        # This is effectively Optional
+                        return f"Optional[{TypeHandler._get_raw_type_string(non_none_args[0])}]"
+                    # Otherwise, render as Union
+                    return f"Union[{processed_args}]"
+                elif origin_name == "Optional":
+                    # Optional is Union[T, NoneType], args usually has one item T
+                    if len(args) == 1:
+                        return f"Optional[{TypeHandler._get_raw_type_string(args[0])}]"
+                    else:  # Should not happen for valid Optional, but fallback
+                        return f"Optional[{processed_args}]"  # Might be Optional[()] for Optional with no args
+
+                return f"{origin_name}[{processed_args}]"
+
+            elif origin_name == "Callable":
+                # Callable format: Callable[[arg1, arg2], return_type]
+                # args structure can vary by Python version
+                if len(args) == 2 and isinstance(args[0], list):  # Py 3.9+ format for specific args
+                    param_types = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args[0])
+                    return_type = TypeHandler._get_raw_type_string(args[1])
+                    return f"Callable[[{param_types}], {return_type}]"
+                elif len(args) == 2 and args[0] is Ellipsis:  # Callable[..., ReturnType]
+                    return_type = TypeHandler._get_raw_type_string(args[1])
+                    return f"Callable[..., {return_type}]"
+                elif len(args) > 0:  # Other cases or older Python versions might just list types
+                    processed_args = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args)
+                    # This might not be the full Callable[[...], ...] syntax but represents the types involved
+                    return f"Callable[{processed_args}]"
+                else:  # No args? Fallback (e.g. typing.Callable)
+                    return "Callable"
+            else:  # Fallback for other generics (e.g., custom generics)
+                processed_args = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args)
+                return f"{origin_name}[{processed_args}]"
+
+        elif type_obj is type(None):
+            return "None"
+        elif type_obj is Any:
+            return "Any"
+        elif isinstance(type_obj, str):
+            # Handle string representations like "<class 'module.Name'>"
+            match = TypeHandler.PATTERNS["angle_bracket_class"].match(type_obj)
+            if match:
+                # Extract the fully qualified name for clarity
+                return match.group(1)  # e.g., "module.ClassName"
+            else:
+                # Assume it's a type name already, clean typing prefix
+                return type_obj.replace("typing.", "")
+        elif hasattr(type_obj, "__module__") and hasattr(type_obj, "__qualname__"):
+            # Get potentially fully qualified name for classes/types defined elsewhere
+            module = type_obj.__module__
+            qualname = type_obj.__qualname__
+            # Avoid qualifying builtins, typing, or types defined in the current execution context (__main__)
+            if module not in ("builtins", "__main__", "typing"):
+                return f"{module}.{qualname}"
+            else:
+                return qualname  # Use simple name
+        elif hasattr(type_obj, "__name__"):
+            # Fallback for things with __name__ but maybe not __module__/__qualname__ (e.g., some builtins)
+            return type_obj.__name__.replace("typing.", "")
+        else:
+            # Final fallback, clean typing prefix just in case
+            return str(type_obj).replace("typing.", "")
 
     @staticmethod
     def clean_field_type_for_template(type_obj: Any) -> str:
         """
-        Process a field type for use in a template, preserving complex type information.
-
-        This method ensures that complex types like Optional[Callable[[ChainContext, Any], Dict[str, Any]]]
-        have their full structure preserved for use in templates. This is critical for correctly generating
-        context classes that maintain type information.
+        Process a field type for use in a template, returning a valid Python string literal.
 
         Args:
             type_obj: The type object to process
 
         Returns:
-            A clean type string for template use that preserves complex type information
+            A string literal representation of the type for template use (e.g., '"Optional[str]"').
         """
-        # For complex typing objects like Optional, Callable, etc.
-        if hasattr(type_obj, "__origin__") and hasattr(type_obj, "__args__"):
-            origin = type_obj.__origin__
-            args = type_obj.__args__
+        # Get the best possible raw string representation of the type
+        raw_type_str = TypeHandler._get_raw_type_string(type_obj)
 
-            # Handle common typing patterns
-            if origin == Union:
-                # Check if this is an Optional (Union with None)
-                has_none = type(None) in args
-                if len(args) == 2 and has_none:
-                    non_none_type = args[0] if args[1] is type(None) else args[1]
-                    return f"Optional[{TypeHandler.clean_field_type_for_template(non_none_type)}]"
-
-            # Handle Callable types specially
-            if origin == Callable:
-                if len(args) == 2:  # Standard callable with args and return type
-                    return f"Callable[{args}]"
-
-        # For other types, use the standard process_field_type
-        type_str, _ = TypeHandler.process_field_type(type_obj)
-        return type_str
+        # Use repr() to ensure it's a valid Python string literal, correctly quoted and escaped.
+        return repr(raw_type_str)

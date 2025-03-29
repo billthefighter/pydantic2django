@@ -21,12 +21,12 @@ if not settings.configured:
 
 import pytest
 from django.db import models
-from pydantic import BaseModel
-
+from pydantic import BaseModel, Field
 from pydantic2django.field_utils import FieldSerializer
 from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
-from pydantic2django.factory import DjangoFieldFactory, DjangoModelFactory
-from pydantic2django.relationships import RelationshipConversionAccessor
+from pydantic2django.factory import DjangoFieldFactory, DjangoModelFactory, DjangoModelFactoryCarrier
+from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
+from pydantic2django.context_storage import ModelContext
 
 
 class TestModel(BaseModel):
@@ -91,7 +91,13 @@ def test_factory_relationship_field_no_duplicate_app_label():
 
     # Create a model that uses a related field that already has an app label
     field_info = RelatedModel.model_fields["test_model"]
-    result = field_factory.convert_field(field_name="test_model", field_info=field_info, app_label="test_app")
+    result = field_factory.convert_field(
+        field_name="test_model",
+        field_info=field_info,
+        app_label="test_app",
+        source_model_name=RelatedModel.__name__,
+        carrier=DjangoModelFactoryCarrier(pydantic_model=RelatedModel, meta_app_label="test_app"),
+    )
 
     # Check the 'to' field value
     assert result.field_kwargs["to"] == "test_app.TestModel"

@@ -5,28 +5,28 @@ class MockDjangoModelContext(ModelContext):
     Contains non-serializable fields that need to be provided when converting from Django to Pydantic.
     """
     model_name: str = "MockDjangoModel"
-    pydantic_class: Type = TestModel
-    django_model: Type[models.Model]
+    pydantic_class: type = TestModel
+    django_model: type[models.Model]
     context_fields: dict[str, FieldContext] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize context fields after instance creation."""
         self.add_field(
             field_name="input_transform",
-            field_type="Optional",
+            field_type="'Optional[Callable[ChainContext, Any, dict[str, Any]]]'",
             is_optional=True,
             is_list=False,
             additional_metadata={}
         )
         self.add_field(
             field_name="output_transform",
-            field_type="Callable",
+            field_type="'Callable[LLMResponse, Any]'",
             is_optional=False,
             is_list=False,
             additional_metadata={}
         )
     @classmethod
-    def create(cls, django_model: Type[models.Model],        input_transform: "Optional",        output_transform: "Callable"):
+    def create(cls, django_model: Type[models.Model],        input_transform: "'Optional[Callable[ChainContext, Any, dict[str, Any]]]'",        output_transform: "'Callable[LLMResponse, Any]'"):
         """
         Create a context instance with the required field values.
 
