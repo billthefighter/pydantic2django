@@ -332,35 +332,46 @@ class ContextClassGenerator:
         field_definitions = []
 
         for field_name, field_context in model_context.context_fields.items():
-            field_type = field_context.field_type
+            field_type_str = field_context.field_type  # field_type is now the string representation
 
-            # Use TypeHandler via Jinja filter to get the full, cleaned type string
+            # Use TypeHandler._get_raw_type_string to get the clean, unquoted type string
+            # We need to import TypeHandler directly here
+            from pydantic2django.type_handler import TypeHandler
+
             try:
-                full_type_str = self.jinja_env.filters["clean_field_type_for_template"](field_type)
+                # Note: _get_raw_type_string expects a type object or string representation.
+                # Since field_context.field_type is already the string, we pass it.
+                # We may need to adjust _get_raw_type_string if it strictly expects type objects.
+                # For now, assuming it handles strings appropriately or needs adjustment there.
+                raw_type_str = TypeHandler._get_raw_type_string(field_type_str)
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to get clean type string for {field_name} ({field_type}) using filter: {e}. Default 2 Any."
+                    f"Failed to get raw type string for {field_name} ({field_type_str}): {e}. Defaulting to 'Any'."
                 )
-                full_type_str = "Any"
-                self.extra_type_imports.add("Any")  # Ensure Any import on failure
+                raw_type_str = "Any"
+                self.extra_type_imports.add("Any")
 
-            # Simplify the string for the template context
-            simplified_type_str = self._simplify_type_string(full_type_str)
+            # Get the literal representation by using repr() on the raw string
+            literal_type_repr = repr(raw_type_str)
+
+            # Simplify the raw string for display/annotation if needed (optional)
+            # simplified_raw_type_str = self._simplify_type_string(raw_type_str)
 
             # Ensure metadata is a dict
             metadata = field_context.additional_metadata or {}
 
             field_def = {
                 "name": field_name,
-                "type": simplified_type_str,  # Use the simplified string
+                "raw_type": raw_type_str,  # Pass the raw string for annotations
+                "literal_type": literal_type_repr,  # Pass the literal string for assignments
                 "is_optional": field_context.is_optional,
                 "is_list": field_context.is_list,
                 "metadata": metadata,
             }
             field_definitions.append(field_def)
 
-        # Add 'Callable' to typing imports if it was used in any simplified types
-        if any("Callable" in fd["type"] for fd in field_definitions):
+        # Add 'Callable' to typing imports if it was used in any raw types
+        if any("Callable" in fd["raw_type"] for fd in field_definitions):
             self.extra_type_imports.add("Callable")
 
         model_name = self._clean_generic_type(model_context.django_model.__name__)

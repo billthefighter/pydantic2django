@@ -129,19 +129,26 @@ class ImportHandler:
                     logger.debug(f"Skipping TypeVar definition: {type_name} - will be defined locally")
                     return
 
-                # Clean up any parametrized generic types
+                # Clean up any parametrized generic types for the import statement
                 clean_type_name = self._clean_generic_type(type_name)
 
-                # Skip if already imported
-                if clean_type_name in self.imported_names:
-                    logger.debug(f"Skipping already imported type: {clean_type_name}")
+                # Use the original type_name (potentially with generics) for the imported_names check
+                if type_name in self.imported_names:
+                    logger.debug(f"Skipping already imported type: {type_name}")
                     return
 
-                # Add to context class imports
+                # Add to context class imports *before* marking as imported
+                # Use the clean name for the import statement itself
                 import_statement = f"from {type_module} import {clean_type_name}"
                 logger.info(f"Adding context class import: {import_statement}")
                 self.context_class_imports.add(import_statement)
-                self.imported_names[clean_type_name] = type_module
+
+                # Add the original type name to imported_names to prevent re-processing
+                self.imported_names[type_name] = type_module
+                # Also add the cleaned name in case it's encountered separately
+                if clean_type_name != type_name:
+                    self.imported_names[clean_type_name] = type_module
+
         except (AttributeError, TypeError) as e:
             logger.warning(f"Error processing type import for {field_type}: {e}")
 

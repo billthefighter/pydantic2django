@@ -14,7 +14,7 @@ class {{ model_name }}Context(ModelContext):
         {% for field in field_definitions %}
         self.add_field(
             field_name="{{ field.name }}",
-            field_type={{ field.type }},
+            field_type={{ field.literal_type }},
             is_optional={{ field.is_optional }},
             is_list={{ field.is_list }},
             additional_metadata={{ field.metadata }}
@@ -25,7 +25,7 @@ class {{ model_name }}Context(ModelContext):
     def create(cls,
              django_model: Type[models.Model],
 {% for field in field_definitions %}
-             {{ field.name }}: {{ field.type | clean_field_type_for_template }},
+             {{ field.name }}: {{ field.raw_type }},
 {% endfor %}
              ):
         """
@@ -42,17 +42,4 @@ class {{ model_name }}Context(ModelContext):
         context.set_value("{{ field.name }}", {{ field.name }})
         {% endfor %}
         return context
-
-    def to_dict(self) -> dict:
-        """
-        Convert this context to a dictionary.
-
-        Returns:
-            Dictionary representation of the context values
-        """
-        result = {}
-        for field_name, field_context in self.context_fields.items():
-            if field_context.value is not None:
-                result[field_name] = field_context.value
-        return result
 {% endif %}

@@ -494,19 +494,24 @@ class TypeHandler:
 
             elif origin_name == "Callable":
                 # Callable format: Callable[[arg1, arg2], return_type]
-                # args structure can vary by Python version
-                if len(args) == 2 and isinstance(args[0], list):  # Py 3.9+ format for specific args
-                    param_types = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args[0])
-                    return_type = TypeHandler._get_raw_type_string(args[1])
-                    return f"Callable[[{param_types}], {return_type}]"
-                elif len(args) == 2 and args[0] is Ellipsis:  # Callable[..., ReturnType]
-                    return_type = TypeHandler._get_raw_type_string(args[1])
-                    return f"Callable[..., {return_type}]"
-                elif len(args) > 0:  # Other cases or older Python versions might just list types
-                    processed_args = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args)
-                    # This might not be the full Callable[[...], ...] syntax but represents the types involved
-                    return f"Callable[{processed_args}]"
-                else:  # No args? Fallback (e.g. typing.Callable)
+                if args:
+                    # Assume the last arg is the return type, the rest are params
+                    params = args[:-1]
+                    return_type = args[-1]
+
+                    # Format params into a list string
+                    param_str = ", ".join(TypeHandler._get_raw_type_string(p) for p in params)
+                    return_type_str = TypeHandler._get_raw_type_string(return_type)
+
+                    # Handle Callable[..., ReturnType] represented as (Ellipsis, ReturnType)
+                    if len(params) == 1 and params[0] is Ellipsis:
+                        param_list_str = "..."
+                    else:
+                        # Always wrap params in brackets, even if empty or single
+                        param_list_str = f"[{param_str}]"
+
+                    return f"Callable[{param_list_str}, {return_type_str}]"
+                else:  # No args? e.g., typing.Callable
                     return "Callable"
             else:  # Fallback for other generics (e.g., custom generics)
                 processed_args = ", ".join(TypeHandler._get_raw_type_string(arg) for arg in args)
