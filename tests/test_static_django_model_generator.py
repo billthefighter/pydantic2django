@@ -269,7 +269,7 @@ def test_relationship_model_generation(tmp_path, relationship_models, test_param
     generator = StaticDjangoModelGenerator(
         output_path=str(output_path),
         packages=["tests"],
-        app_label="test_app",
+        app_label="test_rel_app",
         discovery_module=MockDiscovery(),
     )
 

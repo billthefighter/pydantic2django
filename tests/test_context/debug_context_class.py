@@ -1,10 +1,10 @@
 @dataclass
-class MockDjangoModelContext(ModelContext):
+class MockDjangoModelForTypePreservationContext(ModelContext):
     """
-    Context class for MockDjangoModel.
+    Context class for MockDjangoModelForTypePreservation.
     Contains non-serializable fields that need to be provided when converting from Django to Pydantic.
     """
-    model_name: str = "MockDjangoModel"
+    model_name: str = "MockDjangoModelForTypePreservation"
     pydantic_class: type = TestModel
     django_model: type[models.Model]
     context_fields: dict[str, FieldContext] = field(default_factory=dict)

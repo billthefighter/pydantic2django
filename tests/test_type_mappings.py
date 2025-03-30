@@ -136,7 +136,11 @@ SPECIAL_TYPE_TEST_CASES = [
         id="path-to-filepath-field",
     ),
     pytest.param(
-        BasicTypeTestParams(python_type=Enum, django_field=models.CharField, sample_value=SampleEnum.OPTION_A),
+        BasicTypeTestParams(
+            python_type=SampleEnum,  # Use the concrete Enum with string values
+            django_field=models.CharField,
+            sample_value=SampleEnum.OPTION_A,
+        ),
         id="enum-to-char-field",
     ),
     pytest.param(

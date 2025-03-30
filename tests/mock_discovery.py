@@ -124,28 +124,71 @@ def _map_model_relationship(model_name, other_name, pydantic_model, other_model)
 class MockDiscovery(ModelDiscovery):
     """Mock implementation of ModelDiscovery for testing."""
 
-    def __init__(self):
+    def __init__(self, initial_models: Optional[dict[str, type[BaseModel]]] = None):
         """Initialize a new MockDiscovery instance."""
         logger.debug("Initializing MockDiscovery")
         super().__init__()
-        self.discovered_models = _discovered_models
-        self.django_models = _django_models
-        self.filtered_models = {}  # Will hold the filtered models
-        self.relationship_accessor = _relationships  # Use the global relationship accessor
-        self.field_overrides = _field_overrides  # Access field overrides
-        self.contexts = _model_contexts  # Store context objects
+        # Use initial_models if provided, otherwise default to global
+        self.discovered_models = initial_models if initial_models is not None else _discovered_models
+        self.django_models = {}  # Start with empty django models for this instance
+        self.filtered_models = {}
+        # Create a LOCAL relationship accessor for this instance
+        self.relationship_accessor = RelationshipConversionAccessor()
+        self.field_overrides = _field_overrides  # Field overrides can remain global for simplicity
+        self.contexts = {}  # Start with empty contexts for this instance
 
-        # Add our pydantic models to the relationship accessor directly
-        # Instead of using add_pydantic_model which might have different signature
-        for name, model in self.discovered_models.items():
-            logger.debug(f"Adding Pydantic model {name} to relationship accessor")
-            relationship = RelationshipMapper(pydantic_model=model, django_model=None, context=None)
-            self.relationship_accessor.available_relationships.append(relationship)
+        # Populate the LOCAL relationship accessor with the models for THIS instance
+        if self.discovered_models:
+            # Add models to the local relationship accessor
+            for name, model in self.discovered_models.items():
+                logger.debug(f"[MockDiscovery Init] Adding Pydantic model {name} to LOCAL relationship accessor")
+                # Assuming RelationshipMapper needs pydantic_model at least
+                relationship = RelationshipMapper(pydantic_model=model, django_model=None, context=None)
+                self.relationship_accessor.available_relationships.append(relationship)
 
-        # Set up relationships between models that reference each other
-        _setup_nested_model_relationships()
+        # Set up relationships between models within THIS instance's models
+        self._setup_nested_model_relationships_local()
 
-        logger.debug(f"MockDiscovery initialized with {len(_discovered_models)} discovered models")
+        logger.debug(f"MockDiscovery initialized with {len(self.discovered_models)} instance models")
+
+    # Add a local version of relationship setup
+    def _setup_nested_model_relationships_local(self):
+        """Set up relationships between nested Pydantic models for THIS instance."""
+        from typing import get_origin, get_args, Optional, Union, List
+
+        for model_name, pydantic_model in self.discovered_models.items():
+            logger.debug(f"[Local Setup] Analyzing model {model_name} for relationships")
+            for field_name, field in pydantic_model.model_fields.items():
+                annotation = field.annotation
+                for other_name, other_model in self.discovered_models.items():
+                    if other_model == pydantic_model:
+                        continue  # Skip self-references
+                    try:
+                        is_direct = annotation == other_model
+                        origin = get_origin(annotation)
+                        args = get_args(annotation)
+                        is_optional = origin is Union and type(None) in args and other_model in args
+                        is_list = origin is list and len(args) == 1 and args[0] == other_model
+
+                        if is_direct or is_optional or is_list:
+                            rel_type = "direct" if is_direct else ("Optional" if is_optional else "List")
+                            logger.debug(
+                                f"[Local Setup] Found {rel_type} relationship: {model_name}.{field_name} -> {other_name}"
+                            )
+                            # Map relationship using the local accessor
+                            django_model = self.django_models.get(model_name)
+                            other_django_model = self.django_models.get(other_name)
+
+                            # Only map if the pydantic_model is valid
+                            if pydantic_model:
+                                self.relationship_accessor.map_relationship(pydantic_model, django_model)  # type: ignore
+
+                            # Map the other side if valid
+                            if other_model in self.discovered_models and other_model:
+                                self.relationship_accessor.map_relationship(other_model, other_django_model)  # type: ignore
+
+                    except (AttributeError, TypeError):
+                        continue
 
     def discover_models(
         self,

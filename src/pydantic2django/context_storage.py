@@ -28,7 +28,7 @@ class FieldContext:
     """
 
     field_name: str
-    field_type: type[Any]
+    field_type: str
     is_optional: bool = False
     is_list: bool = False
     additional_metadata: dict[str, Any] = field(default_factory=dict)
@@ -55,22 +55,23 @@ class ModelContext:
         }
         return required_fields
 
-    def add_field(self, field_name: str, field_type: type[Any], **kwargs) -> None:
+    def add_field(self, field_name: str, field_type: str, **kwargs) -> None:
         """
         Add a field to the context storage.
 
         Args:
             field_name: Name of the field
-            field_type: Type of the field
+            field_type: String representation of the field's type
             **kwargs: Additional metadata for the field
         """
         field_context = FieldContext(field_name=field_name, field_type=field_type, **kwargs)
 
-        # Add required imports based on field_type
-        if hasattr(field_type, "__module__") and field_type.__module__ != "builtins":
-            if field_type.__module__ != "typing":
-                # Add the import for this custom type
-                field_context.required_imports.append(f"from {field_type.__module__} import {field_type.__name__}")
+        # Commenting out import generation based on type object for now,
+        # as field_type is now a string. This logic might need revisiting.
+        # if hasattr(field_type, "__module__") and field_type.__module__ != "builtins":
+        #     if field_type.__module__ != "typing":
+        #         # Add the import for this custom type
+        #         field_context.required_imports.append(f"from {field_type.__module__} import {field_type.__name__}")
 
         self.context_fields[field_name] = field_context
 
@@ -89,7 +90,7 @@ class ModelContext:
         if missing_fields:
             raise ValueError(f"Missing required context fields: {', '.join(missing_fields)}")
 
-    def get_field_type(self, field_name: str) -> Optional[type[Any]]:
+    def get_field_type(self, field_name: str) -> Optional[str]:
         """
         Get the type of a context field.
 
@@ -172,9 +173,10 @@ class ModelContext:
         if field_context is None:
             return None
 
-        # Use the TypeHandler's centralized method to process the field type
-        type_name, _ = TypeHandler.process_field_type(field_context.field_type)
-        return type_name
+        # Since field_type is now a string, TypeHandler might need adjustment
+        # or we handle the string directly here. For now, returning the string.
+        # type_name, _ = TypeHandler.process_field_type(field_context.field_type) # Old logic
+        return field_context.field_type  # Return the stored string representation
 
     def get_required_imports(self) -> dict[str, list[str]]:
         """
@@ -188,11 +190,12 @@ class ModelContext:
         # Process each field
         for _, field_context in self.context_fields.items():
             # Use TypeHandler to get all required imports for this field type
-            _, field_imports = TypeHandler.process_field_type(field_context.field_type)
-            imports["explicit"].extend(field_imports)
+            # This part needs revision as field_context.field_type is now a string
+            # _, field_imports = TypeHandler.process_field_type(field_context.field_type) # Old logic
+            # imports[\"explicit\"].extend(field_imports) # Old logic
 
             # Get additional imports from the type string
-            field_type_str = str(field_context.field_type)
+            field_type_str = field_context.field_type  # field_type is already the string
             type_imports = TypeHandler.get_required_imports(field_type_str)
 
             # Add to our overall imports

@@ -448,3 +448,135 @@ def test_class_reference_type_handling(field_config):
     finally:
         # Cleanup temporary file
         os.unlink(temp_filename)
+
+
+# Helper function to get Jinja environment (assuming it might be needed outside fixtures)
+# Or reuse existing fixture if available
+def _get_template_env():
+    package_templates_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),  # Adjust path if needed
+        "src",
+        "pydantic2django",
+        "templates",
+    )
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(package_templates_dir),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    # Ensure the clean filter is registered if needed for other parts
+    if "clean_field_type_for_template" not in env.filters:
+        from pydantic2django.type_handler import TypeHandler
+
+        env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+    return env
+
+
+# Mock definition structure needs to accommodate the expected string literal
+@dataclass
+class MockFieldDefinitionForLiteralTest:
+    name: str
+    # Represents the value already processed into a Python string literal
+    # This is what the generator *should* pass to the template context
+    pre_quoted_type_repr: str
+    is_optional: bool = False
+    is_list: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def test_add_field_field_type_is_correct_literal():
+    """Verify field_type in add_field is rendered as the correct string literal."""
+    jinja_env = _get_template_env()
+    template = jinja_env.get_template("context_class.py.j2")
+
+    # Define mock fields with the expected string literal representation
+    mock_fields = [
+        MockFieldDefinitionForLiteralTest(name="simple_str", pre_quoted_type_repr="'str'"),
+        MockFieldDefinitionForLiteralTest(
+            name="callable_field", pre_quoted_type_repr="'Callable[[int], str]'", is_optional=True
+        ),
+        MockFieldDefinitionForLiteralTest(
+            name="optional_dict", pre_quoted_type_repr="'Optional[Dict[str, Any]]'", is_optional=True
+        ),
+        MockFieldDefinitionForLiteralTest(
+            name="complex_nested", pre_quoted_type_repr="'List[Union[str, int, None]]'", is_list=True
+        ),
+    ]
+
+    # Prepare context data for the template
+    # The crucial part: `type` in the context dict uses the pre-quoted representation
+    template_context_fields = [
+        {
+            "name": f.name,
+            "type": f.pre_quoted_type_repr,
+            "is_optional": f.is_optional,
+            "is_list": f.is_list,
+            "metadata": f.metadata,
+        }
+        for f in mock_fields
+    ]
+
+    # Render the template
+    rendered = template.render(
+        model_name="TestLiteralModel",
+        pydantic_class="MockPydantic",  # Mock value
+        pydantic_module="test.module",  # Mock value
+        field_definitions=template_context_fields,
+    )
+
+    # Parse the generated code
+    try:
+        tree = ast.parse(rendered)
+    except SyntaxError as e:
+        pytest.fail(f"Generated code has syntax errors: {e}\nGenerated code:\n{rendered}")
+
+    # Visitor to find and validate add_field calls
+    class AddFieldVisitor(ast.NodeVisitor):
+        def __init__(self, expected_field_types):
+            # Maps field_name to expected string literal representation
+            self.expected_field_types = expected_field_types
+            self.validated_fields = set()
+
+        def visit_Call(self, node):
+            # Check if it's a call to self.add_field
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+                and node.func.attr == "add_field"
+            ):
+                field_name_val = None
+                field_type_node = None
+
+                for kw in node.keywords:
+                    if kw.arg == "field_name" and isinstance(kw.value, ast.Constant):
+                        field_name_val = kw.value.value
+                    elif kw.arg == "field_type":
+                        field_type_node = kw.value
+
+                if field_name_val and field_name_val in self.expected_field_types:
+                    expected_repr = self.expected_field_types[field_name_val]
+
+                    # Assert field_type is a Constant string node
+                    assert isinstance(field_type_node, ast.Constant) and isinstance(
+                        field_type_node.value, str
+                    ), f"field_type for '{field_name_val}' is not a string Constant node: {ast.dump(field_type_node) if field_type_node else 'None'}"
+
+                    # Assert the string value *is* the expected representation
+                    assert (
+                        field_type_node.value == expected_repr
+                    ), f"field_type value for '{field_name_val}' mismatch.\n  Got: {repr(field_type_node.value)}\n  Expected: {repr(expected_repr)}"
+
+                    self.validated_fields.add(field_name_val)
+
+            self.generic_visit(node)  # Continue traversing
+
+    # Run the visitor
+    expected_types_dict = {f.name: f.pre_quoted_type_repr for f in mock_fields}
+    visitor = AddFieldVisitor(expected_types_dict)
+    visitor.visit(tree)
+
+    # Assert all expected fields were found and validated
+    assert len(visitor.validated_fields) == len(
+        mock_fields
+    ), f"Did not validate all expected fields. Validated: {visitor.validated_fields}, Expected: {expected_types_dict.keys()}"

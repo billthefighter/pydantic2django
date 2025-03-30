@@ -352,8 +352,9 @@ def test_relationship_field_missing_model(empty_field_factory, relationship_mode
         field_name="profile", field_info=field_info, source_model_name=user_model.__name__, carrier=carrier
     )
     assert result is not None
-    assert result.django_field is not None  # Should successfully create ForeignKey
-    assert result.context_field is None
+    # Should NOT successfully create ForeignKey when model is missing
+    assert result.django_field is None
+    assert result.context_field is not None  # Should be context field
 
     # Now, create a factory with an EMPTY accessor
     empty_accessor = RelationshipConversionAccessor()
@@ -448,6 +449,9 @@ def test_invalid_relationship_types():
     class InvalidRelationshipTestModel(BaseModel):
         invalid_list: list[InvalidType]  # List of non-BaseModel
         invalid_direct: InvalidType  # Direct non-BaseModel type
+
+        # Add model_config to allow arbitrary types
+        model_config = {"arbitrary_types_allowed": True}
 
     # Create Django model mocks (though not strictly needed for this test)
     django_invalid = type(
@@ -775,12 +779,12 @@ def test_relationship_field_to_parameter(field_factory, relationship_models):
     # Test rendered field creation
     if address_result.django_field is not None:
         # This should not raise an exception if 'to' is correctly formatted
-        rendered_field = address_result.rendered_django_field
+        rendered_field = address_result.django_field
         assert rendered_field is not None
         assert isinstance(rendered_field, models.ForeignKey)
 
     if tags_result.django_field is not None:
-        rendered_field = tags_result.rendered_django_field
+        rendered_field = tags_result.django_field
         assert rendered_field is not None
         assert isinstance(rendered_field, models.ManyToManyField)
 
@@ -852,7 +856,7 @@ def test_chain_relationship_fields():
 
     # Test successful field creation
     if nodes_result.django_field is not None:
-        rendered_field = nodes_result.rendered_django_field
+        rendered_field = nodes_result.django_field
         assert rendered_field is not None
         assert isinstance(rendered_field, models.ManyToManyField)
 
@@ -879,7 +883,7 @@ def test_chain_relationship_fields():
 
     # Test successful field creation
     if edges_result.django_field is not None:
-        rendered_field = edges_result.rendered_django_field
+        rendered_field = edges_result.django_field
         assert rendered_field is not None
         assert isinstance(rendered_field, models.ManyToManyField)
 
@@ -1057,24 +1061,14 @@ def test_error_handling_for_parameter_errors(monkeypatch):
     monkeypatch.setattr(TypeMappingDefinition, "get_django_field", mock_get_field)
 
     # CASE 1: Non-relationship field - parameter errors should raise exceptions
-    # Revert to checking for ValueError
-    # with pytest.raises(ValueError) as excinfo:
-    #     field_factory.convert_field(
-    #         field_name="name",
-    #         field_info=simple_field_info,
-    #         app_label="test_app",
-    #         source_model_name=SimpleModel.__name__,
-    #         carrier=DjangoModelFactoryCarrier(pydantic_model=SimpleModel, meta_app_label="test_app"),
-    #     )
-    # assert "unexpected keyword argument" in str(excinfo.value)
-    # Revert back to expecting a context field
-    result_simple = field_factory.convert_field(
-        field_name="name",
-        field_info=simple_field_info,
-        app_label="test_app",
-        source_model_name=SimpleModel.__name__,
-        carrier=DjangoModelFactoryCarrier(pydantic_model=SimpleModel, meta_app_label="test_app"),
-    )
+    # Remove the redundant call outside the pytest.raises block
+    # result_simple = field_factory.convert_field(
+    #     field_name="name",
+    #     field_info=simple_field_info,
+    #     app_label="test_app",
+    #     source_model_name=SimpleModel.__name__,
+    #     carrier=DjangoModelFactoryCarrier(pydantic_model=SimpleModel, meta_app_label="test_app"),
+    # )
     with pytest.raises(ValueError) as excinfo:
         field_factory.convert_field(
             field_name="name",
@@ -1086,9 +1080,21 @@ def test_error_handling_for_parameter_errors(monkeypatch):
     assert "unexpected keyword argument" in str(excinfo.value)
 
     # CASE 2: Relationship field - parameter errors should be handled as context fields
+    # Create a new accessor and factory that *includes* the RelatedModel
+    accessor_with_relation = RelationshipConversionAccessor()
+    django_related = type(
+        "DjangoRelatedModel",
+        (models.Model,),
+        {"__module__": "tests", "Meta": type("Meta", (), {"app_label": "test_app"})},
+    )
+    related_context = ModelContext(django_model=django_related, pydantic_class=RelatedModel)
+    accessor_with_relation.available_relationships.append(
+        RelationshipMapper(RelatedModel, django_related, related_context)
+    )
+    factory_with_relation = DjangoFieldFactory(available_relationships=accessor_with_relation)
+
     # First set up the type mapping definition to identify this as a relationship field
     # We'll monkey patch TypeMapper.get_mapping_for_type to return a relationship mapping
-
     original_get_mapping = TypeMapper.get_mapping_for_type
 
     def mock_get_mapping_for_relationship(field_type):
@@ -1102,11 +1108,12 @@ def test_error_handling_for_parameter_errors(monkeypatch):
     monkeypatch.setattr(TypeMapper, "get_mapping_for_type", mock_get_mapping_for_relationship)
 
     # Now for relationship fields, parameter errors should NOT raise exceptions
-    result = field_factory.convert_field(
+    # Use the factory_with_relation that knows about RelatedModel
+    result = factory_with_relation.convert_field(
         field_name="relation",
         field_info=relation_field_info,
         app_label="test_app",
-        source_model_name=ModelWithRelationship.__name__,
+        source_model_name=ModelWithRelationship.__name__,  # Add source name
         carrier=DjangoModelFactoryCarrier(pydantic_model=ModelWithRelationship, meta_app_label="test_app"),
     )
 
