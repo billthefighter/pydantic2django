@@ -8,7 +8,12 @@ from django.db import models
 from pydantic import EmailStr, BaseModel, Field, ConfigDict
 from pydantic_core import PydanticSerializationError
 
-from .fixtures.fixtures import ComplexHandler, UnserializableType
+# Update import from .fixtures.fixtures to .conftest
+# (Alternatively, remove if fixtures are automatically discovered)
+# Let's assume auto-discovery for now and remove the import.
+# from .conftest import ComplexHandler, UnserializableType # Assuming fixtures are discoverable
+# Re-adding import as ComplexHandler and UnserializableType are helper classes, not fixtures.
+from .conftest import ComplexHandler, UnserializableType
 
 
 def test_basic_pydantic_model(basic_pydantic_model):
