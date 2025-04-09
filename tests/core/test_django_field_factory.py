@@ -48,10 +48,12 @@ def populated_relationship_accessor(relationship_models):
         )
 
         # Create a model context
-        model_context = ModelContext(django_model=django_model, pydantic_class=model_class)
+        model_context = ModelContext(django_model=django_model, source_class=model_class)
 
         # Add directly to the available_relationships list with proper context
-        accessor.available_relationships.append(RelationshipMapper(model_class, django_model, model_context))
+        accessor.available_relationships.append(
+            RelationshipMapper(pydantic_model=model_class, django_model=django_model, context=model_context)
+        )
 
     return accessor
 
