@@ -4,7 +4,17 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Generic
 
-from pydantic2django.type_handler import TypeHandler
+# Corrected import path for fixtures
+from tests.fixtures.fixtures import basic_dataclass, optional_dataclass, nested_dataclass
+
+# from ..conftest import basic_dataclass, optional_dataclass, nested_dataclass # Use relative import
+
+# Use absolute import from src - corrected path
+from pydantic2django.core.typing import TypeHandler
+
+# from pydantic2django.core.type_handler import TypeHandler
+
+# from pydantic2django.type_handler import TypeHandler
 
 # Set up test logger
 logger = logging.getLogger(__name__)
@@ -387,54 +397,119 @@ class TestTypeHandlerProcessFieldType:
                 ),
                 id="process-nested-list-in-callable",
             ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=str,
+                    expected_output={"type": "str", "is_optional": False, "is_list": False},
+                    test_id="str-type",
+                ),
+                id="str-type",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[int],
+                    expected_output={"type": "int", "is_optional": True, "is_list": False},
+                    test_id="optional-int",
+                ),
+                id="optional-int",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=list[str],
+                    expected_output={"type": "str", "is_optional": False, "is_list": True},
+                    test_id="list-str",
+                ),
+                id="list-str",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=List[float],
+                    expected_output={"type": "float", "is_optional": False, "is_list": True},
+                    test_id="list-float-old-typing",
+                ),
+                id="list-float-old-typing",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[list[bool]],
+                    expected_output={"type": "bool", "is_optional": True, "is_list": True},
+                    test_id="optional-list-bool",
+                ),
+                id="optional-list-bool",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Union[int, str],
+                    expected_output={"type": "Union[int, str]", "is_optional": False, "is_list": False},
+                    test_id="union-int-str",
+                ),
+                id="union-int-str",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Union[int, None],
+                    expected_output={"type": "int", "is_optional": True, "is_list": False},
+                    test_id="union-int-none-is-optional",
+                ),
+                id="union-int-none-is-optional",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=basic_dataclass,  # Use fixture parameter
+                    expected_output={"type": "BasicDC", "is_optional": False, "is_list": False},
+                    test_id="basic-dataclass",
+                ),
+                id="basic-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=optional_dataclass,  # Use fixture parameter
+                    expected_output={"type": "OptionalDC", "is_optional": False, "is_list": False},
+                    test_id="optional-dataclass",
+                ),
+                id="optional-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=nested_dataclass["InnerDC"],  # Use fixture parameter
+                    expected_output={"type": "InnerDC", "is_optional": False, "is_list": False},
+                    test_id="nested-dataclass-inner",
+                ),
+                id="nested-dataclass-inner",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[basic_dataclass],  # Optional dataclass
+                    expected_output={"type": "BasicDC", "is_optional": True, "is_list": False},
+                    test_id="optional-basic-dataclass",
+                ),
+                id="optional-basic-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=list[basic_dataclass],  # List of dataclasses
+                    expected_output={"type": "BasicDC", "is_optional": False, "is_list": True},
+                    test_id="list-basic-dataclass",
+                ),
+                id="list-basic-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[List[basic_dataclass]],  # Optional list of dataclasses
+                    expected_output={"type": "BasicDC", "is_optional": True, "is_list": True},
+                    test_id="optional-list-basic-dataclass",
+                ),
+                id="optional-list-basic-dataclass",
+            ),
         ],
     )
-    def test_process_field_type(self, params: TypeHandlerTestParams):
-        """Test processing field type to produce clean type string."""
-        result, imports = TypeHandler.process_field_type(params.input_type)
-        # Check for exact match first for backward compatibility
-        if result == params.expected_output:
-            assert True
-        elif "Callable[" in result:
-            # Validate the Callable structure
-            assert validate_callable_structure(
-                result
-            ), f"Failed to produce valid Callable structure for {params.test_id}: {result}"
-
-            # Verify required imports
-            assert imports_contain(imports, "typing", "Callable"), "Missing Callable import"
-
-            # Check for imports based on type components
-            if "Dict" in result or "dict" in result:
-                # We'll skip this assertion if it's process-callable or process-actual-callable-type
-                # since these tests fail only on the import validation
-                if params.test_id not in ["process-callable", "process-actual-callable-type"]:
-                    assert any("Dict" in imp for imp in imports) or imports_contain(
-                        imports, "typing", "Dict"
-                    ), "Missing Dict import"
-            if "Any" in result:
-                # We'll skip this assertion if it's process-callable or process-actual-callable-type
-                if params.test_id not in ["process-callable", "process-actual-callable-type"]:
-                    assert any("Any" in imp for imp in imports) or imports_contain(
-                        imports, "typing", "Any"
-                    ), "Missing Any import"
-        elif "Optional[" in result:
-            # Validate Optional structure
-            assert is_well_formed_optional(
-                result
-            ), f"Failed to produce valid Optional structure for {params.test_id}: {result}"
-            assert imports_contain(imports, "typing", "Optional"), "Missing Optional import"
-        elif "Union[" in result:
-            # Validate Union structure
-            assert is_well_formed_union(
-                result
-            ), f"Failed to produce valid Union structure for {params.test_id}: {result}"
-            assert imports_contain(imports, "typing", "Union"), "Missing Union import"
-
-            if "None" in result or "NoneType" in result:
-                type_without_none = result.replace("Union[", "").replace(", None]", "").replace(", NoneType]", "")
-                type_name = type_without_none.strip()
-                assert imports_contain(imports, "typing", type_name), f"Missing {type_name} import"
+    def test_process_field_type(
+        self, params: TypeHandlerTestParams, basic_dataclass, optional_dataclass, nested_dataclass
+    ):
+        """Test processing different field types into a structured dict."""
+        handler = TypeHandler()
+        result = handler.process_field_type(params.input_type)
+        assert result == params.expected_output, f"Test failed for {params.test_id}: {params.description}"
 
 
 class TestTypeHandlerRequiredImports:
@@ -475,30 +550,92 @@ class TestTypeHandlerRequiredImports:
                 ),
                 id="imports-for-nested-typing-constructs",
             ),
+            pytest.param(
+                TypeHandlerTestParams(input_type=str, expected_output=[], test_id="import-str"),
+                id="import-str",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[int],
+                    expected_output=["from typing import Optional"],
+                    test_id="import-optional",
+                ),
+                id="import-optional",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=list[str],
+                    expected_output=["from typing import List"],  # Expect List even if list[] used
+                    test_id="import-list",
+                ),
+                id="import-list",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Dict[str, Any],
+                    expected_output=["from typing import Dict, Any"],
+                    test_id="import-dict-any",
+                ),
+                id="import-dict-any",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Union[int, str],
+                    expected_output=["from typing import Union"],
+                    test_id="import-union",
+                ),
+                id="import-union",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=basic_dataclass,  # Use fixture parameter
+                    expected_output=["from dataclasses import dataclass"],  # Expect dataclass import
+                    test_id="import-basic-dataclass",
+                ),
+                id="import-basic-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[basic_dataclass],  # Optional dataclass
+                    expected_output=["from typing import Optional", "from dataclasses import dataclass"],
+                    test_id="import-optional-basic-dataclass",
+                ),
+                id="import-optional-basic-dataclass",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=list[basic_dataclass],  # List of dataclasses
+                    expected_output=["from typing import List", "from dataclasses import dataclass"],
+                    test_id="import-list-basic-dataclass",
+                ),
+                id="import-list-basic-dataclass",
+            ),
         ],
     )
-    def test_get_required_imports(self, params: TypeHandlerTestParams):
-        """Test extracting required imports from type strings."""
-        result = TypeHandler.get_required_imports(params.input_type)
-        expected = params.expected_output
+    def test_get_required_imports(self, params: TypeHandlerTestParams, basic_dataclass):
+        """Test identifying required imports for different field types."""
+        # handler = TypeHandler() # No instance needed for static methods
+        # handler.process_field_type(params.input_type) # process_field_type doesn't store state
 
-        # Verify typing imports
-        for type_name in expected["typing"]:
-            assert type_name in result["typing"], f"Missing expected typing import: {type_name}"
+        # Get the formatted type string from the input type
+        formatted_type_str = TypeHandler.format_type_string(params.input_type)
 
-        # Verify custom type imports
-        for custom_type in expected["custom"]:
-            assert any(
-                custom_type in ctype for ctype in result["custom"]
-            ), f"Missing expected custom type: {custom_type}"
+        # Call the static method with the type string
+        result_imports_dict = TypeHandler.get_required_imports(formatted_type_str)
 
-        # Verify explicit imports
-        for explicit_import in expected["explicit"]:
-            module_name = explicit_import.split("import")[0].strip().replace("from ", "")
-            imported_item = explicit_import.split("import")[1].strip()
+        # Convert the result dict format {"module": ["Type1", "Type2"]} to list format ["from module import Type1, Type2"]
+        result_imports_list = []
+        for module, names in sorted(result_imports_dict.items()):  # Sort modules for consistency
+            if names:  # Only add if there are names to import
+                result_imports_list.append(f"from {module} import {', '.join(sorted(names))}")  # Sort names
 
-            matching_imports = [imp for imp in result["explicit"] if module_name in imp and imported_item in imp]
-            assert matching_imports, f"Missing expected explicit import: {explicit_import}"
+        # Adjust expected output to be a set of strings for order-insensitive comparison
+        expected_imports_set = set(params.expected_output)
+        result_imports_set = set(result_imports_list)
+
+        assert (
+            result_imports_set == expected_imports_set
+        ), f"Test failed for {params.test_id}: Expected {expected_imports_set}, got {result_imports_set}"
 
 
 class TestTypeHandlerSpecificIssues:

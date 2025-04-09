@@ -16,9 +16,11 @@ import pytest
 from pydantic import BaseModel, Field
 from django.db import models  # Ensure models is imported
 import re  # Ensure re is imported
+from pathlib import Path
+import jinja2  # Make sure jinja2 is imported for get_template_environment
 
-from pydantic2django.context_storage import ModelContext, ContextClassGenerator, FieldContext
-from pydantic2django.type_handler import TypeHandler
+from pydantic2django.core.context import ModelContext, ContextClassGenerator, FieldContext
+from pydantic2django.core.typing import TypeHandler
 
 
 # Sample complex types for testing
@@ -92,18 +94,13 @@ def mock_django_model():
 
 def get_template_environment():
     """Create a Jinja2 environment with the templates directory."""
-    import jinja2
-
-    package_templates_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src", "pydantic2django", "templates"
-    )
     env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(package_templates_dir),
+        loader=jinja2.FileSystemLoader(Path(__file__).parent.parent.parent / "templates"),
         trim_blocks=True,
         lstrip_blocks=True,
     )
-    # Register the filter for type handling
-    env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+    # Register the filter for type handling - use clean_type_string
+    env.filters["clean_field_type_for_template"] = TypeHandler.clean_type_string
     return env
 
 
@@ -130,16 +127,20 @@ def test_type_preservation_in_context_generation():
         class Meta:
             app_label = "test_app_type_preserve"  # Use unique app label too
 
-    model_context = ModelContext(django_model=MockDjangoModelForTypePreservation, pydantic_class=TestModel)
+    model_context = ModelContext(django_model=MockDjangoModelForTypePreservation, source_class=TestModel)
 
-    # Add multiple fields with different types
+    # Add multiple fields with different types, using field_type_str and TypeHandler
     model_context.add_field(
         field_name="input_transform",
-        field_type=Optional[Callable[[ChainContext, Any], Dict[str, Any]]],
+        field_type_str=TypeHandler.format_type_string(Optional[Callable[[ChainContext, Any], Dict[str, Any]]]),
         is_optional=True,
     )
 
-    model_context.add_field(field_name="output_transform", field_type=Callable[[LLMResponse], Any], is_optional=False)
+    model_context.add_field(
+        field_name="output_transform",
+        field_type_str=TypeHandler.format_type_string(Callable[[LLMResponse], Any]),
+        is_optional=False,
+    )
 
     # Generate context class code
     generator = ContextClassGenerator(jinja_env=get_template_environment())
@@ -187,20 +188,36 @@ def test_complete_model_context_generation():
         class Meta:
             app_label = "test_app_complete"  # Use unique app label too
 
-    model_context = ModelContext(django_model=MockDjangoModelForComplete, pydantic_class=TestModel)
+    model_context = ModelContext(django_model=MockDjangoModelForComplete, source_class=TestModel)
 
     # Add fields manually to avoid type checking issues
-    # Complex types
-    model_context.add_field(field_name="input_transform", field_type=Optional[Callable], is_optional=True)
-    model_context.add_field(field_name="output_transform", field_type=Callable, is_optional=False)
-    model_context.add_field(field_name="retry_strategy", field_type=RetryStrategy, is_optional=False)
-    model_context.add_field(field_name="processors", field_type=List, is_optional=False, is_list=True)
-    model_context.add_field(field_name="conditional_handler", field_type=Optional[Callable], is_optional=True)
+    # Use field_type_str and TypeHandler
+    model_context.add_field(
+        field_name="input_transform",
+        field_type_str=TypeHandler.format_type_string(Optional[Callable]),
+        is_optional=True,
+    )
+    model_context.add_field(
+        field_name="output_transform", field_type_str=TypeHandler.format_type_string(Callable), is_optional=False
+    )
+    model_context.add_field(
+        field_name="retry_strategy", field_type_str=TypeHandler.format_type_string(RetryStrategy), is_optional=False
+    )
+    model_context.add_field(
+        field_name="processors", field_type_str=TypeHandler.format_type_string(List), is_optional=False, is_list=True
+    )
+    model_context.add_field(
+        field_name="conditional_handler",
+        field_type_str=TypeHandler.format_type_string(Optional[Callable]),
+        is_optional=True,
+    )
 
     # Generate context class code
     generator = ContextClassGenerator(jinja_env=get_template_environment())
 
     # --- Restore Debugging: Capture field_definitions ---
+    # Add assertion to ensure jinja_env is not None
+    assert generator.jinja_env is not None, "Jinja environment must be initialized"
     captured_field_definitions: list[dict[str, Any]] = []
     original_render = generator.jinja_env.get_template("context_class.py.j2").render
 

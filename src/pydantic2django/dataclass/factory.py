@@ -311,7 +311,7 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
             carrier.invalid_fields.append(("_source_type", "Input is not a dataclass"))
             return
 
-        model_key = carrier.model_key
+        model_key = carrier.model_key()
         logger.debug(f"DataclassFactory: Attempting to create Django model for {model_key}")
 
         # --- Check Cache ---
@@ -336,7 +336,7 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
         if carrier.django_model and not carrier.existing_model:
             logger.debug(f"DataclassFactory: Caching conversion result for {model_key}")
             # self._converted_models[model_key] = replace(carrier) # Linter issue?
-            self._converted_models[model_key] = carrier  # Direct assign
+            self._converted_models[carrier.model_key()] = carrier  # Direct assign # Call model_key()
         elif not carrier.django_model:
             logger.error(
                 f"DataclassFactory: Failed to create Django model for {model_key}. Invalid fields: {carrier.invalid_fields}"

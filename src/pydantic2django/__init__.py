@@ -10,35 +10,40 @@ __version__ = "0.1.0"
 # Don't import modules that might cause circular imports
 # We'll import them directly in the files that need them
 
-from .admin import (
+# Restore admin imports with correct path
+from .django.admin import (
     DynamicModelAdmin,
     register_model_admin,
     register_model_admins,
 )
-from .base_django_model import Pydantic2DjangoBaseClass
-from .discovery import (
-    ModelDiscovery,
-    find_missing_models,
-    topological_sort,
-)
-from .factory import DjangoModelFactory
-from .field_type_mapping import (
+
+# Corrected import paths based on current structure
+from .django.models import Pydantic2DjangoBaseClass
+
+# Imports from .core.discovery commented out - names not found in file
+# from .core.discovery import (
+#     ModelDiscovery,
+#     find_missing_models,
+#     topological_sort,
+# )
+# from .factory import DjangoModelFactory # Commented out - class not found in factories.py
+from .django.mapping import (
     TypeMapper,
     TypeMappingDefinition,
 )
-from .import_handler import ImportHandler
-from .type_handler import configure_type_handler_logging
+from .core.imports import ImportHandler
+from .core.typing import configure_core_typing_logging  # Corrected function name
 
 __all__ = [
     # Type-safe model creation
     "Pydantic2DjangoBaseClass",
-    "DjangoModelFactory",
-    # Registry and dependency management
-    "find_missing_models",
-    "topological_sort",
-    # Model discovery
-    "ModelDiscovery",
-    # Admin interface
+    # "DjangoModelFactory", # Commented out
+    # Registry and dependency management - Commented out
+    # "find_missing_models",
+    # "topological_sort",
+    # Model discovery - Commented out
+    # "ModelDiscovery",
+    # Admin interface - Restored with correct path
     "DynamicModelAdmin",
     "register_model_admin",
     "register_model_admins",
@@ -48,5 +53,5 @@ __all__ = [
     # Import handling
     "ImportHandler",
     # Logging
-    "configure_type_handler_logging",
+    "configure_core_typing_logging",  # Corrected function name
 ]

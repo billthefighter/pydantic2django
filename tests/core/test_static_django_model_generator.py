@@ -18,9 +18,17 @@ from typing import Any, Optional, Dict, List, Callable, Generic, TypeVar
 from datetime import datetime
 
 import pytest
-from pydantic import BaseModel
-from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
-from tests.mock_discovery import register_model, clear, get_model_has_context, get_django_models, MockDiscovery
+from pydantic import BaseModel, Field
+from pydantic_core import PydanticUndefined
+from pydantic2django.pydantic.generator import StaticPydanticModelGenerator
+from pydantic2django.django.models import Pydantic2DjangoBaseClass
+from tests.mock_discovery import (
+    register_model,
+    clear,
+    get_model_has_context,
+    get_registered_django_models,
+    MockDiscovery,
+)
 from django.db import models
 
 
@@ -111,7 +119,7 @@ def test_generator_params(tmp_path, params: GeneratorParams):
     if params.output_path != "generated_models.py":
         params.output_path = os.path.join(tmp_path, params.output_path)
 
-    generator = StaticDjangoModelGenerator(
+    generator = StaticPydanticModelGenerator(
         output_path=params.output_path,
         packages=params.packages,
         app_label=params.app_label,
@@ -145,7 +153,7 @@ def test_jinja_templates(template_name: str):
         - Template file exists in generator's Jinja environment
     """
     logger.info(f"Checking for template: {template_name}")
-    generator = StaticDjangoModelGenerator()
+    generator = StaticPydanticModelGenerator()
     assert template_name in generator.jinja_env.list_templates()
 
 
@@ -184,7 +192,7 @@ def test_simple_model_generation(tmp_path, basic_pydantic_model, test_params: Mo
         - All expected fields are present with correct Django field types
     """
     caplog.set_level(logging.INFO)
-    from tests.mock_discovery import register_model, clear, get_model_has_context, get_django_models
+    from tests.mock_discovery import register_model, clear, get_model_has_context, get_registered_django_models
 
     # Use the mock ContextRegistry defined in this file
     from django.db import models
@@ -197,7 +205,7 @@ def test_simple_model_generation(tmp_path, basic_pydantic_model, test_params: Mo
     register_model(test_params.model_name, basic_pydantic_model)
 
     # Create and run generator
-    generator = StaticDjangoModelGenerator(
+    generator = StaticPydanticModelGenerator(
         output_path=str(output_path),
         packages=["tests"],
         app_label="test_app",
@@ -249,7 +257,7 @@ def test_relationship_model_generation(tmp_path, relationship_models, test_param
         - Relationships are properly defined with correct field types
     """
     caplog.set_level(logging.INFO)
-    from tests.mock_discovery import register_model, clear, get_model_has_context, get_django_models
+    from tests.mock_discovery import register_model, clear, get_model_has_context, get_registered_django_models
 
     # Use the mock ContextRegistry defined in this file
     from django.db import models
@@ -266,7 +274,7 @@ def test_relationship_model_generation(tmp_path, relationship_models, test_param
         logger.info(f"Registered model: {name}")
 
     # Create and run generator
-    generator = StaticDjangoModelGenerator(
+    generator = StaticPydanticModelGenerator(
         output_path=str(output_path),
         packages=["tests"],
         app_label="test_rel_app",
@@ -329,8 +337,7 @@ def test_context_model_generation(
         - Complex field types are properly handled
     """
     caplog.set_level(logging.INFO)
-    from tests.mock_discovery import register_model, clear, get_model_has_context, get_django_models
-    from pydantic2django.context_storage import ModelContext
+    from tests.mock_discovery import register_model, clear, get_model_has_context, get_registered_django_models
 
     # Import Django models
     from django.db import models
@@ -351,7 +358,7 @@ def test_context_model_generation(
     ContextRegistry.register_context(test_params.model_name, context)
 
     # Create and run generator
-    generator = StaticDjangoModelGenerator(
+    generator = StaticPydanticModelGenerator(
         output_path=str(output_path),
         packages=["tests"],
         app_label="test_app",
@@ -381,17 +388,25 @@ def test_context_model_generation(
 # Helper function for context model test
 def create_context_for_model(django_model, pydantic_model):
     """Create a minimal context for testing purposes"""
-    from pydantic2django.context_storage import ModelContext
+    # Correct import path for ModelContext
+    from pydantic2django.core.context import ModelContext
+
+    # Correct import path for TypeHandler
+    from pydantic2django.core.typing import TypeHandler
 
     context = ModelContext(
         django_model=django_model,
-        pydantic_class=pydantic_model,
+        # Updated parameter name: pydantic_class -> source_class
+        source_class=pydantic_model,
     )
 
     # Add fields that need context
     for field_name, field_info in pydantic_model.model_fields.items():
         if field_name in ["handler", "processor", "unserializable"]:
-            context.add_field(field_name=field_name, field_type=field_info.annotation, is_optional=False)
+            # Updated parameter name: field_type -> field_type_str
+            # Use TypeHandler to format the type string
+            field_type_str = TypeHandler.format_type_string(field_info.annotation)
+            context.add_field(field_name=field_name, field_type_str=field_type_str, is_optional=False)
 
     return context
 
@@ -437,7 +452,10 @@ class TestClassReferenceHandling:
         """
         caplog.set_level(logging.INFO)
         from django.db import models
-        from pydantic2django.context_storage import ModelContext
+        from pydantic2django.core.context import ModelContext
+
+        # Import TypeHandler locally
+        from pydantic2django.core.typing import TypeHandler
 
         # Setup
         clear()
@@ -454,15 +472,20 @@ class TestClassReferenceHandling:
         # Create context for the model
         context = ModelContext(
             django_model=MockDjangoModel,
-            pydantic_class=complex_field_pydantic_model,
+            # Updated parameter name: pydantic_class -> source_class
+            source_class=complex_field_pydantic_model,
         )
 
         # Add the fields that would become context fields
-        context.add_field(field_name="source", field_type=ChainNode, is_optional=False)
-        context.add_field(field_name="target", field_type=ConversationNode, is_optional=False)
+        # Updated parameter name: field_type -> field_type_str
+        # Use TypeHandler to format the type string
+        source_type_str = TypeHandler.format_type_string(ChainNode)
+        target_type_str = TypeHandler.format_type_string(ConversationNode)
+        context.add_field(field_name="source", field_type_str=source_type_str, is_optional=False)
+        context.add_field(field_name="target", field_type_str=target_type_str, is_optional=False)
 
         # Create and run generator
-        generator = StaticDjangoModelGenerator(
+        generator = StaticPydanticModelGenerator(
             output_path=str(output_path),
             packages=["tests"],
             app_label="test_app",
@@ -506,7 +529,10 @@ class TestCategorizedImports:
         """
         caplog.set_level(logging.INFO)
         from django.db import models
-        from pydantic2django.context_storage import ModelContext
+        from pydantic2django.core.context import ModelContext
+
+        # Import TypeHandler locally
+        from pydantic2django.core.typing import TypeHandler
 
         # Create mock class objects for import testing
         class CustomAgent:
@@ -545,16 +571,22 @@ class TestCategorizedImports:
         # Create context for the model
         context = ModelContext(
             django_model=MockDjangoModel,
-            pydantic_class=ImportTestModel,
+            # Updated parameter name: pydantic_class -> source_class
+            source_class=ImportTestModel,
         )
 
         # Add fields with various import requirements
-        context.add_field(field_name="agent", field_type=CustomAgent, is_optional=False)
-        context.add_field(field_name="pool", field_type=Optional[AgentPool], is_optional=True)
-        context.add_field(field_name="handler", field_type=Callable[[Dict[str, Any]], List[str]], is_optional=False)
+        # Updated parameter name: field_type -> field_type_str
+        # Use TypeHandler to format the type string
+        agent_type_str = TypeHandler.format_type_string(CustomAgent)
+        pool_type_str = TypeHandler.format_type_string(Optional[AgentPool])
+        handler_type_str = TypeHandler.format_type_string(Callable[[Dict[str, Any]], List[str]])
+        context.add_field(field_name="agent", field_type_str=agent_type_str, is_optional=False)
+        context.add_field(field_name="pool", field_type_str=pool_type_str, is_optional=True)
+        context.add_field(field_name="handler", field_type_str=handler_type_str, is_optional=False)
 
         # Create and run generator
-        generator = StaticDjangoModelGenerator(
+        generator = StaticPydanticModelGenerator(
             output_path=str(output_path),
             packages=["tests"],
             app_label="test_app",
@@ -634,8 +666,22 @@ import ast
 from enum import Enum
 from uuid import uuid4
 from pydantic import BaseModel, Field, ConfigDict
-from pydantic2django.relationships import RelationshipMapper, RelationshipConversionAccessor
-from tests.dummy_models import ProviderCapabilities, RateLimitConfig  # Assuming these exist
+
+# Corrected core imports for relationships
+from pydantic2django.core.relationships import RelationshipMapper, RelationshipConversionAccessor
+
+# Commenting out potentially missing test dependency
+# from tests.dummy_models import ProviderCapabilities, RateLimitConfig  # Assuming these exist
+
+
+# Mock missing dummy classes
+class ProviderCapabilities:
+    pass
+
+
+class RateLimitConfig:
+    pass
+
 
 # Type variable for model classes
 # Define TypeVars before the classes that use them

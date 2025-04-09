@@ -8,12 +8,25 @@ from django.db import models
 from pydantic import EmailStr, BaseModel, Field, ConfigDict
 from pydantic_core import PydanticSerializationError
 
-# Update import from .fixtures.fixtures to .conftest
-# (Alternatively, remove if fixtures are automatically discovered)
-# Let's assume auto-discovery for now and remove the import.
-# from .conftest import ComplexHandler, UnserializableType # Assuming fixtures are discoverable
-# Re-adding import as ComplexHandler and UnserializableType are helper classes, not fixtures.
-from .conftest import ComplexHandler, UnserializableType
+# Import helper classes from the parent conftest.py
+from .. import conftest
+
+# Import fixtures defined in fixtures.py
+from .fixtures import (
+    basic_pydantic_model,
+    datetime_pydantic_model,
+    optional_fields_model,
+    constrained_fields_model,
+    relationship_models,
+    method_model,
+    factory_model,
+    context_pydantic_model,
+    context_with_data,
+    # Add dataclass fixture imports if they will be tested here
+    # basic_dataclass,
+    # optional_dataclass,
+    # nested_dataclass,
+)
 
 
 def test_basic_pydantic_model(basic_pydantic_model):
@@ -167,9 +180,9 @@ def test_context_pydantic_model(context_pydantic_model, context_with_data):
     assert model.serializable.value == "can_serialize"
 
     # Verify fields needing context
-    assert isinstance(model.handler, ComplexHandler)
+    assert isinstance(model.handler, conftest.ComplexHandler)
     assert callable(model.processor)
-    assert isinstance(model.unserializable, UnserializableType)
+    assert isinstance(model.unserializable, conftest.UnserializableType)
     assert model.unserializable.value == "needs_context"
 
     # Test serialization behavior

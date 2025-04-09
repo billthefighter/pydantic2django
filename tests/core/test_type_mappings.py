@@ -12,7 +12,10 @@ import pytest
 from django.db import models
 from pydantic import BaseModel, EmailStr, IPvAnyAddress, Json
 
-from pydantic2django.field_type_mapping import TypeMapper, TypeMappingDefinition
+from pydantic2django.django.mapping import TypeMapper
+from pydantic2django.core.defs import TypeMappingDefinition
+
+from tests.fixtures.fixtures import *
 
 
 @dataclass

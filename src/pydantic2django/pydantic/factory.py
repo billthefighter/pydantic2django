@@ -285,7 +285,7 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):  # Use
     # Overrides the base method to add caching
     def make_django_model(self, carrier: ConversionCarrier[type[BaseModel]]) -> None:
         """Creates a Django model from Pydantic, checking cache first."""
-        model_key = carrier.model_key
+        model_key = carrier.model_key()
         logger.debug(f"PydanticFactory: Attempting to create Django model for {model_key}")
 
         # --- Check Cache ---
@@ -311,7 +311,7 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):  # Use
             logger.debug(f"PydanticFactory: Caching conversion result for {model_key}")
             # Store a copy using replace to avoid modification issues
             # self._converted_models[model_key] = replace(carrier) # Linter issue?
-            self._converted_models[model_key] = carrier  # Direct assign
+            self._converted_models[carrier.model_key()] = carrier  # Direct assign # Call model_key()
         elif not carrier.django_model:
             logger.error(
                 f"PydanticFactory: Failed to create Django model for {model_key}. Invalid fields: {carrier.invalid_fields}"

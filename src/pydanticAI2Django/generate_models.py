@@ -37,8 +37,8 @@ if not settings.configured:
     )
     django.setup()
 
-from pydantic2django.discovery import ModelDiscovery
-from pydantic2django.static_django_model_generator import StaticDjangoModelGenerator
+from pydantic2django.pydantic import generator
+from pydantic2django.pydantic.discovery import PydanticDiscovery
 
 logger = logging.getLogger(__name__)
 

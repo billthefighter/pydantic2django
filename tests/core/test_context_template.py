@@ -17,8 +17,8 @@ import jinja2
 import pytest
 from pydantic import BaseModel
 
-from pydantic2django.context_storage import FieldContext, ModelContext
-from pydantic2django.type_handler import TypeHandler
+from pydantic2django.core.context import FieldContext, ModelContext
+from pydantic2django.core.typing import TypeHandler
 
 
 # Create mock class objects for testing class reference handling
@@ -48,7 +48,7 @@ def get_template_environment():
         lstrip_blocks=True,
     )
     # Register the filter for type handling
-    env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+    env.filters["clean_field_type_for_template"] = TypeHandler.clean_type_string
     return env
 
 
@@ -466,9 +466,10 @@ def _get_template_env():
     )
     # Ensure the clean filter is registered if needed for other parts
     if "clean_field_type_for_template" not in env.filters:
-        from pydantic2django.type_handler import TypeHandler
+        from pydantic2django.core.typing import TypeHandler
 
-        env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+        # Use clean_type_string
+        env.filters["clean_field_type_for_template"] = TypeHandler.clean_type_string
     return env
 
 

@@ -1,16 +1,16 @@
 # Pydantic2Django
 
-A utility for generating Django models from Pydantic models and providing seamless conversion between them.
+A utility for generating Django models from Pydantic models and Python dataclasses, and providing seamless conversion between them.
 
 ## Overview
 
 Pydantic2Django allows you to:
 
-1. Generate Django models from your Pydantic models
-2. Store Pydantic objects in a Django database
-3. Convert between Django model instances and Pydantic objects
+1. Generate Django models from your Pydantic models or Python dataclasses
+2. Store Pydantic or dataclass objects in a Django database
+3. Convert between Django model instances and Pydantic/dataclass objects
 
-This is particularly useful when you have a codebase that uses Pydantic models for data validation and you want to persist those models in a Django database.
+This is particularly useful when you have a codebase that uses Pydantic models or standard Python dataclasses for data validation and representation, and you want to persist those models in a Django database.
 
 ## Installation
 
@@ -74,12 +74,12 @@ pydantic_user = django_user.to_pydantic()
 
 Pydantic2Django works by:
 
-1. Discovering Pydantic models in the specified packages
-2. Generating Django models that inherit from `Pydantic2DjangoBaseClass`
-3. Storing the Pydantic object's data in a JSONField
-4. Providing methods to convert between Django models and Pydantic objects
+1. Discovering Pydantic models or dataclasses in the specified packages (or through direct registration)
+2. Generating Django models that inherit from `Pydantic2DjangoBaseClass` (for Pydantic) or facilitating mapping (for both)
+3. Storing the Pydantic/dataclass object's data in a JSONField (in the case of `Pydantic2DjangoBaseClass`)
+4. Providing mechanisms (`RelationshipAccessor`) to manage mappings and convert between Django models and source objects (Pydantic/dataclasses)
 
-The `Pydantic2DjangoBaseClass` provides the following fields:
+The `Pydantic2DjangoBaseClass` (primarily for generated models from Pydantic) provides the following fields:
 
 - `id`: UUID primary key
 - `name`: A human-readable name for the object

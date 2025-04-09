@@ -5,10 +5,15 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Callable, ClassVar, Optional
 from uuid import UUID
+from dataclasses import dataclass, field
 
 import pytest
 from django.db import models
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+# Import helper classes needed by fixtures (e.g., for context_pydantic_model)
+# These are defined in the parent conftest.py
+from ..conftest import ComplexHandler, SerializableType, UnserializableType
 
 
 @pytest.fixture
@@ -57,9 +62,7 @@ def constrained_fields_model():
     """Fixture providing a Pydantic model with field constraints."""
 
     class ConstrainedModel(BaseModel):
-        name: str = Field(
-            title="Full Name", description="Full name of the user", max_length=100
-        )
+        name: str = Field(title="Full Name", description="Full name of the user", max_length=100)
         age: int = Field(title="Age", description="User's age in years")
         balance: Decimal = Field(
             title="Account Balance",
@@ -150,9 +153,7 @@ def factory_model():
 
         def create_simple_product(self, name: str) -> Product:
             """A simpler method that just creates a basic product with a name."""
-            return Product(
-                name=name, price=Decimal("0.99"), description="A basic product"
-            )
+            return Product(name=name, price=Decimal("0.99"), description="A basic product")
 
     return ProductFactory
 
@@ -209,33 +210,6 @@ def user_django_model():
     return User
 
 
-def get_model_fields(django_model):
-    """Helper function to get fields from a Django model."""
-    return {f.name: f for f in django_model._meta.get_fields()}
-
-
-class UnserializableType:
-    """A type that can't be serialized to JSON."""
-
-    def __init__(self, value: str):
-        self.value = value
-
-
-class ComplexHandler:
-    """A complex handler that can't be serialized."""
-
-    def process(self, data: Any) -> Any:
-        return data
-
-
-class SerializableType(BaseModel):
-    """A type that can be serialized to JSON."""
-
-    value: str
-
-    model_config = ConfigDict(json_schema_extra={"examples": [{"value": "example"}]})
-
-
 @pytest.fixture
 def context_pydantic_model():
     """Fixture providing a Pydantic model with both serializable and non-serializable fields."""
@@ -269,3 +243,54 @@ def context_with_data():
         "processor": lambda x: x.upper(),
         "unserializable": UnserializableType("needs_context"),
     }
+
+
+# --- Start Dataclass Fixtures ---
+
+
+@pytest.fixture
+def basic_dataclass():
+    """Fixture providing a basic dataclass with common field types."""
+
+    @dataclass
+    class BasicDC:
+        string_field: str
+        int_field: int
+        float_field: float
+        bool_field: bool
+
+    return BasicDC
+
+
+@pytest.fixture
+def optional_dataclass():
+    """Fixture providing a dataclass with optional fields."""
+
+    @dataclass
+    class OptionalDC:
+        required_string: str
+        required_int: int
+        optional_string: str | None = None
+        optional_int: int | None = None
+
+    return OptionalDC
+
+
+@pytest.fixture
+def nested_dataclass():
+    """Fixture providing nested dataclasses."""
+
+    @dataclass
+    class InnerDC:
+        inner_value: int
+
+    @dataclass
+    class OuterDC:
+        name: str
+        inner: InnerDC
+        items: list[int] = field(default_factory=list)
+
+    return {"InnerDC": InnerDC, "OuterDC": OuterDC}
+
+
+# --- End Dataclass Fixtures ---

@@ -6,8 +6,11 @@ from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
 from django.db import models
 from pydantic import BaseModel
 
-from .context_storage import ModelContext
-from .serialization import serialize_value
+# Corrected import path for ModelContext
+from ..core.context import ModelContext
+
+# Corrected import path for serialization
+from ..core.serialization import serialize_value
 
 # Type variable for BaseModel subclasses
 T = TypeVar("T", bound=BaseModel)
@@ -483,49 +486,31 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
                 )
 
             # Validate and use the context
-            context.validate_context(context.to_dict())
-            data.update(context.to_dict())
+            context.validate_context(context.to_conversion_dict())
+            data.update(context.to_conversion_dict())
 
         # Reconstruct the object and cast to the correct type
         result = pydantic_class.model_validate(data)
         return cast(T, result)
 
     def _get_data_for_pydantic(self) -> dict[str, Any]:
-        """
-        Get the data from Django fields for creating a Pydantic object.
-
-        Returns:
-            A dictionary of field values
-        """
-        # Start with an empty dictionary
+        """Get model data suitable for passing to Pydantic validator."""
         data = {}
+        # Get the ModelContext associated with this instance or its generated class
+        model_context = getattr(self, "_model_context", None)
 
-        # Get all fields from the Django model
-        django_fields = {field.name: field for field in self._meta.fields}
+        pydantic_fields = set(self._get_pydantic_class().model_fields.keys())
 
-        # Exclude these fields from consideration
-        # TODO: There are cases where these fields are defined on the source pydantic object.
-        # Need to handle that.
-        exclude_fields = {
-            "id",
-            "name",
-            "object_type",
-            "created_at",
-            "updated_at",
-        }
+        # Add DB fields that are part of the Pydantic model
+        for field in self._meta.fields:
+            if field.name in pydantic_fields:
+                data[field.name] = getattr(self, field.name)
 
-        # TODO: Handle relationship fields
-        # TODO: Handle nested models
-        # Add each Django field value to the data dictionary
-        for field_name, _ in django_fields.items():
-            if field_name in exclude_fields:
-                continue
-
-            # Get the value from the Django model
-            value = getattr(self, field_name)
-
-            # Add to data dictionary
-            data[field_name] = value
+        # Add context field values if context exists
+        if model_context:
+            # Call the renamed method
+            context_values = model_context.to_conversion_dict()
+            data.update(context_values)
 
         return data
 

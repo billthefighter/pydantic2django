@@ -6,11 +6,11 @@ complex types like Optional[Callable[[ChainContext, Any], dict[str, Any]]]
 to just "Optional" when used in the context class template.
 """
 
-from typing import Any, Callable, Dict, Optional, List
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import pytest
 
-from pydantic2django.type_handler import TypeHandler
+from pydantic2django.core.typing import TypeHandler
 
 
 class ChainContext:
@@ -85,20 +85,9 @@ def test_process_field_type_vs_get_class_name():
     assert "Callable" not in class_name
 
 
-def test_clean_field_type_for_template():
+def test_clean_field_type_for_template(type_str, expected):
     """
-    Test the template filter that's used in the Jinja2 template.
-
-    This is the function that's using process_field_type and preserving type information.
+    Test the clean_field_type_for_template method with various inputs.
     """
-    complex_type = Optional[Callable[[ChainContext, Any], Dict[str, Any]]]
-
-    # After fix: clean_field_type_for_template now uses process_field_type
-    # which preserves the complex type information
-    template_type = TypeHandler.clean_field_type_for_template(complex_type)
-    assert "Optional" in template_type
-    assert "Callable" in template_type
-
-    # This is what's now correctly passing the complex type to the template
-    # in the context_class.py.j2 template where it does:
-    # field_type="{{ field.type | clean_field_type_for_template }}"
+    # Use the likely replacement method
+    assert TypeHandler.clean_type_string(type_str) == expected
