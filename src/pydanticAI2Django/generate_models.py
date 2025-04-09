@@ -2,8 +2,6 @@ import logging
 from enum import Enum
 from typing import TypeVar
 
-import django
-
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("model_conversion")
@@ -37,8 +35,6 @@ if not settings.configured:
     )
     django.setup()
 
-from pydantic2django.pydantic import generator
-from pydantic2django.pydantic.discovery import PydanticDiscovery
 
 logger = logging.getLogger(__name__)
 

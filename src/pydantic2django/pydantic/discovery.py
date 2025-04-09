@@ -1,11 +1,12 @@
 import abc  # Import abc
 import inspect
 import logging
-from typing import Any, Union, get_args, get_origin
+from collections.abc import Callable
+from typing import Any, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
-from .core import BaseDiscovery  # Changed import
+from ..core.discovery import BaseDiscovery
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,17 @@ class PydanticDiscovery(BaseDiscovery[BaseModel]):
 
         return True  # Eligible by default
 
-    # discover_models is now implemented in the BaseDiscovery class
-    # It will call the _is_target_model and _default_eligibility_filter defined above.
+    def discover_models(
+        self,
+        packages: list[str],
+        app_label: str,
+        user_filters: Optional[
+            Union[Callable[[type[BaseModel]], bool], list[Callable[[type[BaseModel]], bool]]]
+        ] = None,
+    ):
+        """Discover Pydantic models in the specified packages, applying filters."""
+        # Pass user_filters directly to the base class method
+        super().discover_models(packages, app_label, user_filters=user_filters)
 
     # --- analyze_dependencies and get_models_in_registration_order remain ---
 

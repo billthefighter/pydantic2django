@@ -1,8 +1,7 @@
 import dataclasses
 import logging
 from collections.abc import Callable
-from typing import Optional, Type
-import datetime  # Keep for timestamp
+from typing import Optional
 
 from django.db import models
 
@@ -10,15 +9,14 @@ from django.db import models
 from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.factories import ConversionCarrier
 
-# from pydantic2django.factory import DjangoModelFactoryCarrier # Old carrier, use ConversionCarrier
-
-# Dataclass specific imports
-from .discovery import DataclassDiscovery, DataclassType
-from .factory import DataclassModelFactory, DataclassFieldFactory  # Corrected filename: factory (singular)
-
 # Base Django model (assuming a common one might be used, or default to models.Model)
 # Let's assume we might want to use Pydantic2DjangoBaseClass as a default still, needs import.
 from pydantic2django.django.models import Pydantic2DjangoBaseClass
+
+# from pydantic2django.factory import DjangoModelFactoryCarrier # Old carrier, use ConversionCarrier
+# Dataclass specific imports
+from .discovery import DataclassDiscovery, DataclassType
+from .factory import DataclassFieldFactory, DataclassModelFactory  # Corrected filename: factory (singular)
 
 logger = logging.getLogger(__name__)
 

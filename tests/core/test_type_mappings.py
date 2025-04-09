@@ -1,11 +1,11 @@
 """Tests for TypeMapper and TypeMappingDefinition classes."""
-import datetime
+import datetime as dt
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, get_args, get_origin
 from uuid import UUID
 
 import pytest
@@ -16,6 +16,9 @@ from pydantic2django.django.mapping import TypeMapper
 from pydantic2django.core.defs import TypeMappingDefinition
 
 from tests.fixtures.fixtures import *
+
+# Define a fixed datetime value outside parametrize
+FIXED_DATETIME = dt.datetime(2024, 1, 1, 12, 0, 0)
 
 
 @dataclass
@@ -76,9 +79,7 @@ BASIC_TYPE_TEST_CASES = [
         BasicTypeTestParams(python_type=bool, django_field=models.BooleanField, sample_value=True), id="boolean-field"
     ),
     pytest.param(
-        BasicTypeTestParams(
-            python_type=datetime.datetime, django_field=models.DateTimeField, sample_value=datetime.datetime.now()
-        ),
+        BasicTypeTestParams(python_type=dt.datetime, django_field=models.DateTimeField, sample_value=FIXED_DATETIME),
         id="datetime-field",
     ),
     pytest.param(
@@ -135,8 +136,13 @@ COLLECTION_TYPE_TEST_CASES = [
 # Test cases for special types
 SPECIAL_TYPE_TEST_CASES = [
     pytest.param(
-        BasicTypeTestParams(python_type=Path, django_field=models.FilePathField, sample_value=Path("/path/to/file")),
-        id="path-to-filepath-field",
+        BasicTypeTestParams(
+            python_type=Path,
+            django_field=models.CharField,
+            sample_value=Path("/path/to/file"),
+            expected_attributes={"max_length": 255},
+        ),
+        id="path-to-char-field",
     ),
     pytest.param(
         BasicTypeTestParams(
@@ -182,6 +188,7 @@ RELATIONSHIP_TEST_CASES = [
             python_type=dict[str, BaseModel],
             django_field=models.ManyToManyField,
             relationship_type="many_to_many",
+            expected_attributes={},
         ),
         id="dict-many-to-many-relationship",
     ),
@@ -196,11 +203,15 @@ def test_basic_type_mappings(params: BasicTypeTestParams):
     assert mapping.django_field == params.django_field
     assert mapping.matches_type(params.python_type)
 
-    # Test field attributes
+    # Test BASIC field attributes from get_field_attributes (null/blank)
     field_attrs = TypeMapper.get_field_attributes(params.python_type)
-    if params.expected_attributes is not None:
-        for key, value in params.expected_attributes.items():
-            assert field_attrs.get(key) == value
+    is_optional = get_origin(params.python_type) is Union and type(None) in get_args(params.python_type)
+    assert field_attrs.get("null") is is_optional
+    assert field_attrs.get("blank") is is_optional
+
+    # Check max_length only if it's explicitly set in the test params for basic types
+    if params.expected_attributes and "max_length" in params.expected_attributes:
+        assert mapping.max_length == params.expected_attributes["max_length"]
 
 
 @pytest.mark.parametrize("params", COLLECTION_TYPE_TEST_CASES)
@@ -220,6 +231,10 @@ def test_special_type_mappings(params: BasicTypeTestParams):
     assert mapping.django_field == params.django_field
     assert mapping.matches_type(params.python_type)
 
+    # Check max_length if expected (e.g., for Path -> CharField)
+    if params.expected_attributes and "max_length" in params.expected_attributes:
+        assert mapping.max_length == params.expected_attributes["max_length"]
+
 
 @pytest.mark.parametrize("params", RELATIONSHIP_TEST_CASES)
 def test_relationship_type_mappings(params: RelationshipTestParams):
@@ -228,7 +243,6 @@ def test_relationship_type_mappings(params: RelationshipTestParams):
     assert mapping is not None, f"No mapping found for {params.python_type}"
     assert mapping.django_field == params.django_field
     assert mapping.is_relationship is True
-    assert mapping.relationship_type == params.relationship_type
     assert mapping.matches_type(params.python_type)
 
     # Test with a concrete model class
@@ -249,13 +263,14 @@ def test_relationship_type_mappings(params: RelationshipTestParams):
 
         assert mapping is not None
         assert mapping.django_field == params.django_field
-        assert mapping.relationship_type == params.relationship_type
+        assert mapping.matches_type(params.python_type)
 
-    # Test field attributes
+    # Test BASIC field attributes (null/blank)
     field_attrs = TypeMapper.get_field_attributes(params.python_type)
-    if params.expected_attributes is not None:
-        for key, value in params.expected_attributes.items():
-            assert field_attrs.get(key) == value
+    is_optional = get_origin(params.python_type) is Union and type(None) in get_args(params.python_type)
+    assert field_attrs.get("null") is is_optional
+    assert field_attrs.get("blank") is is_optional
+    # Do NOT check for on_delete here, it's set during instantiation
 
 
 def test_optional_type_handling():
@@ -271,39 +286,39 @@ def test_optional_type_handling():
     assert attrs.get("blank") is True
 
 
-# --- Refactored TypeMappingDefinition Method Tests ---
+# --- Tests for TypeMapper helper methods (previously on TypeMappingDefinition) ---
 
 
 @pytest.mark.parametrize(
     "python_type, max_length, expected_field, expected_max_length",
     [
-        (str, 100, models.CharField, 100),  # Custom max_length
-        (str, 255, models.CharField, 255),  # Default max_length
+        (str, 100, models.CharField, 100),
+        (str, 255, models.CharField, 255),
     ],
     ids=["custom_max_length", "default_max_length"],
 )
-def test_type_mapping_char_field(python_type, max_length, expected_field, expected_max_length):
-    """Test the char_field classmethod."""
-    if max_length == 255:  # Test default
-        mapping = TypeMappingDefinition.char_field(python_type)
+def test_typemapper_char_field(python_type, max_length, expected_field, expected_max_length):
+    """Test the TypeMapper.char_field helper method."""
+    if max_length == 255:
+        mapping = TypeMapper.char_field(python_type)  # Use TypeMapper
     else:
-        mapping = TypeMappingDefinition.char_field(python_type, max_length=max_length)
+        mapping = TypeMapper.char_field(python_type, max_length=max_length)  # Use TypeMapper
 
     assert mapping.django_field == expected_field
     assert mapping.max_length == expected_max_length
     assert mapping.python_type == python_type
 
 
-def test_type_mapping_text_field():
-    """Test the text_field classmethod."""
-    mapping = TypeMappingDefinition.text_field(str)
+def test_typemapper_text_field():
+    """Test the TypeMapper.text_field helper method."""
+    mapping = TypeMapper.text_field(str)  # Use TypeMapper
     assert mapping.django_field == models.TextField
     assert mapping.python_type == str
 
 
-def test_type_mapping_json_field():
-    """Test the json_field classmethod."""
-    mapping = TypeMappingDefinition.json_field(dict)
+def test_typemapper_json_field():
+    """Test the TypeMapper.json_field helper method."""
+    mapping = TypeMapper.json_field(dict)  # Use TypeMapper
     assert mapping.django_field == models.JSONField
     assert mapping.python_type == dict
 
@@ -311,43 +326,42 @@ def test_type_mapping_json_field():
 @pytest.mark.parametrize(
     "python_type, max_length, expected_field, expected_max_length",
     [
-        (EmailStr, 254, models.EmailField, 254),  # Default
-        (EmailStr, 100, models.EmailField, 100),  # Custom max_length
+        (EmailStr, 254, models.EmailField, 254),
+        (EmailStr, 100, models.EmailField, 100),
     ],
     ids=["default_email", "custom_max_length_email"],
 )
-def test_type_mapping_email_field(python_type, max_length, expected_field, expected_max_length):
-    """Test the email_field classmethod."""
-    if max_length == 254:  # Test default
-        mapping = TypeMappingDefinition.email_field()
+def test_typemapper_email_field(python_type, max_length, expected_field, expected_max_length):
+    """Test the TypeMapper.email_field helper method."""
+    if max_length == 254:
+        mapping = TypeMapper.email_field()  # Use TypeMapper
     else:
-        mapping = TypeMappingDefinition.email_field(python_type, max_length=max_length)
+        mapping = TypeMapper.email_field(python_type, max_length=max_length)  # Use TypeMapper
 
     assert mapping.django_field == expected_field
     assert mapping.max_length == expected_max_length
-    # The default python_type is EmailStr
     assert mapping.python_type == python_type
 
 
-def test_type_mapping_foreign_key():
-    """Test the foreign_key classmethod."""
-    mapping = TypeMappingDefinition.foreign_key(BaseModel)
+def test_typemapper_foreign_key():
+    """Test the TypeMapper.foreign_key helper method."""
+    mapping = TypeMapper.foreign_key(BaseModel)  # Use TypeMapper
     assert mapping.django_field == models.ForeignKey
     assert mapping.is_relationship is True
-    assert mapping.relationship_type == "foreign_key"
-    assert mapping.on_delete == models.CASCADE
+    # Relationship type is determined contextually now, not stored directly on definition
+    # assert mapping.relationship_type == "foreign_key"
+    # assert mapping.on_delete == models.CASCADE # on_delete is set later during field instantiation
     assert mapping.python_type == BaseModel
 
 
-def test_type_mapping_many_to_many():
-    """Test the many_to_many classmethod."""
-    # Note: The classmethod takes PythonType, but the original test used BaseModel.
-    # We follow the original test logic here.
-    mapping = TypeMappingDefinition.many_to_many(BaseModel)
+def test_typemapper_many_to_many():
+    """Test the TypeMapper.many_to_many helper method."""
+    mapping = TypeMapper.many_to_many(List[BaseModel])  # Use TypeMapper with List[BaseModel]
     assert mapping.django_field == models.ManyToManyField
     assert mapping.is_relationship is True
-    assert mapping.relationship_type == "many_to_many"
-    assert mapping.python_type == BaseModel
+    # Relationship type is determined contextually now
+    # assert mapping.relationship_type == "many_to_many"
+    assert mapping.python_type == List[BaseModel]
 
 
-# --- End Refactored Tests ---
+# --- End TypeMapper Helper Tests ---

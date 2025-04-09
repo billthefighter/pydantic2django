@@ -8,11 +8,11 @@ from django.db import models
 from pydantic import EmailStr, BaseModel, Field, ConfigDict
 from pydantic_core import PydanticSerializationError
 
-# Import helper classes from the parent conftest.py
-from .. import conftest
+# Import helper classes from the parent conftest.py using absolute path
+import tests.conftest as conftest
 
-# Import fixtures defined in fixtures.py
-from .fixtures import (
+# Import fixtures defined in fixtures.py using absolute path
+from tests.fixtures.fixtures import (
     basic_pydantic_model,
     datetime_pydantic_model,
     optional_fields_model,

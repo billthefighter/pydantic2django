@@ -60,11 +60,11 @@ class TypeMapper:
 
     # Define all type mappings as TypeMappingDefinition instances
     TYPE_MAPPINGS: list[TypeMappingDefinition] = [
-        # Simple Types
-        TypeMappingDefinition(str, models.TextField),  # Default for str is TextField
+        # Simple Types - Order matters for issubclass checks (bool before int)
+        TypeMappingDefinition(str, models.TextField),
+        TypeMappingDefinition(bool, models.BooleanField),  # Moved before int
         TypeMappingDefinition(int, models.IntegerField),
         TypeMappingDefinition(float, models.FloatField),
-        TypeMappingDefinition(bool, models.BooleanField),
         TypeMappingDefinition(Decimal, models.DecimalField, field_kwargs={"max_digits": 19, "decimal_places": 10}),
         TypeMappingDefinition(datetime.datetime, models.DateTimeField),
         TypeMappingDefinition(datetime.date, models.DateField),
@@ -135,15 +135,18 @@ class TypeMapper:
             # Recursively find mapping for the non-None type
             return cls.get_mapping_for_type(actual_type)
 
-        # Handle List[BaseModel] for ManyToMany
-        if origin is list and args:
-            inner_type = args[0]
-            try:
-                if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                    logger.debug(f"Type {python_type} is List[BaseModel], creating ManyToMany mapping.")
-                    return cls.many_to_many(python_type)  # Pass original List[Model] type
-            except TypeError:
-                pass  # Inner type not a class
+        # Handle List[BaseModel] or Dict[str, BaseModel] for ManyToMany
+        if origin in (list, dict) and args:
+            # For dict, check the value type (args[1]); for list, check the item type (args[0])
+            inner_type_index = 1 if origin is dict else 0
+            if len(args) > inner_type_index:
+                inner_type = args[inner_type_index]
+                try:
+                    if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
+                        logger.debug(f"Type {python_type} is Collection[BaseModel], creating ManyToMany mapping.")
+                        return cls.many_to_many(python_type)  # Pass original type
+                except TypeError:
+                    pass  # Inner type not a class or suitable for issubclass
 
         # Iterate through predefined mappings
         for mapping in cls.TYPE_MAPPINGS:

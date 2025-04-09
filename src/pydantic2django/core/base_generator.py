@@ -1,4 +1,3 @@
-import abc
 import logging
 import os
 import pathlib
@@ -6,13 +5,13 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import Generic, Optional, Type, TypeVar
+from typing import Generic, Optional, TypeVar
 
 import jinja2
 from django.db import models
 
-from .discovery import BaseDiscovery, TModel as SourceModelTypeDiscovery  # Renamed to avoid clash
-from .factories import BaseModelFactory, TModel as SourceModelFactory, TFieldInfo as FieldInfoFactory, ConversionCarrier
+from .discovery import BaseDiscovery  # Renamed to avoid clash
+from .factories import BaseModelFactory, ConversionCarrier
 from .imports import ImportHandler
 from .typing import TypeHandler
 
@@ -161,7 +160,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
                 f.write(content)
             if self.verbose:
                 logger.info(f"Successfully wrote models to {self.output_path}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to write to output file {self.output_path}: {e}")
             raise  # Re-raise after logging
 
@@ -186,7 +185,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
                     logger.info(f"  - {name}")
             else:
                 logger.info("  (No models found or passed filter)")
-            logger.info(f"Dependency analysis complete.")
+            logger.info("Dependency analysis complete.")
 
     def setup_django_model(self, source_model: SourceModelType) -> Optional[ConversionCarrier[SourceModelType]]:
         """

@@ -1,7 +1,7 @@
-import logging
 import datetime
+import logging
 from collections.abc import Callable
-from typing import Optional, Type, TypeVar, cast
+from typing import Optional, cast
 
 from django.db import models
 from pydantic import BaseModel
@@ -9,33 +9,27 @@ from pydantic.fields import FieldInfo
 
 # Import other Pydantic-specific needs
 from pydantic2django.core.base_generator import BaseStaticGenerator
-from pydantic2django.core.context import ModelContext, ContextClassGenerator
-from pydantic2django.core.factories import ConversionCarrier, BaseFieldFactory, BaseModelFactory
+from pydantic2django.core.context import ContextClassGenerator
+
+# Core imports - Adjusted path for ConversionCarrier
+from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
-from pydantic2django.core.discovery import BaseDiscovery, TModel
 from pydantic2django.core.typing import TypeHandler
+
+# TypeMapper for field generation hints
+# Import base classes and specific components
+from pydantic2django.pydantic.discovery import PydanticDiscovery
+from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory
 
 # Import the original factories needed by PydanticModelFactory
 # from pydantic2django.factory import DjangoFieldFactory as OriginalDjangoFieldFactory
 from ..django.models import Pydantic2DjangoBaseClass
 
-# Import base classes and specific components
-from pydantic2django.pydantic.discovery import PydanticDiscovery
-from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory
-
-# Core imports - Adjusted path for ConversionCarrier
-from pydantic2django.core.factories import ConversionCarrier
-from pydantic2django.core.relationships import RelationshipConversionAccessor
-from pydantic2django.core.discovery import SourceModelType
-
-# TypeMapper for field generation hints
-from pydantic2django.django.mapping import TypeMapper
-
 logger = logging.getLogger(__name__)
 
 
 class StaticPydanticModelGenerator(
-    BaseStaticGenerator[Type[BaseModel], FieldInfo]
+    BaseStaticGenerator[type[BaseModel], FieldInfo]
 ):  # TModel=BaseModel, TFieldInfo=FieldInfo
     """
     Generates Django models and their context classes from Pydantic models.
@@ -47,7 +41,7 @@ class StaticPydanticModelGenerator(
         output_path: str = "generated_models.py",  # Keep original default
         packages: Optional[list[str]] = None,
         app_label: str = "django_app",  # Keep original default
-        filter_function: Optional[Callable[[Type[BaseModel]], bool]] = None,
+        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
         verbose: bool = False,
         discovery_module: Optional[PydanticDiscovery] = None,
         module_mappings: Optional[dict[str, str]] = None,
@@ -100,12 +94,12 @@ class StaticPydanticModelGenerator(
 
     # --- Implement Abstract Methods from Base ---
 
-    def _get_source_model_name(self, carrier: ConversionCarrier[Type[BaseModel]]) -> str:
+    def _get_source_model_name(self, carrier: ConversionCarrier[type[BaseModel]]) -> str:
         """Get the name of the original Pydantic model."""
         # Ensure source_model is not None before accessing __name__
         return carrier.source_model.__name__ if carrier.source_model else "UnknownPydanticModel"
 
-    def _add_source_model_import(self, carrier: ConversionCarrier[Type[BaseModel]]):
+    def _add_source_model_import(self, carrier: ConversionCarrier[type[BaseModel]]):
         """Add import for the original Pydantic model."""
         if carrier.source_model:
             # Use the correct method from ImportHandler
@@ -113,7 +107,7 @@ class StaticPydanticModelGenerator(
         else:
             logger.warning("Cannot add source model import: source_model is missing from carrier.")
 
-    def _get_models_in_processing_order(self) -> list[Type[BaseModel]]:
+    def _get_models_in_processing_order(self) -> list[type[BaseModel]]:
         """Return models in Pydantic dependency order."""
         # Discovery must have run first (called by base generate_models_file -> discover_models)
         # Cast the discovery_instance from the base class to the specific Pydantic type
@@ -143,7 +137,8 @@ class StaticPydanticModelGenerator(
             # --- Pydantic Specific ---
             "context_definitions": self.context_definitions,  # Populated in generate_models_file override
             "all_models": [  # This seems redundant if django_model_names covers __all__
-                f"'{name}'" for name in django_model_names  # Use Django names for __all__ consistency?
+                f"'{name}'"
+                for name in django_model_names  # Use Django names for __all__ consistency?
             ],
             "context_class_names": self.context_class_names,  # Populated in generate_models_file override
             "model_has_context": self.model_has_context,  # Populated in generate_models_file override
@@ -153,7 +148,7 @@ class StaticPydanticModelGenerator(
         # are added by the base class generate_models_file method after calling this.
         return base_context
 
-    def _get_model_definition_extra_context(self, carrier: ConversionCarrier[Type[BaseModel]]) -> dict:
+    def _get_model_definition_extra_context(self, carrier: ConversionCarrier[type[BaseModel]]) -> dict:
         """Provide Pydantic-specific context for model_definition.py.j2."""
         context_fields_info = []
         context_class_name = ""

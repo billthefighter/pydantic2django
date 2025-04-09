@@ -142,62 +142,56 @@ class TypeMappingDefinition:
         if self.python_type == python_type:
             return True
 
-        # Handle complex types like List[str], Dict[str, Any], etc.
         origin = get_origin(python_type)
         args = get_args(python_type)
-        if origin is not None:
-            # For Optional[T] which is Union[T, None]
-            if origin is Union:
-                args = get_args(python_type)
-                # If it's Optional[T] (Union[T, None])
-                if type(None) in args and len(args) == 2:
-                    # Get the non-None type
-                    non_none_type = next(arg for arg in args if arg is not type(None))
-                    # For Optional[str], match with str
-                    if non_none_type == self.python_type:
+
+        # Handle Optional[T]
+        if origin is Union and type(None) in args and len(args) == 2:
+            non_none_type = next(arg for arg in args if arg is not type(None))
+            return self.matches_type(non_none_type)
+
+        # Handle specific relationship types (List[Model] or Dict[Any, Model])
+        if self.is_relationship and self.django_field == models.ManyToManyField:
+            inner_type = None
+            if origin is list and len(args) == 1:
+                inner_type = args[0]
+            elif origin is dict and len(args) == 2:
+                inner_type = args[1]
+
+            if inner_type:
+                # Check if inner_type is a BaseModel subclass or Any
+                # (Allow ManyToMany to match List[Any] or Dict[Any, Any] if needed? Decide later)
+                try:
+                    if inner_type is Any or (isinstance(inner_type, type) and issubclass(inner_type, BaseModel)):
+                        # Match if inner type is BaseModel or Any
                         return True
-                # For other Union types, match with the json_field mapping if appropriate
-                # (This check is simplified here, more specific checks happen in TypeMapper)
-                elif self.django_field == models.JSONField and self.python_type in (
-                    dict,
-                    list,
-                    set,
-                ):
-                    return True
-            # For collection types, match with their base types or JSONField
-            elif origin in (list, dict, set):
-                # Match JSONField for collections
-                if self.django_field == models.JSONField:
-                    if (
-                        (origin is set and self.python_type is set)
-                        or (origin is dict and self.python_type is dict)
-                        or (origin is list and self.python_type is list)
-                    ):
-                        return True
+                except TypeError:  # Handle non-type inner_type if necessary
+                    pass
 
-                args = get_args(python_type)
-                # For relationship fields, check if the inner type matches (basic check)
-                if self.is_relationship and args:
-                    # More detailed relationship matching logic belongs in TypeMapper
-                    # Check if inner type is BaseModel (simplified check)
-                    inner_type = args[0]
-                    return isinstance(inner_type, type) and issubclass(inner_type, BaseModel)
+        # Handle basic collection types matching JSONField
+        if self.django_field == models.JSONField:
+            if (
+                (origin is list and self.python_type is list)
+                or (origin is dict and self.python_type is dict)
+                or (origin is set and self.python_type is set)
+                or (origin is tuple and self.python_type is tuple)
+            ):
+                return True
 
-                # Simplified check for regular collections (more specific checks in TypeMapper)
-                # return origin == get_origin(self.python_type)
+        # Handle direct ForeignKey relationship
+        if self.is_relationship and not origin and self.django_field == models.ForeignKey:
+            if isinstance(python_type, type) and issubclass(python_type, BaseModel):
+                return True
 
-        # For non-collection relationship types (e.g., ForeignKey)
-        # Basic check: Is the python_type a Pydantic BaseModel?
-        if self.is_relationship and not origin:
-            return isinstance(python_type, type) and issubclass(python_type, BaseModel)
-
-        # For basic types, check if the python_type is a subclass of self.python_type
-        # Ensure both are actual types before calling issubclass
+        # Handle basic types
         if isinstance(self.python_type, type) and isinstance(python_type, type):
+            if self.python_type is bool and python_type is not bool:
+                return False
+            if self.python_type is int and python_type is bool:
+                return False
             try:
                 return issubclass(python_type, self.python_type)
-            except TypeError:  # Handle cases where issubclass raises TypeError (e.g., non-class types)
+            except TypeError:
                 return False
 
-        # Fallback if no match found
         return False

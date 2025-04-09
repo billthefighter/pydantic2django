@@ -46,4 +46,4 @@ This is the main package directory containing the library's core logic.
     -   (Other helper functions)
 -   [`__init__.py`](./src/pydantic2django/__init__.py): Makes the directory a Python package and potentially exposes key components.
 
-*Note: Specific file names within subdirectories like `dataclass/`, `django/`, `pydantic/`, and `utils/` might vary. The links point to the directories.* 
+*Note: Specific file names within subdirectories like `dataclass/`, `django/`, `pydantic/`, and `utils/` might vary. The links point to the directories.*

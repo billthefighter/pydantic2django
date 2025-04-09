@@ -5,7 +5,7 @@ This module provides simplified mock implementations of the discovery functions
 to allow examples and tests to run without requiring the full implementation.
 """
 from collections.abc import Callable
-from typing import Optional, Union, get_origin, get_args, List, Type, Any
+from typing import Optional, Union, get_origin, get_args, List, Type, Any, TypeVar
 import logging
 
 # Configure logging
@@ -14,17 +14,20 @@ logger = logging.getLogger("mock_discovery")
 
 from django.db import models
 from pydantic import BaseModel
-from dataclasses import is_dataclass  # Import is_dataclass
+from dataclasses import is_dataclass, dataclass  # Import dataclass decorator too
+
+# Define ModelType simply as a TypeVar without a complex bound for now
+ModelType = TypeVar("ModelType")
 
 # Corrected imports based on src structure
-from pydantic2django.discovery.core import BaseDiscovery, ModelType  # Import BaseDiscovery and ModelType
-from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
-from pydantic2django.context import ModelContext  # Corrected context import path
+from pydantic2django.core.discovery import BaseDiscovery  # Corrected path
+from pydantic2django.core.relationships import RelationshipConversionAccessor, RelationshipMapper  # Corrected path
+from pydantic2django.core.context import ModelContext  # Corrected context import path
 
 # --- Global State --- #
 # Renamed for clarity
 _registered_pydantic_models: dict[str, type[BaseModel]] = {}
-_registered_dataclasses: dict[str, Type] = {}  # Added for dataclasses
+_registered_dataclasses: dict[str, Type] = {}  # Using Type which is Any, maybe refine?
 _registered_django_models: dict[str, type[models.Model]] = {}
 _model_has_context: dict[str, bool] = {}
 _model_contexts: dict[str, ModelContext] = {}
@@ -48,7 +51,7 @@ def clear() -> None:
     _relationships = RelationshipConversionAccessor()
 
 
-def register_model(name: str, model: Type[ModelType], has_context: bool = False) -> None:
+def register_model(name: str, model: Type, has_context: bool = False) -> None:
     """
     Register a Pydantic model or Dataclass for discovery.
 
@@ -62,7 +65,7 @@ def register_model(name: str, model: Type[ModelType], has_context: bool = False)
     )
     if is_dataclass(model):
         _registered_dataclasses[name] = model
-    elif issubclass(model, BaseModel):
+    elif isinstance(model, type) and issubclass(model, BaseModel):
         _registered_pydantic_models[name] = model
     else:
         logger.warning(f"Attempted to register unsupported model type for '{name}': {type(model)}")
@@ -70,9 +73,8 @@ def register_model(name: str, model: Type[ModelType], has_context: bool = False)
 
     _model_has_context[name] = has_context
     # Automatically add the model to the relationship accessor upon registration
-    # This assumes we want a Django counterpart eventually
     relationship = RelationshipMapper(
-        pydantic_model=model if issubclass(model, BaseModel) else None,
+        pydantic_model=model if isinstance(model, type) and issubclass(model, BaseModel) else None,
         dataclass_model=model if is_dataclass(model) else None,
         django_model=None,
         context=None,
@@ -92,7 +94,7 @@ def register_django_model(name: str, model: type[models.Model]) -> None:
     _registered_django_models[name] = model
 
 
-def map_relationship(model1: Type[ModelType], model2: Union[type[models.Model], Type[ModelType]]) -> None:
+def map_relationship(model1: Type, model2: Union[type[models.Model], Type]) -> None:
     """
     Explicitly map a relationship between a Pydantic/Dataclass model and its Django counterpart,
     or between two Pydantic/Dataclass models if needed for the relationship accessor.
@@ -150,7 +152,7 @@ def register_context(name: str, context: ModelContext) -> None:
 # --- Global State Getters --- #
 
 
-def get_registered_models() -> dict[str, Type[ModelType]]:
+def get_registered_models() -> dict[str, Type]:
     """Get all registered Pydantic models and Dataclasses."""
     # Combine Pydantic and Dataclass dictionaries
     all_models = {**_registered_pydantic_models, **_registered_dataclasses}
@@ -200,13 +202,13 @@ def get_field_override(model_name: str, field_name: str) -> Optional[dict[str, s
 # --- Mock Discovery Class --- #
 
 
-class MockDiscovery(BaseDiscovery[ModelType]):  # Inherit from BaseDiscovery
+class MockDiscovery(BaseDiscovery[Type]):  # Use Type instead of ModelType
     """Mock implementation of BaseDiscovery for testing."""
 
     def __init__(
         self,
         model_type_to_discover: str = "all",  # 'pydantic', 'dataclass', 'all'
-        initial_models: Optional[dict[str, Type[ModelType]]] = None,
+        initial_models: Optional[dict[str, Type]] = None,
     ):
         """
         Initialize a new MockDiscovery instance.
@@ -230,7 +232,7 @@ class MockDiscovery(BaseDiscovery[ModelType]):  # Inherit from BaseDiscovery
         # This deviates from using only global state but allows instance-specific test scenarios.
         self._instance_models = initial_models
 
-    def _get_source_models(self) -> dict[str, Type[ModelType]]:
+    def _get_source_models(self) -> dict[str, Type]:
         """Returns the models this instance should 'discover' from."""
         if self._instance_models is not None:
             logger.debug("Using instance-specific initial models.")
@@ -248,8 +250,8 @@ class MockDiscovery(BaseDiscovery[ModelType]):  # Inherit from BaseDiscovery
 
     def _is_target_model(self, obj: Any) -> bool:
         """Check if an object is the type of model this instance targets."""
-        is_pydantic = isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel
-        is_dc = isinstance(obj, type) and is_dataclass(obj)
+        is_pydantic = isinstance(obj, type) and issubclass(obj, BaseModel)
+        is_dc = is_dataclass(obj) and isinstance(obj, type)
 
         if self.model_type_to_discover == "pydantic":
             return is_pydantic
@@ -258,112 +260,68 @@ class MockDiscovery(BaseDiscovery[ModelType]):  # Inherit from BaseDiscovery
         else:  # 'all'
             return is_pydantic or is_dc
 
-    def _default_eligibility_filter(self, model: Type[ModelType]) -> bool:
-        """Mock eligibility filter. For testing, assume all registered models are eligible."""
-        # Keep it simple for the mock, specific filters aren't usually tested here.
+    def _default_eligibility_filter(self, model: Type) -> bool:
+        """Mock eligibility: Assume all discovered models are eligible."""
+        # Add specific mock filters if needed (e.g., exclude models starting with '_')
         return True
 
     def analyze_dependencies(self) -> None:
-        """Mock dependency analysis. Assume simple or no dependencies for tests."""
-        logger.info("Mock analyze_dependencies: Performing simplified analysis.")
-        # In a mock, we often don't need complex dependency analysis.
-        # We can assume an order or let tests dictate it if necessary.
-        # Populate self.dependencies based on filtered_models, assuming no interdependencies for simplicity.
-        self.dependencies = {model: set() for model in self.filtered_models.values()}
-        logger.debug(
-            f"Mock dependencies created: { {k.__name__: {dep.__name__ for dep in v} for k,v in self.dependencies.items()} }"
-        )
-
-    # get_models_in_registration_order is inherited from BaseDiscovery and uses self.dependencies
-
-    # --- Mock-specific implementations or overrides --- #
+        """Mock dependency analysis - does nothing for now."""
+        # In a real scenario, this would analyze fields of self.filtered_models
+        logger.debug("Mock analyze_dependencies called.")
+        self.dependencies = {}
 
     def discover_models(
         self,
-        package_names: list[str],  # Mock doesn't actually use package_names
+        packages: list[str],  # Renamed from package_names to match base class
         app_label: str = "django_app",
-        filter_function: Optional[Callable[[Type[ModelType]], bool]] = None,
+        user_filters: Optional[
+            Union[Callable[[Type], bool], list[Callable[[Type], bool]]]
+        ] = None,  # Renamed & updated type
+        # Removed unused mock-specific parameters like _source_module_override
     ) -> None:
-        """
-        Mock implementation: Populates discovered_models from the registered global state
-        or instance state, applying filters.
-        """
-        logger.debug(f"Mock discover_models called (packages ignored), app_label: {app_label}")
-        self.app_label = app_label
+        """Mock discovery: Populates filtered_models based on registered models and filters."""
+        logger.info("Mock discover_models called.")
         source_models = self._get_source_models()
+        self.all_models = source_models.copy()  # Store all found before filtering
+        self.filtered_models = {}
 
-        # Use the discovery logic from BaseDiscovery
-        super().discover_models(
-            package_names=[],  # Pass empty list as we use registered models
-            app_label=app_label,
-            filter_function=filter_function,
-            # Provide the source lookup directly to the base method
-            _source_module_override=None,  # Not needed
-            _initial_discovery_dict_override=source_models,
-        )
-
-        logger.debug(f"Mock discover_models finished. Discovered: {list(self.discovered_models.keys())}")
-        logger.debug(f"Filtered models: {list(self.filtered_models.keys())}")
-
-    def setup_dynamic_models(self, app_label: Optional[str] = None) -> dict[str, type[models.Model]]:
-        """
-        Mock implementation: Creates mock Django model classes for discovered/filtered models.
-        Uses globally registered Django models if available, otherwise creates new mocks.
-        Ensures relationships are mapped using the global accessor.
-        """
-        effective_app_label = app_label or self.app_label or "django_app"
-        logger.debug(f"Mock setup_dynamic_models called with app_label: {effective_app_label}")
-
-        created_django_models: dict[str, type[models.Model]] = {}
-        models_to_process = self.get_models_in_registration_order()  # Use ordered models
-
-        for model in models_to_process:
-            model_name = model.__name__
-            # Check if a Django model is already globally registered for this name
-            if model_name in _registered_django_models:
-                django_model = _registered_django_models[model_name]
-                logger.debug(f"Using pre-registered Django model for '{model_name}': {django_model.__name__}")
-            elif model_name in created_django_models:
-                django_model = created_django_models[model_name]
-                logger.debug(f"Using already created mock Django model for '{model_name}': {django_model.__name__}")
+        # Normalize user_filters
+        filters_to_apply = []
+        if user_filters:
+            if isinstance(user_filters, list):
+                filters_to_apply.extend(user_filters)
             else:
-                # Create a new mock Django model
-                logger.debug(f"Creating mock Django model for {model_name}")
-                # Use a consistent naming scheme, maybe just the model name if unique
-                django_model_name = f"{model_name}"  # Simple name matching
-                model_attrs = {
-                    "Meta": type("Meta", (), {"app_label": effective_app_label}),
-                    "__module__": f"{effective_app_label}.models",  # Mock module path
-                    # Add a field to avoid empty model issues in some Django versions
-                    "mock_id": models.AutoField(primary_key=True),
-                }
-                try:
-                    django_model = type(django_model_name, (models.Model,), model_attrs)
-                except TypeError as e:
-                    logger.error(f"Failed to create mock Django model '{django_model_name}': {e}")
-                    logger.error(f"Attributes attempted: {model_attrs}")
-                    continue  # Skip this model
+                filters_to_apply.append(user_filters)
 
-                logger.debug(f"Created mock Django model class {django_model_name}")
-                # Store locally created mock for this run
-                created_django_models[model_name] = django_model
-                # Optionally, register it globally? Might cause issues if not cleared.
-                # register_django_model(model_name, django_model)
+        for name, model in source_models.items():
+            is_eligible = self._default_eligibility_filter(model)
+            if is_eligible:
+                for user_filter in filters_to_apply:
+                    try:
+                        # Adapt filter signature if needed, BaseDiscovery expects Callable[[Type[TModel]], bool]
+                        if not user_filter(model):
+                            is_eligible = False
+                            break
+                    except Exception as e:
+                        logger.error(f"Error applying user filter to {name}: {e}")
+                        is_eligible = False
+                        break
 
-            # Ensure the relationship is mapped using the global accessor
-            _relationships.map_relationship(model, django_model)
+            if is_eligible:
+                self.filtered_models[name] = model
 
-        # Return the models created/used in *this* call
-        logger.debug(
-            f"setup_dynamic_models returning {len(created_django_models)} models created/mapped in this run: { {k: v.__name__ for k,v in created_django_models.items()} }"
-        )
-        # Note: This returns only newly created models in this run.
-        # To get ALL potentially relevant Django models, use get_registered_django_models()
-        return created_django_models
+        logger.info(f"Mock discovery finished. Filtered models: {list(self.filtered_models.keys())}")
+        # Call analyze_dependencies after filtering
+        self.analyze_dependencies()
 
-    # --- Methods to access global state (convenience) --- #
-    # These could be removed if direct use of global getters is preferred
+    def get_models_in_registration_order(self) -> list[Type]:
+        """Mock topological sort - just returns filtered models in arbitrary order."""
+        logger.debug("Mock get_models_in_registration_order called.")
+        # Add proper topological sort if dependencies are analyzed
+        return list(self.filtered_models.values())
 
+    # --- Mock-specific methods (kept if still relevant) --- #
     def get_relationship_accessor(self) -> RelationshipConversionAccessor:
         """Get the global RelationshipConversionAccessor."""
         return get_relationship_accessor()
