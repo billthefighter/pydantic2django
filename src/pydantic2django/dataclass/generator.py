@@ -32,11 +32,11 @@ class DataclassDjangoModelGenerator(
     def __init__(
         self,
         output_path: str,
-        packages: list[str],
         app_label: str,
         filter_function: Optional[Callable[[DataclassType], bool]],
         verbose: bool,
         # Accept specific discovery and factories, or create defaults
+        packages: list[str] | None = None,
         discovery_instance: Optional[DataclassDiscovery] = None,
         model_factory_instance: Optional[DataclassModelFactory] = None,
         field_factory_instance: Optional[DataclassFieldFactory] = None,  # Add field factory param
@@ -141,6 +141,7 @@ class DataclassDjangoModelGenerator(
             "is_dataclass_source": True,
             "is_pydantic_source": False,
             "has_context": False,  # Dataclasses likely don't generate separate context fields/classes
+            "field_definitions": carrier.django_field_definitions,  # Add the definitions dict
             # Add other specific details if needed, ensuring they access carrier correctly
             # Example: "source_model_module": carrier.source_model.__module__ if carrier.source_model else ""
         }

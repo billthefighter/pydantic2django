@@ -4,8 +4,8 @@ import inspect
 import logging
 from typing import Any, Union, get_args, get_origin
 
-# Changed import path
-from .core import BaseDiscovery
+# from .core import BaseDiscovery # Incorrect relative import
+from pydantic2django.core.discovery import BaseDiscovery  # Corrected import path
 
 logger = logging.getLogger(__name__)
 

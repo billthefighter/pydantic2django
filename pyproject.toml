@@ -81,7 +81,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = [
     "--ds=tests.settings",
-    "--no-migrations",
     "--cov=pydantic2django",
     "--cov-report=term-missing"
 ]

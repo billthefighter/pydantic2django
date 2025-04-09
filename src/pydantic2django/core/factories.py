@@ -33,6 +33,7 @@ class ConversionCarrier(Generic[SourceModelType]):
     class_name_prefix: str = "Django"  # Prefix for generated Django model name
     strict: bool = False  # Strict mode for field collisions
     used_related_names_per_target: dict[str, set[str]] = field(default_factory=dict)
+    django_field_definitions: dict[str, str] = field(default_factory=dict)  # Added field defs
 
     # --- Result fields (populated during conversion) ---
     django_fields: dict[str, models.Field] = field(default_factory=dict)
@@ -66,6 +67,7 @@ class FieldConversionResult:
     django_field: Optional[models.Field] = None
     context_field: Optional[Any] = None  # Holds original field_info if handled by context
     error_str: Optional[str] = None
+    field_definition_str: Optional[str] = None  # Added field definition string
 
     def __str__(self):
         status = "Success" if self.django_field else ("Context" if self.context_field else f"Error: {self.error_str}")
@@ -236,6 +238,7 @@ class BaseModelFactory(ABC, Generic[SourceModelType, SourceFieldType]):
         carrier.django_meta_class = None
         carrier.django_model = None
         carrier.model_context = None
+        carrier.django_field_definitions = {}  # Reset definitions dict
 
         # Core Steps
         self._process_source_fields(carrier)

@@ -138,60 +138,43 @@ class TypeMappingDefinition:
 
     def matches_type(self, python_type: Any) -> bool:
         """Check if this definition matches the given Python type."""
-        # Direct type equality check
-        if self.python_type == python_type:
-            return True
-
+        actual_type = python_type
         origin = get_origin(python_type)
         args = get_args(python_type)
 
         # Handle Optional[T]
         if origin is Union and type(None) in args and len(args) == 2:
-            non_none_type = next(arg for arg in args if arg is not type(None))
-            return self.matches_type(non_none_type)
+            actual_type = next((arg for arg in args if arg is not type(None)), None)
+            if actual_type is None:  # Handle Optional[NoneType]
+                return False
 
-        # Handle specific relationship types (List[Model] or Dict[Any, Model])
-        if self.is_relationship and self.django_field == models.ManyToManyField:
-            inner_type = None
-            if origin is list and len(args) == 1:
-                inner_type = args[0]
-            elif origin is dict and len(args) == 2:
-                inner_type = args[1]
+        # 1. Direct type equality check (most common case for simple types)
+        if self.python_type == actual_type:
+            return True
 
-            if inner_type:
-                # Check if inner_type is a BaseModel subclass or Any
-                # (Allow ManyToMany to match List[Any] or Dict[Any, Any] if needed? Decide later)
-                try:
-                    if inner_type is Any or (isinstance(inner_type, type) and issubclass(inner_type, BaseModel)):
-                        # Match if inner type is BaseModel or Any
-                        return True
-                except TypeError:  # Handle non-type inner_type if necessary
-                    pass
-
-        # Handle basic collection types matching JSONField
+        # 2. Special case for JSONField matching generic collections if not matched directly
+        # Check if this definition is for JSONField and the actual_type is a collection origin
         if self.django_field == models.JSONField:
-            if (
-                (origin is list and self.python_type is list)
-                or (origin is dict and self.python_type is dict)
-                or (origin is set and self.python_type is set)
-                or (origin is tuple and self.python_type is tuple)
-            ):
-                return True
+            actual_origin = get_origin(actual_type)  # Use origin from actual_type if unwrapped
+            if actual_origin in (list, dict, set, tuple):
+                # Check if this mapping's python_type matches the collection origin
+                if self.python_type == actual_origin:
+                    return True
 
-        # Handle direct ForeignKey relationship
-        if self.is_relationship and not origin and self.django_field == models.ForeignKey:
-            if isinstance(python_type, type) and issubclass(python_type, BaseModel):
-                return True
-
-        # Handle basic types
-        if isinstance(self.python_type, type) and isinstance(python_type, type):
-            if self.python_type is bool and python_type is not bool:
-                return False
-            if self.python_type is int and python_type is bool:
-                return False
+        # 3. Subclass check (use sparingly, mainly for things like EmailStr matching str)
+        # Ensure both are actual classes before checking issubclass
+        # Avoid comparing basic types like issubclass(int, str)
+        basic_types = (str, int, float, bool, list, dict, set, tuple, bytes)
+        if (
+            inspect.isclass(self.python_type)
+            and inspect.isclass(actual_type)
+            and self.python_type not in basic_types
+            and actual_type not in basic_types
+        ):
             try:
-                return issubclass(python_type, self.python_type)
+                return issubclass(actual_type, self.python_type)
             except TypeError:
-                return False
+                return False  # issubclass fails if args aren't classes
 
+        # If no match after all checks
         return False

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from django.db import models
 
@@ -194,3 +195,93 @@ class FieldSerializer:
             logger.error(f"Failed to serialize field '{field_name}' (Type: {type(field).__name__}): {e}", exc_info=True)
             # Fallback to a simple TextField to avoid crashing generation
             return f"models.TextField(help_text='Serialization failed for field {field_name}: {e}')"
+
+
+def generate_field_definition_string(
+    field_class: type[models.Field],
+    field_kwargs: dict[str, Any],
+    app_label: str,  # Needed for resolving 'self' in relationships
+) -> str:
+    """
+    Generates the string representation of a Django field definition from its class and kwargs.
+
+    Args:
+        field_class: The Django field class (e.g., models.CharField).
+        field_kwargs: A dictionary of keyword arguments for the field.
+        app_label: The app label of the model the field belongs to.
+
+    Returns:
+        The field definition string (e.g., "models.CharField(max_length=255)").
+    """
+    param_parts = []
+    # Need to import sanitize_string
+    from ...core.utils.strings import sanitize_string
+
+    sorted_kwargs = sorted(field_kwargs.items())
+
+    for key, value in sorted_kwargs:
+        # Special handling for relationship 'to' and 'through' fields
+        if key == "to" or key == "through":
+            model_name_str = None
+            if isinstance(value, str):
+                # Use string directly (e.g., 'self', 'app_label.ModelName')
+                model_name_str = value
+            elif isinstance(value, type) and issubclass(value, models.Model):
+                # Get name from model type
+                try:
+                    # Prefer app_label.ModelName format if possible
+                    meta = getattr(value, "_meta", None)
+                    if meta:
+                        app_label_val = getattr(meta, "app_label", None)
+                        object_name_val = getattr(meta, "object_name", None)  # Use object_name for class name
+                        if app_label_val and object_name_val:
+                            model_name_str = f"{app_label_val}.{object_name_val}"
+                        elif object_name_val:
+                            model_name_str = object_name_val  # Fallback to just name
+                        else:
+                            model_name_str = value.__name__  # Final fallback
+                    else:
+                        model_name_str = value.__name__  # Fallback if no _meta
+                except AttributeError:
+                    model_name_str = value.__name__  # Fallback on error
+            else:
+                # Fallback for unexpected types
+                logger.warning(f"Unexpected type for relationship '{key}' argument: {type(value)}. Using repr().")
+                model_name_str = repr(value)
+
+            if model_name_str:
+                # Ensure self is quoted correctly
+                if model_name_str == "self":
+                    param_parts.append(f"{key}='self'")
+                else:
+                    param_parts.append(f"{key}='{model_name_str}'")
+            else:
+                logger.error(
+                    f"Could not determine model name for relationship '{key}' argument: {value}. Omitting from definition."
+                )
+
+        # Special handling for on_delete
+        elif key == "on_delete":
+            if callable(value) and hasattr(value, "__name__"):
+                param_parts.append(f"on_delete=models.{value.__name__}")
+            else:
+                # Handle cases where it might already be a string or other repr?
+                # Defaulting to CASCADE if unresolvable for now
+                param_parts.append("on_delete=models.CASCADE")
+                logger.warning(f"Could not serialize on_delete value: {value}. Defaulting to CASCADE.")
+        # General kwarg serialization
+        else:
+            try:
+                # Use sanitize_string for string values to handle quotes/escapes
+                if isinstance(value, str):
+                    repr_value = f"'{sanitize_string(value)}'"
+                # Use repr for others (bool, int, float, complex types like choices)
+                else:
+                    repr_value = repr(value)
+                param_parts.append(f"{key}={repr_value}")
+            except Exception as e:
+                logger.warning(f"Could not serialize kwarg '{key}={value}' for field class {field_class.__name__}: {e}")
+                param_parts.append(f"{key}=None  # Serialization failed")
+
+    param_str = ", ".join(param_parts)
+    return f"models.{field_class.__name__}({param_str})"

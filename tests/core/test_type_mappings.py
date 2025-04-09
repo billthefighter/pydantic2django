@@ -66,7 +66,12 @@ class SampleEnum(Enum):
 # Test cases for basic Python types
 BASIC_TYPE_TEST_CASES = [
     pytest.param(
-        BasicTypeTestParams(python_type=str, django_field=models.TextField, sample_value="test string"),
+        BasicTypeTestParams(
+            python_type=str,
+            django_field=models.CharField,
+            sample_value="test string",
+            expected_attributes={"max_length": 255},
+        ),
         id="string-to-text-field",
     ),
     pytest.param(
@@ -278,9 +283,7 @@ def test_optional_type_handling():
     # Test Optional[str]
     mapping = TypeMapper.get_mapping_for_type(Optional[str])
     assert mapping is not None
-    assert mapping.django_field == models.TextField
-
-    # Test field attributes for Optional types
+    assert mapping.django_field == models.CharField
     attrs = TypeMapper.get_field_attributes(Optional[str])
     assert attrs.get("null") is True
     assert attrs.get("blank") is True

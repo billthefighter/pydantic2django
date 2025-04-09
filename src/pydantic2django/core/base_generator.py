@@ -5,7 +5,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import Generic, Optional, TypeVar
+from typing import Generic, Optional, TypeVar, cast
 
 import jinja2
 from django.db import models
@@ -30,7 +30,6 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
     def __init__(
         self,
         output_path: str,
-        packages: list[str],
         app_label: str,
         filter_function: Optional[Callable[[SourceModelType], bool]],
         verbose: bool,
@@ -38,6 +37,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         model_factory_instance: BaseModelFactory[SourceModelType, FieldInfoType],
         module_mappings: Optional[dict[str, str]],
         base_model_class: type[models.Model],
+        packages: list[str] | None = None,
     ):
         """
         Initialize the base generator.
@@ -66,8 +66,9 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self.import_handler = ImportHandler(module_mappings=module_mappings)
 
         # Initialize Jinja2 environment
-        # First look for templates in the package directory
-        package_templates_dir = os.path.join(os.path.dirname(__file__), "..", "templates")
+        # Look for templates in the django/templates subdirectory
+        # package_templates_dir = os.path.join(os.path.dirname(__file__), "..", "templates") # Old path
+        package_templates_dir = os.path.join(os.path.dirname(__file__), "..", "django", "templates")  # Corrected path
 
         # If templates don't exist in the package, use the ones relative to the execution?
         # This might need adjustment based on packaging/distribution.
@@ -87,11 +88,11 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         )
 
         # Register common custom filters
-        self.jinja_env.filters["clean_field_type_for_template"] = TypeHandler.clean_field_type_for_template
+        self.jinja_env.filters["format_type_string"] = TypeHandler.format_type_string
         # Add more common filters if needed
 
         # Add base model import
-        self.import_handler.add_import(base_model_class.__module__, base_model_class.__name__)
+        self.import_handler._add_type_import(base_model_class)
 
     # --- Abstract Methods to be Implemented by Subclasses ---
 
@@ -169,14 +170,13 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         if self.verbose:
             logger.info(f"Discovering models from packages: {self.packages}")
 
+        # Corrected call matching BaseDiscovery signature
         self.discovery_instance.discover_models(
-            self.packages,
-            app_label=self.app_label,
-            filter_function=self.filter_function,
+            self.packages, app_label=self.app_label, user_filters=self.filter_function
         )
 
         # Analyze dependencies after discovery
-        self.discovery_instance.analyze_dependencies(app_label=self.app_label)
+        self.discovery_instance.analyze_dependencies()
 
         if self.verbose:
             logger.info(f"Discovered {len(self.discovery_instance.filtered_models)} models after filtering.")
@@ -198,52 +198,42 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             A ConversionCarrier containing the results, or None if creation failed.
         """
         source_model_name = getattr(source_model, "__name__", str(source_model))
-        logger.info(f"Setting up Django model for: {source_model_name} in app '{self.app_label}'")
+        if self.verbose:
+            logger.info(f"Setting up Django model for {source_model_name}")
 
-        # Create a carrier specific to the factory's needs might be better,
-        # but for now, we adapt ConversionCarrier.
-        # Subclasses might need to override this if the factory requires a different carrier type.
-        carrier = ConversionCarrier[SourceModelType](
-            source_model=source_model,
+        # Instantiate the carrier here
+        carrier = ConversionCarrier(
+            source_model=cast(type[SourceModelType], source_model),
             meta_app_label=self.app_label,
-            # Other fields like django_model, model_context will be populated by the factory
+            base_django_model=self.base_model_class,
+            # Add other defaults/configs if needed, e.g., strict mode
+            strict=False,  # Example default
         )
 
         try:
-            # The factory is responsible for populating the carrier
-            self.model_factory_instance.make_django_model(carrier=carrier)
+            # Use the factory to process the source model and populate the carrier
+            self.model_factory_instance.make_django_model(carrier)  # Pass carrier to factory
 
             if carrier.django_model:
-                # Map relationships using the accessor linked to the discovery instance
-                # Ensure the relationship accessor uses the *same* discovery instance dependencies
-                self.model_factory_instance.relationship_accessor.map_relationship(
-                    pydantic_model=source_model,  # TODO: Rename pydantic_model param in accessor?
-                    django_model=carrier.django_model,
-                )
-                logger.info(f"Successfully created Django model: {carrier.django_model.__name__}")
-                self.carriers.append(carrier)  # Store the carrier for later processing
+                self.carriers.append(carrier)
+                if self.verbose:
+                    logger.info(f"Successfully processed {source_model_name} -> {carrier.django_model.__name__}")
                 return carrier
-            elif carrier.source_model:  # Check if source_model exists but django_model does not (Use source_model)
-                # This condition might indicate only context fields or an error
-                if carrier.model_context and carrier.model_context.context_fields:
-                    logger.info(
-                        f"Django model not created for {source_model_name}, but context fields exist. Storing carrier."
-                    )
-                    self.carriers.append(carrier)
-                    return carrier
-                else:
-                    # Log specific invalid fields if available on the carrier
-                    invalid_info = getattr(carrier, "invalid_fields", "No specific details.")
-                    logger.warning(
-                        f"Django model creation failed for {source_model_name}. Invalid fields/reason: {invalid_info}"
-                    )
-                    return None  # Failed to create Django model, and no context fallback
             else:
-                logger.error(f"Model factory failed to produce a Django model or context for {source_model_name}.")
-                return None
+                # Log if model creation resulted in None (e.g., only context fields)
+                # Check carrier.context_fields or carrier.invalid_fields for details
+                if carrier.context_fields and not carrier.django_fields and not carrier.relationship_fields:
+                    logger.info(f"Skipped Django model class for {source_model_name} - only context fields found.")
+                elif carrier.invalid_fields:
+                    logger.warning(
+                        f"Skipped Django model class for {source_model_name} due to invalid fields: {carrier.invalid_fields}"
+                    )
+                else:
+                    logger.warning(f"Django model was not generated for {source_model_name} for unknown reasons.")
+                return None  # Return None if no Django model was created
 
         except Exception as e:
-            logger.exception(f"Error during Django model setup for {source_model_name}: {e}", exc_info=True)
+            logger.error(f"Error processing {source_model_name} with factory: {e}", exc_info=True)
             return None
 
     def generate_model_definition(self, carrier: ConversionCarrier[SourceModelType]) -> str:
@@ -273,34 +263,13 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
 
         # --- Prepare Fields ---
         fields_info = []
-        if hasattr(carrier.django_model, "_meta"):
-            meta = carrier.django_model._meta
-            all_fields = getattr(meta, "fields", []) + getattr(meta, "many_to_many", [])
+        # Combine regular and relationship fields from the carrier
+        all_django_fields = {**carrier.django_fields, **carrier.relationship_fields}
 
-            # Get field definitions using the factory's field serializer
-            field_serializer = getattr(self.model_factory_instance.field_factory, "field_serializer", None)
-            if not field_serializer:
-                logger.error("Field serializer not found on field factory. Cannot generate field definitions.")
-                return ""  # Cannot proceed without serializer
-
-            for field in all_fields:
-                # Skip fields likely inherited from a common base like Pydantic2DjangoBaseClass
-                # Make this configurable?
-                # if field.name in ["id", "created_at", "updated_at", "object_id", "content_type"]: # Example common fields
-                #    continue
-                # Let's rely on subclasses filtering fields if necessary, base class includes all for now.
-
-                try:
-                    field_definition_str = field_serializer.serialize_field(field)
-                    # Basic cleaning (consider making this more robust or part of serializer)
-                    field_definition_str = field_definition_str.replace(
-                        "default=<class 'django.db.models.fields.NOT_PROVIDED'>", "null=True"
-                    )
-                    # Add field name and its definition string
-                    fields_info.append((field.name, field_definition_str))
-                except Exception as e:
-                    logger.error(f"Error serializing field '{field.name}' for model '{django_model_name}': {e}")
-                    # Decide whether to skip the field or raise the error
+        for field_name, field_object in all_django_fields.items():
+            # The field_object is already an instantiated Django field
+            # Add (name, object) tuple directly for the template
+            fields_info.append((field_name, field_object))
 
         # --- Prepare Meta ---
         meta_options = {}
@@ -326,7 +295,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
                 base_model_name = parent_class.__name__
                 # Add import for the parent if it's not the configured base_model_class
                 if parent_class != self.base_model_class:
-                    self.import_handler.add_import(parent_class.__module__, parent_class.__name__)
+                    self.import_handler._add_type_import(parent_class)
 
         # --- Prepare Context Class Info ---
         context_class_name = ""
@@ -343,10 +312,10 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             model_name=django_model_name,
             pydantic_model_name=source_model_name,  # Keep for potential use in template
             base_model_name=base_model_name,
-            context_class_name=context_class_name,
             fields=fields_info,
             meta=meta_options,
-            # Pass through extra context from subclass
+            app_label=self.app_label,
+            # Pass through extra context from subclass (should include field_definitions)
             **extra_context,
         )
 
@@ -396,9 +365,14 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
 
         # Reset state for this run
         self.carriers = []
-        self.import_handler.reset()  # Reset imports for the file
-        # Add base model import again after reset
-        self.import_handler.add_import(self.base_model_class.__module__, self.base_model_class.__name__)
+        self.import_handler.extra_type_imports.clear()
+        self.import_handler.pydantic_imports.clear()
+        self.import_handler.context_class_imports.clear()
+        self.import_handler.imported_names.clear()
+        self.import_handler.processed_field_types.clear()
+
+        # Re-add base model import after clearing
+        self.import_handler._add_type_import(self.base_model_class)
 
         model_definitions = []
         django_model_names = []  # For __all__

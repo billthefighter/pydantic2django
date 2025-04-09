@@ -36,6 +36,9 @@ if not settings.configured:
     django.setup()
 
 
+from pydantic2django.dataclass.discovery import DataclassDiscovery
+from pydantic2django.dataclass.generator import DataclassDjangoModelGenerator
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,14 +46,15 @@ def generate_models():
     """
     Generate Django models from PydanticAI
     """
-    discovery = ModelDiscovery()
-    discovery.discover_models(["pydantic_ai"], "pydantic_ai")
+    discovery = DataclassDiscovery()
+    # discovery.discover_models(["pydantic_ai"], "pydantic_ai") # Removed redundant call
 
-    generator = StaticDjangoModelGenerator(
+    generator = DataclassDjangoModelGenerator(
         output_path="generated_models.py",
-        app_label="pydantic_ai",
+        app_label="pai2django",
         filter_function=None,  # Remove filter to ensure all registered models are included
-        discovery_module=discovery,
+        packages=["pydantic_ai"],  # Added packages argument
+        discovery_instance=discovery,
         verbose=True,  # Add verbose logging
     )
     generator.generate()

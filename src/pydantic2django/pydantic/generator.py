@@ -191,6 +191,7 @@ class StaticPydanticModelGenerator(
             "is_pydantic_source": True,
             "is_dataclass_source": False,
             "has_context": has_context_for_this_model,
+            "field_definitions": carrier.django_field_definitions,
         }
 
     # --- Override generate_models_file to handle Pydantic context class generation ---

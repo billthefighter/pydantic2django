@@ -23,6 +23,9 @@ from pydantic_core import PydanticUndefined
 # Import the core definition
 from ..core.defs import PythonType, TypeMappingDefinition
 
+# Import FieldConversionResult
+from ..core.factories import FieldConversionResult
+
 # Import necessary utils
 from ..pydantic.utils.introspection import is_pydantic_model_field_optional
 
@@ -61,7 +64,7 @@ class TypeMapper:
     # Define all type mappings as TypeMappingDefinition instances
     TYPE_MAPPINGS: list[TypeMappingDefinition] = [
         # Simple Types - Order matters for issubclass checks (bool before int)
-        TypeMappingDefinition(str, models.TextField),
+        TypeMappingDefinition(str, models.CharField, max_length=255),
         TypeMappingDefinition(bool, models.BooleanField),  # Moved before int
         TypeMappingDefinition(int, models.IntegerField),
         TypeMappingDefinition(float, models.FloatField),
@@ -113,27 +116,29 @@ class TypeMapper:
         except TypeError:
             pass  # Not a class, continue checking
 
-        # Handle Pydantic models specifically (potential relationships)
-        try:
-            if inspect.isclass(python_type) and issubclass(python_type, BaseModel):
-                logger.debug(f"Type {python_type} is a Pydantic BaseModel, creating ForeignKey mapping.")
-                # Assume direct BaseModel reference is a ForeignKey
-                return cls.foreign_key(python_type)
-        except TypeError:
-            pass  # Not a class, continue checking
-
         # Handle Optional[T] -> Union[T, None]
         origin = get_origin(python_type)
         args = get_args(python_type)
-        is_optional = False
         actual_type = python_type
 
         if origin is Union and type(None) in args and len(args) == 2:
-            actual_type = next(arg for arg in args if arg is not type(None))
-            is_optional = True
-            logger.debug(f"Type is Optional, actual type: {actual_type}")
-            # Recursively find mapping for the non-None type
-            return cls.get_mapping_for_type(actual_type)
+            actual_type = next((arg for arg in args if arg is not type(None)), None)
+            logger.debug(f"Type is Optional, searching for mapping for underlying type: {actual_type}")
+            if actual_type is None:
+                logger.warning(f"Cannot map Optional[NoneType] for type: {python_type}")
+                return None
+            # Re-evaluate origin and args based on the unwrapped actual_type
+            origin = get_origin(actual_type)
+            args = get_args(actual_type)
+
+        # Handle Pydantic models specifically (potential relationships)
+        try:
+            if inspect.isclass(actual_type) and issubclass(actual_type, BaseModel):
+                logger.debug(f"Type {actual_type} is a Pydantic BaseModel, creating ForeignKey mapping.")
+                # Assume direct BaseModel reference is a ForeignKey
+                return cls.foreign_key(actual_type)
+        except TypeError:
+            pass  # Not a class, continue checking
 
         # Handle List[BaseModel] or Dict[str, BaseModel] for ManyToMany
         if origin in (list, dict) and args:
@@ -141,6 +146,12 @@ class TypeMapper:
             inner_type_index = 1 if origin is dict else 0
             if len(args) > inner_type_index:
                 inner_type = args[inner_type_index]
+                # Unwrap Optional for inner type if needed
+                inner_origin = get_origin(inner_type)
+                inner_args = get_args(inner_type)
+                if inner_origin is Union and type(None) in inner_args and len(inner_args) == 2:
+                    inner_type = next((arg for arg in inner_args if arg is not type(None)), None)
+
                 try:
                     if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
                         logger.debug(f"Type {python_type} is Collection[BaseModel], creating ManyToMany mapping.")
@@ -159,10 +170,11 @@ class TypeMapper:
         # These often map well to JSONField
         if origin in (dict, list, set, tuple):
             logger.debug(f"Type {python_type} is a collection, falling back to JSONField mapping.")
-            return cls.json_field(python_type)
+            return cls.json_field(actual_type)
 
         # If no mapping found after all checks
-        logger.warning(f"No direct mapping found for type: {python_type}. It might be handled contextually.")
+        # Log using actual_type for clarity if it was unwrapped
+        logger.warning(f"No direct mapping found for type: {actual_type}. It might be handled contextually.")
         return None
 
     # --- Class methods moved from TypeMappingDefinition --- #
@@ -310,19 +322,20 @@ class TypeMapper:
         cls,
         mapping_definition: TypeMappingDefinition,
         field_info: FieldInfo,
+        result: FieldConversionResult,
         field_kwargs: Optional[dict[str, Any]] = None,
-    ) -> models.Field:
+    ) -> None:
         """
         Instantiate the Django field based on the mapping definition and provided kwargs.
         This incorporates logic previously in TypeMappingDefinition.get_django_field.
+        Modifies the passed FieldConversionResult object with the instantiated field
+        and the final kwargs used.
 
         Args:
             mapping_definition: The TypeMappingDefinition describing the mapping.
             field_info: The Pydantic FieldInfo for additional context (e.g., default values).
+            result: The FieldConversionResult object to populate.
             field_kwargs: Additional kwargs to pass to the field constructor (e.g., from factory).
-
-        Returns:
-            An instantiated Django models.Field instance.
         """
         final_kwargs = mapping_definition.field_kwargs.copy()  # Start with mapping defaults
 
@@ -332,7 +345,7 @@ class TypeMapper:
 
         # -- Apply logic based on Pydantic FieldInfo --
         # Nullability based on Optional status
-        is_optional = cls.is_type_supported(field_info.annotation)  # Use TypeMapper's check
+        is_optional = is_pydantic_model_field_optional(field_info.annotation)
         final_kwargs["null"] = is_optional
         # Often makes sense to set blank=True if null=True
         final_kwargs["blank"] = is_optional
@@ -416,14 +429,21 @@ class TypeMapper:
             f"Instantiating {mapping_definition.django_field.__name__} for field '{field_name}' with final kwargs: {final_kwargs}"
         )
 
-        # Instantiate and return the field
         try:
-            return mapping_definition.django_field(**final_kwargs)
-        except TypeError as e:
+            # Instantiate the field and store it and kwargs in the result object
+            result.django_field = mapping_definition.django_field(**final_kwargs)
+            result.field_kwargs = final_kwargs  # Store the final kwargs
+
+        except Exception as e:
+            # Capture field name here for error message
+            field_name_err = getattr(field_info, "alias", "?")
             logger.error(
-                f"TypeError instantiating Django field {mapping_definition.django_field.__name__} for '{field_name}' with kwargs {final_kwargs}: {e}"
+                f"INSTANTIATION FAILED. Class: {mapping_definition.django_field.__name__}, Kwargs: {final_kwargs}",
+                exc_info=True,
             )
-            # Re-raise to indicate a problem with the generated kwargs or field type compatibility
-            raise ValueError(
-                f"Failed to instantiate Django field {mapping_definition.django_field.__name__} for '{field_name}'. Kwargs: {final_kwargs}. Error: {e}"
-            ) from e
+            # Set error on the result object instead of raising
+            result.error_str = f"Failed to instantiate Django field {mapping_definition.django_field.__name__} for '{field_name_err}'. Kwargs: {final_kwargs}. Error: {e}"
+            result.django_field = None  # Ensure field is None on error
+            result.field_kwargs = {}  # Clear kwargs on error
+
+        # Return type is None, modification happens on result object

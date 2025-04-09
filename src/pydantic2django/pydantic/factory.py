@@ -99,19 +99,66 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
             else:
                 # Instantiate regular Django field using TypeMapper's logic
                 try:
-                    # Pass relevant info to instantiate_django_field
-                    result.django_field = TypeMapper.instantiate_django_field(
+                    # Call instantiate_django_field, passing result to be modified
+                    TypeMapper.instantiate_django_field(
                         mapping_definition=mapping_definition,
                         field_info=field_info,
+                        result=result,  # Pass the result object
                         field_kwargs={},  # Start with empty kwargs, TypeMapper adds defaults
                     )
+                    # Check if instantiation failed (error would be set on result)
+                    if result.error_str:
+                        logger.error(
+                            f"Failed to instantiate Django field for '{model_name}.{field_name}': {result.error_str}"
+                        )
+                        result.context_field = field_info  # Fallback to context
+                        result.django_field = None
+                        return result  # Return the result with error state
+
                 except Exception as e:
-                    error_msg = f"Failed to instantiate Django field for '{model_name}.{field_name}': {e}"
+                    # This is an unexpected error *calling* instantiate_django_field
+                    error_msg = f"Unexpected error calling TypeMapper.instantiate_django_field for '{model_name}.{field_name}': {e}"
                     logger.error(error_msg, exc_info=True)
                     result.error_str = error_msg
                     result.context_field = field_info  # Fallback to context field on error
                     result.django_field = None
                     return result
+
+            # --- Generate Field Definition String (if successful) ---
+            if result.django_field:
+                try:
+                    from ..django.utils.serialization import generate_field_definition_string
+
+                    # We need the final kwargs used to instantiate the field.
+                    # For non-relationship fields, TypeMapper.instantiate_django_field handles this internally,
+                    # but doesn't expose the final kwargs easily. We need to reconstruct or capture them.
+                    # For relationship fields, _handle_relationship_field builds `rel_kwargs`.
+
+                    # Temporary Solution: Assume result.field_kwargs is populated by handlers
+                    # This requires _handle_relationship_field and TypeMapper.instantiate_django_field
+                    # to store the final kwargs in result.field_kwargs.
+                    # We'll need to modify those if they don't already.
+
+                    if result.field_kwargs:
+                        result.field_definition_str = generate_field_definition_string(
+                            type(result.django_field), result.field_kwargs, carrier.meta_app_label
+                        )
+                    else:
+                        logger.warning(
+                            f"Could not generate definition string for '{model_name}.{field_name}': final kwargs not found in result."
+                        )
+                        # Attempt basic serialization as fallback (might be incomplete)
+                        from ..django.utils.serialization import FieldSerializer
+
+                        result.field_definition_str = FieldSerializer.serialize_field(result.django_field)
+
+                except Exception as e:
+                    logger.error(
+                        f"Failed to generate field definition string for '{model_name}.{field_name}': {e}",
+                        exc_info=True,
+                    )
+                    # Keep the instantiated field but mark definition as failed?
+                    result.field_definition_str = f"# Error generating definition: {e}"
 
             # Return success or context/error from relationship handler/instantiation
             return result
@@ -199,7 +246,7 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
             return result
 
         # Check if target model is available in relationship manager
-        if target_pydantic_model not in self.available_relationships.available_pydantic_models:
+        if not self.available_relationships.is_source_model_known(target_pydantic_model):
             result.error_str = f"Target Pydantic model '{target_pydantic_model.__name__}' for field '{field_name}' is not known to RelationshipConversionAccessor. Ensure it was discovered."
             logger.warning(result.error_str)
             result.context_field = field_info  # Treat as context if target not discoverable
@@ -259,6 +306,7 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
                 f"Instantiating relationship {django_field_class.__name__} for '{field_name}' with kwargs: {rel_kwargs}"
             )
             result.django_field = django_field_class(**rel_kwargs)
+            result.field_kwargs = rel_kwargs  # Store the final kwargs used
         except Exception as e:
             error_msg = f"Failed to instantiate relationship field '{field_name}': {e}"
             logger.error(error_msg, exc_info=True)
@@ -306,6 +354,15 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):  # Use
         # --- Call Base Implementation for Core Logic ---
         super().make_django_model(carrier)
 
+        # --- Register Relationship Mapping (if successful) ---
+        if carrier.source_model and carrier.django_model:
+            logger.debug(
+                f"PydanticFactory: Registering mapping for {carrier.source_model.__name__} -> {carrier.django_model.__name__}"
+            )
+            self.relationship_accessor.map_relationship(
+                source_model=carrier.source_model, django_model=carrier.django_model
+            )
+
         # --- Cache Result ---
         if carrier.django_model and not carrier.existing_model:
             logger.debug(f"PydanticFactory: Caching conversion result for {model_key}")
@@ -340,8 +397,14 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):  # Use
                     conversion_result.django_field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)
                 ):
                     carrier.relationship_fields[field_name] = conversion_result.django_field
+                    # Also store the definition string
+                    if conversion_result.field_definition_str:
+                        carrier.django_field_definitions[field_name] = conversion_result.field_definition_str
                 else:
                     carrier.django_fields[field_name] = conversion_result.django_field
+                    # Also store the definition string
+                    if conversion_result.field_definition_str:
+                        carrier.django_field_definitions[field_name] = conversion_result.field_definition_str
             elif conversion_result.context_field:
                 carrier.context_fields[field_name] = conversion_result.context_field
             elif conversion_result.error_str:

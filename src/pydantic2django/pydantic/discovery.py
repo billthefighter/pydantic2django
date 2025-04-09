@@ -11,7 +11,7 @@ from ..core.discovery import BaseDiscovery
 logger = logging.getLogger(__name__)
 
 
-class PydanticDiscovery(BaseDiscovery[BaseModel]):
+class PydanticDiscovery(BaseDiscovery[type[BaseModel]]):
     """Discovers Pydantic models within specified packages."""
 
     # __init__ is inherited and sufficient

@@ -202,8 +202,10 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
                     return result
 
             # --- Instantiate ---
+            # Move class definition outside try block
+            django_field_class = mapping_definition.django_field
+            result.field_kwargs = field_kwargs  # Store final kwargs
             try:
-                django_field_class = mapping_definition.django_field
                 # Remove placeholder relationship args if they weren't resolved by helper
                 to_value = field_kwargs.get("to")
                 if mapping_definition.is_relationship and isinstance(to_value, str) and "Placeholder" in to_value:
@@ -214,9 +216,21 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
 
                 logger.debug(f"  -> Instantiating: models.{django_field_class.__name__}(**{field_kwargs})")
                 result.django_field = django_field_class(**field_kwargs)
+
+                # --- Generate Field Definition String ---
+                # Import from correct location
+                from ..django.utils.serialization import generate_field_definition_string
+
+                result.field_definition_str = generate_field_definition_string(
+                    django_field_class, field_kwargs, carrier.meta_app_label
+                )
+
             except Exception as e:
                 error_msg = f"Failed to instantiate Django field for {model_name}.{field_name}: {e}"
-                logger.error(error_msg, exc_info=True)
+                # Add detailed logging of kwargs
+                logger.error(
+                    f"INSTANTIATION FAILED. Class: {django_field_class.__name__}, Kwargs: {field_kwargs}", exc_info=True
+                )
                 result.error_str = error_msg
                 result.context_field = field_info  # Fallback to context
                 result.django_field = None
@@ -366,8 +380,14 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
                     conversion_result.django_field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)
                 ):
                     carrier.relationship_fields[field_name] = conversion_result.django_field
+                    # Also store the definition string
+                    if conversion_result.field_definition_str:
+                        carrier.django_field_definitions[field_name] = conversion_result.field_definition_str
                 else:
                     carrier.django_fields[field_name] = conversion_result.django_field
+                    # Also store the definition string
+                    if conversion_result.field_definition_str:
+                        carrier.django_field_definitions[field_name] = conversion_result.field_definition_str
             elif conversion_result.context_field:
                 carrier.context_fields[field_name] = conversion_result.context_field
             elif conversion_result.error_str:

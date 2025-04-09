@@ -7,7 +7,8 @@ SECRET_KEY = "test-key-not-for-production"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": "test_db.sqlite3",
+        # "NAME": "test_db.sqlite3", # Use in-memory DB for tests
+        "NAME": ":memory:",
     }
 }
 

@@ -15,16 +15,16 @@ class {{ model_name }}({{ base_model_name }}):
     {% endif %}
     """
 
-    {% for field_def in fields %}
-    {% if field_def is string %}
-    {{ field_def }}
+    {# Iterate through the field definitions dictionary #}
+    {% for field_name, field_def_str in field_definitions.items() %}
+    {{ field_name }} = {{ field_def_str }}
     {% else %}
-    {{ field_def[0] }} = {{ field_def[1] }}
-    {% endif %}
+    # No fields defined for this model.
+    pass
     {% endfor %}
 
-    class Meta({{ base_model_name }}.Meta):
-        app_label = "django_llm"
+    class Meta:
+        app_label = '{{ app_label }}'
         abstract = False
 
     {% if context_fields %}
