@@ -42,6 +42,11 @@ from pydantic2django.dataclass.generator import DataclassDjangoModelGenerator
 logger = logging.getLogger(__name__)
 
 
+def filter_messages_module(cls: type) -> bool:
+    """Filter function to only include dataclasses from the pydantic_ai.messages module."""
+    return getattr(cls, "__module__", None) == "pydantic_ai.messages"
+
+
 def generate_models():
     """
     Generate Django models from PydanticAI
@@ -52,8 +57,8 @@ def generate_models():
     generator = DataclassDjangoModelGenerator(
         output_path="generated_models.py",
         app_label="pai2django",
-        filter_function=None,  # Remove filter to ensure all registered models are included
-        packages=["pydantic_ai"],  # Added packages argument
+        filter_function=filter_messages_module,  # Use the filter function here
+        packages=["pydantic_ai"],  # Still discover within the package
         discovery_instance=discovery,
         verbose=True,  # Add verbose logging
     )

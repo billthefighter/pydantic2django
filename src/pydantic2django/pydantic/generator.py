@@ -16,10 +16,13 @@ from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 from pydantic2django.core.typing import TypeHandler
 
+# Import the new mapper
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
+
 # TypeMapper for field generation hints
 # Import base classes and specific components
 from pydantic2django.pydantic.discovery import PydanticDiscovery
-from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory
+from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory, create_pydantic_factory
 
 # Import the original factories needed by PydanticModelFactory
 # from pydantic2django.factory import DjangoFieldFactory as OriginalDjangoFieldFactory
@@ -47,28 +50,31 @@ class StaticPydanticModelGenerator(
         module_mappings: Optional[dict[str, str]] = None,
         base_model_class: type[models.Model] = Pydantic2DjangoBaseClass,
         # Pydantic specific factories can be passed or constructed here
-        field_factory_instance: Optional[PydanticFieldFactory] = None,
-        model_factory_instance: Optional[PydanticModelFactory] = None,
+        # NOTE: Injecting factory instances is less preferred now due to mapper dependency
+        # field_factory_instance: Optional[PydanticFieldFactory] = None,
+        # model_factory_instance: Optional[PydanticModelFactory] = None,
+        # Inject mapper instead?
+        bidirectional_mapper_instance: Optional[BidirectionalTypeMapper] = None,
     ):
         # 1. Initialize Pydantic-specific discovery
         # Use provided instance or create a default one
         self.pydantic_discovery_instance = discovery_module or PydanticDiscovery()
 
-        # 2. Initialize RelationshipAccessor (needed by factories)
-        # Note: Relies on discovery dependencies being populated later by base class discover_models()
-        # The factory instances passed to the base class __init__ will use this.
+        # 2. Initialize RelationshipAccessor (needed by factories and mapper)
         self.relationship_accessor = RelationshipConversionAccessor()
 
-        # 3. Initialize Pydantic-specific factories (if not provided)
-        # Use provided instances or create defaults using the relationship_accessor
-        self.pydantic_field_factory = field_factory_instance or PydanticFieldFactory(
-            available_relationships=self.relationship_accessor
-        )
-        self.pydantic_model_factory = model_factory_instance or PydanticModelFactory(
-            field_factory=self.pydantic_field_factory, relationship_accessor=self.relationship_accessor
+        # 3. Initialize BidirectionalTypeMapper (pass relationship accessor)
+        self.bidirectional_mapper = bidirectional_mapper_instance or BidirectionalTypeMapper(
+            relationship_accessor=self.relationship_accessor
         )
 
-        # 4. Call the base class __init__ with all required arguments
+        # 4. Initialize Pydantic-specific factories (pass mapper and accessor)
+        # Remove dependency on passed-in factory instances, create them here
+        self.pydantic_model_factory = create_pydantic_factory(
+            relationship_accessor=self.relationship_accessor, bidirectional_mapper=self.bidirectional_mapper
+        )
+
+        # 5. Call the base class __init__ with all required arguments
         super().__init__(
             output_path=output_path,
             packages=packages or ["pydantic_models"],  # Default Pydantic package
@@ -76,17 +82,17 @@ class StaticPydanticModelGenerator(
             filter_function=filter_function,
             verbose=verbose,
             discovery_instance=self.pydantic_discovery_instance,  # Pass the specific discovery instance
-            model_factory_instance=self.pydantic_model_factory,  # Pass the specific model factory
+            model_factory_instance=self.pydantic_model_factory,  # Pass the newly created model factory
             module_mappings=module_mappings,
             base_model_class=base_model_class,
             # Jinja setup is handled by base class
         )
 
-        # 5. Pydantic-specific Jinja setup or context generator
+        # 6. Pydantic-specific Jinja setup or context generator
         # Context generator needs the jinja_env from the base class
         self.context_generator = ContextClassGenerator(jinja_env=self.jinja_env)
 
-        # 6. Track context-specific info during generation (reset in generate_models_file)
+        # 7. Track context-specific info during generation (reset in generate_models_file)
         self.context_definitions: list[str] = []
         self.model_has_context: dict[str, bool] = {}
         self.context_class_names: list[str] = []
@@ -137,8 +143,7 @@ class StaticPydanticModelGenerator(
             # --- Pydantic Specific ---
             "context_definitions": self.context_definitions,  # Populated in generate_models_file override
             "all_models": [  # This seems redundant if django_model_names covers __all__
-                f"'{name}'"
-                for name in django_model_names  # Use Django names for __all__ consistency?
+                f"'{name}'" for name in django_model_names  # Use Django names for __all__ consistency?
             ],
             "context_class_names": self.context_class_names,  # Populated in generate_models_file override
             "model_has_context": self.model_has_context,  # Populated in generate_models_file override
