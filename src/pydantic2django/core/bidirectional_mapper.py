@@ -191,22 +191,31 @@ class BidirectionalTypeMapper:
                 and self.relationship_accessor.is_source_model_known(type_to_match)
             )
         except TypeError:
-            # issubclass raises TypeError if type_to_match is not a class (e.g., Literal)
             is_known_model = False
 
         if is_known_model:
-            # This should generally be handled by get_django_mapping before calling this,
-            # but include a basic check here for robustness or direct calls.
-            # Prioritize O2O/FK based on some criteria? Pydantic field name or convention?
-            # For now, let scoring handle it or assume get_django_mapping sorts it out.
-            # We might need to add hints via FieldInfo or naming conventions if conflicts arise.
-            logger.debug(f"Type {type_to_match.__name__} is a known related model. Checking FK/O2O scores.")
-            # Let FK/O2O scores compete in the main loop below.
-            pass  # Continue to scoring loop
+            # Directly select ForeignKeyMapping for known related models, bypassing scoring loop.
+            # O2O handling might require specific FieldInfo hints or separate logic if needed.
+            logger.debug(
+                f"Type {type_to_match.__name__} is a known related model. Selecting ForeignKeyMapping directly."
+            )
+            best_unit = ForeignKeyMapping
+            # Update cache and return immediately
+            self._pydantic_cache[cache_key] = best_unit
+            return best_unit
+        # else:
+        # This should generally be handled by get_django_mapping before calling this,
+        # but include a basic check here for robustness or direct calls.
+        # Prioritize O2O/FK based on some criteria? Pydantic field name or convention?
+        # For now, let scoring handle it or assume get_django_mapping sorts it out.
+        # We might need to add hints via FieldInfo or naming conventions if conflicts arise.
+        # logger.debug(f"Type {type_to_match.__name__} is a known related model. Checking FK/O2O scores.")
+        # Let FK/O2O scores compete in the main loop below.
+        # pass  # Continue to scoring loop
 
-        # M2M (List[KnownModel]) is handled in get_django_mapping
+        # M2M (List[KnownModel]) is handled in get_django_mapping, not here.
 
-        # --- Scoring Loop --- #
+        # --- Scoring Loop (Only if not a known related model) --- #
         # Use type_to_match (unwrapped) for matching
         for unit_cls in self._registry:
             try:  # Add try-except around matches call for robustness
@@ -367,24 +376,35 @@ class BidirectionalTypeMapper:
         instance_unit = unit_cls()  # Instantiate to call methods
 
         # --- Determine Django Field Type ---
-        # Special handling for Enum/Literal which might change the field type dynamically
-        if unit_cls is EnumFieldMapping:
-            # EnumFieldMapping.pydantic_to_django_kwargs might determine field type (e.g. Int vs Char)
-            # We need a way for it to communicate this back. Let's make pydantic_to_django_kwargs
-            # return the type *as well* or have a separate method?
-            # Alternative: Instantiate first, call a method to get the type, then get kwargs.
-            temp_instance = EnumFieldMapping()  # Instantiate Enum mapping
-            temp_kwargs_for_type = temp_instance.pydantic_to_django_kwargs(base_py_type, field_info)
-            # Let's assume for now pydantic_to_django_kwargs *doesn't* change the type defined on the class
-            # And that the type is correctly set during EnumFieldMapping.matches or init?
-            # This needs refinement in EnumFieldMapping.
-            django_field_type = instance_unit.django_field_type  # Use type from instantiated unit
-        else:
-            django_field_type = instance_unit.django_field_type
+        # Start with the type defined on the selected unit class
+        django_field_type = instance_unit.django_field_type
 
-        # --- Get Kwargs ---
-        # Pass base_py_type and field_info to kwargs method
+        # --- Get Kwargs (before potentially overriding field type for Enums) ---
         kwargs = instance_unit.pydantic_to_django_kwargs(base_py_type, field_info)
+
+        # --- Special Handling for Enums/Literals ---
+        if unit_cls is EnumFieldMapping:
+            # Check the hint returned by the kwargs method
+            field_type_hint = kwargs.pop("_field_type_hint", None)
+            if field_type_hint and isinstance(field_type_hint, type) and issubclass(field_type_hint, models.Field):
+                if field_type_hint == models.IntegerField and django_field_type != models.IntegerField:
+                    logger.debug(
+                        f"Overriding Enum default {django_field_type.__name__} with IntegerField based on values."
+                    )
+                    django_field_type = models.IntegerField
+                elif field_type_hint == models.CharField and django_field_type != models.CharField:
+                    logger.debug(
+                        f"Overriding Enum default {django_field_type.__name__} with CharField based on values."
+                    )
+                    django_field_type = models.CharField
+                # Ensure max_length is removed if type becomes IntegerField
+                if django_field_type == models.IntegerField:
+                    kwargs.pop("max_length", None)
+            else:
+                logger.warning("EnumFieldMapping selected but failed to get valid field type hint from kwargs.")
+        # else:
+        # For non-enum units, the field type is determined by the class attribute
+        # django_field_type = instance_unit.django_field_type # Already assigned
 
         # --- Handle Relationships --- #
         # This section needs to run *after* unit selection but *before* final nullability checks
@@ -430,12 +450,11 @@ class BidirectionalTypeMapper:
         # Apply nullability. M2M fields cannot be null in Django.
         if django_field_type != models.ManyToManyField:
             kwargs["null"] = is_optional
-            # Set blank=True if null=True for non-text fields? Django convention.
-            # Text fields (CharField, TextField) often have null=False, blank=True.
-            # Let individual units handle 'blank' via kwargs method if needed.
-            # Base default: set blank=True if null=True for convenience.
-            if is_optional:
-                kwargs.setdefault("blank", True)  # Set blank=True if not already set by unit
+            # Explicitly set blank based on optionality.
+            # Override if blank is not already set OR if it was set to False/None.
+            # Preserve blank=True if set by a unit (e.g., M2M).
+            if kwargs.get("blank") is not True:
+                kwargs["blank"] = is_optional
 
         return django_field_type, kwargs
 
