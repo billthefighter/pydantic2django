@@ -102,17 +102,24 @@ class TypeMappingUnit:
             dj_default = dj_field.get_default()
             if dj_default is not models.fields.NOT_PROVIDED:
                 if callable(dj_default):
+                    factory_set = False
                     # Map known callable defaults to factory
-                    # Check type for dict factory
-                    if isinstance(dj_default, dict):  # Fix E721
+                    if dj_default is dict:
                         kwargs["default_factory"] = dict
-                    # Add other known callable mappings if needed
+                        factory_set = True
+                    elif dj_default is list:
+                        kwargs["default_factory"] = list
+                        factory_set = True
+                    # Add other known callable mappings if needed (e.g., set, datetime.now)
                     else:
                         logger.debug(
                             f"Django field '{dj_field.name}' has an unmapped callable default ({dj_default}), "
                             "not mapping to Pydantic default/default_factory."
                         )
-                # Only add non-None defaults. Let Optional handle None.
+                    # Do not add default= if factory was set
+                    if factory_set:
+                        kwargs.pop("default", None)
+                # Only add non-None defaults if factory was NOT set.
                 elif dj_default is not None:
                     kwargs["default"] = dj_default
         # Removed implicit default='' etc.
@@ -488,6 +495,13 @@ class JsonFieldMapping(TypeMappingUnit):
     def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
         return super().pydantic_to_django_kwargs(py_type, field_info)
 
+    def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
+        # Get base kwargs (handles title, default_factory for dict/list)
+        kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
+        # Remove max_length if present, JSON doesn't use it
+        kwargs.pop("max_length", None)
+        return kwargs
+
 
 class EnumFieldMapping(TypeMappingUnit):
     python_type = Enum  # Placeholder, actual enum type determined dynamically
@@ -627,9 +641,13 @@ class BidirectionalTypeMapper:
             BinaryFieldMapping,
             FloatFieldMapping,
             BoolFieldMapping,
-            TextFieldMapping,  # Before StrFieldMapping
-            StrFieldMapping,  # Catches CharField
-            IntFieldMapping,  # Catches IntegerField, SmallIntegerField, BigIntegerField
+            # Str/Text: TextField first (no max_length hint), StrField as fallback (max_length hint)
+            TextFieldMapping,  # Handles str without max_length hint
+            StrFieldMapping,  # Default for str (CharField)
+            # Specific Int types first
+            BigIntFieldMapping,  # Map int to BigInt before Int
+            SmallIntFieldMapping,
+            IntFieldMapping,
             # Enum handled dynamically by find method
         ]
         return ordered_units
@@ -676,8 +694,19 @@ class BidirectionalTypeMapper:
                         continue
                     # Use direct equality which works for primitives (int, bool, str, float, bytes, etc.) and types like Any  # noqa: E501
                     if py_type == unit_cls.python_type:
-                        result_unit = unit_cls
-                        break  # Found exact match
+                        # If py_type is str, we need to be careful not to break early on SlugFieldMapping etc.
+                        if py_type is str and unit_cls not in (StrFieldMapping, TextFieldMapping):
+                            # Found an exact str match, but it's not the base Str or Text mapping.
+                            # Assign it as a potential candidate but continue searching
+                            # in case StrFieldMapping or TextFieldMapping match later.
+                            if result_unit is None:  # Only assign if we haven't found a subclass match yet
+                                result_unit = unit_cls
+                            continue  # Keep searching
+                        else:
+                            # Found an exact match for a non-str type, OR
+                            # Found the exact match for StrFieldMapping or TextFieldMapping.
+                            result_unit = unit_cls
+                            break  # Found the definitive exact match
 
                 # 2. Subclass match pass (if no exact match found)
                 if result_unit is None:
@@ -888,71 +917,67 @@ class BidirectionalTypeMapper:
     def get_pydantic_mapping(self, dj_field: models.Field) -> tuple[Any, dict[str, Any]]:
         """Get the corresponding Pydantic type hint and FieldInfo kwargs for a Django Field."""
         dj_field_type = type(dj_field)
-        unit_cls = self._find_unit_for_django_field(dj_field_type)
+        is_optional = dj_field.null
+        is_choices = bool(dj_field.choices)
 
-        if not unit_cls:
-            logger.warning(f"No mapping unit for {dj_field_type.__name__}, falling back to Any.")
-            pydantic_type = Optional[Any] if dj_field.null else Any
-            return pydantic_type, {}  # No specific FieldInfo kwargs
-            # raise MappingError(f"Could not find mapping unit for Django field type: {dj_field_type.__name__}")
+        # --- Find base unit (ignoring choices for now) ---
+        base_unit_cls = self._find_unit_for_django_field(dj_field_type)
 
-        instance_unit = unit_cls()  # Instantiate
-        base_pydantic_type = instance_unit.python_type
-        field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
+        if not base_unit_cls:
+            logger.warning(f"No base mapping unit for {dj_field_type.__name__}, falling back to Any.")
+            pydantic_type = Optional[Any] if is_optional else Any
+            return pydantic_type, {}
 
+        base_instance_unit = base_unit_cls()
+        base_pydantic_type = base_instance_unit.python_type
+
+        # --- Determine Final Pydantic Type (including choices, relationships, optionality) ---
         final_pydantic_type = base_pydantic_type
 
-        # --- Handle Special Cases based on Django Field Type --- #
-        is_auto_pk = dj_field.primary_key and isinstance(
-            dj_field, (models.AutoField, models.BigAutoField, models.SmallAutoField)
-        )
-        if is_auto_pk:
-            # Force Auto PKs to Optional[int] regardless of unit found
-            final_pydantic_type = Optional[int]
-
-        # --- Handle Relationships --- #
-        if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+        if is_choices:
+            # Type should be the base type (str/int) found by base_unit_cls
+            # The generator will create the Enum/Literal later using choices from kwargs
+            pass  # Keep final_pydantic_type as base_pydantic_type
+        elif base_unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
             related_dj_model = getattr(dj_field, "related_model", None)
             if not related_dj_model:
                 raise MappingError(f"Cannot determine related Django model for field '{dj_field.name}'")
 
-            # Get the *target* Pydantic model from the accessor
             target_pydantic_model = self.relationship_accessor.get_pydantic_model_for_django(related_dj_model)
             if not target_pydantic_model:
                 logger.warning(
                     f"Cannot map relationship: No corresponding Pydantic model found for Django model "
-                    f"'{related_dj_model._meta.label if hasattr(related_dj_model, '_meta') else related_dj_model.__name__}'. "  # noqa: E501
+                    f"'{related_dj_model._meta.label if hasattr(related_dj_model, '_meta') else related_dj_model.__name__}'. "
                     f"Using placeholder '{base_pydantic_type}'."
                 )
-                # Keep the placeholder type (Any or List[Any])
-                final_pydantic_type = base_pydantic_type
+                final_pydantic_type = base_pydantic_type  # Keep placeholder
             else:
-                if unit_cls == ManyToManyFieldMapping:
-                    final_pydantic_type = list[target_pydantic_model]
+                if base_unit_cls == ManyToManyFieldMapping:
+                    final_pydantic_type = list[target_pydantic_model]  # Use typing.List
                 else:  # FK or O2O
                     final_pydantic_type = target_pydantic_model
 
-        # --- Handle Choices -> Literal (if not already handled by a specific Enum mapping) --- #
-        # Removed dynamic Literal generation logic
-        # TODO: Add Enum mapping from Django choices back to Pydantic Enum?
-        # if unit_cls not in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping) and dj_field.choices:
-        # Check if a specific Enum mapping already handled this? How?
-        # For now, choices are added to json_schema_extra by the base field mappings
-        # pass
+        # AutoPK override (after relationship resolution)
+        is_auto_pk = dj_field.primary_key and isinstance(
+            dj_field, (models.AutoField, models.BigAutoField, models.SmallAutoField)
+        )
+        if is_auto_pk:
+            final_pydantic_type = Optional[int]  # Force Auto PKs to Optional[int]
 
-        # Apply optionality AFTER relationship/Literal resolution AND AutoPK override
-        if not is_auto_pk and dj_field.null and unit_cls != ManyToManyFieldMapping:
-            # Ensure we don't re-wrap Optional[Optional[...]] or override AutoPK Optional[int]
+        # Apply optionality AFTER relationship/Literal/AutoPK resolution
+        if is_optional and not is_auto_pk and base_unit_cls != ManyToManyFieldMapping:
             if get_origin(final_pydantic_type) is not Optional:
                 final_pydantic_type = Optional[final_pydantic_type]
 
+        # --- Generate FieldInfo Kwargs --- #
+        # Use EnumFieldMapping for kwargs if choices exist, otherwise use base unit
+        kwargs_unit_cls = EnumFieldMapping if is_choices else base_unit_cls
+        instance_unit = kwargs_unit_cls()
+        field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
+
         # Clean up redundant default=None for Optional fields, unless it's an AutoPK override
-        if dj_field.null and field_info_kwargs.get("default") is None:
-            # Exclude M2M here too
-            is_auto_pk_field = dj_field.primary_key and isinstance(
-                dj_field, (models.AutoField, models.BigAutoField, models.SmallAutoField)
-            )
-            if not is_auto_pk_field and unit_cls != ManyToManyFieldMapping:
+        if is_optional and field_info_kwargs.get("default") is None:
+            if not is_auto_pk and base_unit_cls != ManyToManyFieldMapping:
                 field_info_kwargs.pop("default", None)
 
         return final_pydantic_type, field_info_kwargs
