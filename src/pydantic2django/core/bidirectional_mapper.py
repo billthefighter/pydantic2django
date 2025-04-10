@@ -150,52 +150,59 @@ class BidirectionalTypeMapper:
     def _find_unit_for_pydantic_type(
         self, py_type: Any, field_info: Optional[FieldInfo] = None
     ) -> Optional[type[TypeMappingUnit]]:
-        """Find the best matching mapping unit for a Pydantic/Python type using the `matches` score."""
+        """
+        Find the best mapping unit for a given Pydantic type and FieldInfo.
+        Uses a scoring system based on the `matches` classmethod of each unit.
+        Handles Optional unwrapping and caching.
+        """
+        original_type_for_cache = py_type  # Use the original type as the cache key
 
-        # --- Handle Optional Type --- #
-        # Store original type for cache key, use unwrapped type for matching
-        original_type_for_cache = py_type
-        # Use this variable consistently after the Optional check
-        type_to_match = py_type
-        origin = get_origin(type_to_match)
+        # --- Unwrap Optional ---
+        origin = get_origin(py_type)
         if origin is Optional:
-            args = get_args(type_to_match)
-            # Assign the unwrapped type to the variable used throughout the function
+            args = get_args(py_type)
+            # Get the first non-None type argument
             type_to_match = next((arg for arg in args if arg is not type(None)), Any)
-            logger.debug(f"Unwrapped Optional type {original_type_for_cache} to {type_to_match} for matching.")
+            logger.debug(f"Unwrapped Optional[{type_to_match.__name__}] to {type_to_match.__name__}")
+        else:
+            type_to_match = py_type  # Use the original type if not Optional
 
-        # --- Caching --- #
-        # Cache key uses the original type (including Optional)
-        cache_key = (
-            repr(original_type_for_cache) if not isinstance(original_type_for_cache, type) else original_type_for_cache
-        )
+        logger.debug(f"Type after unwrapping Optional: {type_to_match} (type: {type(type_to_match)})")
+
+        # --- Cache Check ---
+        # Re-enable caching
+        cache_key = (original_type_for_cache, field_info)
         if cache_key in self._pydantic_cache:
-            # TODO: Potentially re-evaluate cache if field_info is present?
+            # logger.debug(f"Cache hit for {cache_key}")
             return self._pydantic_cache[cache_key]
+        # logger.debug(f"Cache miss for {cache_key}")
 
-        # Use the unwrapped type (type_to_match) from here on
-        origin = get_origin(type_to_match)  # Origin of the unwrapped type
-
-        # --- Scoring Logic ---
-        logger.debug(
-            f"Starting scoring loop with type_to_match: {type_to_match} ({type(type_to_match)}) and field_info: {field_info}"
-        )
-
-        best_unit = None
+        # --- Initialization ---
+        best_unit: Optional[type[TypeMappingUnit]] = None
         highest_score = 0.0
-        scores = {}  # For debugging
+        scores: dict[str, float | str] = {}  # Store scores for debugging
 
-        # --- Handle Special Cases Directly (might bypass scoring loop) ---
-        # Using type_to_match (the unwrapped type)
-        # 1. Known Relationship Model
-        if inspect.isclass(type_to_match) and issubclass(type_to_match, BaseModel):
-            if self.relationship_accessor.is_source_model_known(type_to_match):
-                best_unit = ForeignKeyMapping
-                self._pydantic_cache[cache_key] = best_unit  # Cache using original key
-                return best_unit
-            else:
-                logger.debug(f"Pydantic type {type_to_match.__name__} is an unknown BaseModel, will use scoring.")
-                pass
+        # --- Relationship Check (Specific Model Types) --- #
+        # Check if the unwrapped type is a known Pydantic model for relationships *first*
+        try:
+            is_known_model = (
+                inspect.isclass(type_to_match)
+                and issubclass(type_to_match, BaseModel)
+                and self.relationship_accessor.is_source_model_known(type_to_match)
+            )
+        except TypeError:
+            # issubclass raises TypeError if type_to_match is not a class (e.g., Literal)
+            is_known_model = False
+
+        if is_known_model:
+            # This should generally be handled by get_django_mapping before calling this,
+            # but include a basic check here for robustness or direct calls.
+            # Prioritize O2O/FK based on some criteria? Pydantic field name or convention?
+            # For now, let scoring handle it or assume get_django_mapping sorts it out.
+            # We might need to add hints via FieldInfo or naming conventions if conflicts arise.
+            logger.debug(f"Type {type_to_match.__name__} is a known related model. Checking FK/O2O scores.")
+            # Let FK/O2O scores compete in the main loop below.
+            pass  # Continue to scoring loop
 
         # M2M (List[KnownModel]) is handled in get_django_mapping
 
@@ -203,36 +210,51 @@ class BidirectionalTypeMapper:
         # Use type_to_match (unwrapped) for matching
         for unit_cls in self._registry:
             try:  # Add try-except around matches call for robustness
+                # Pass the unwrapped type to matches
                 score = unit_cls.matches(type_to_match, field_info)
                 if score > highest_score:
                     highest_score = score
                     best_unit = unit_cls
+                    # Store the winning score as well
+                    scores[unit_cls.__name__] = score  # Overwrite if it was a lower score before
                 elif score > 0:  # Log non-winning positive scores too
-                    scores[unit_cls.__name__] = score
+                    # Only add if not already present (first positive score encountered)
+                    scores.setdefault(unit_cls.__name__, score)
             except Exception as e:
                 logger.error(f"Error calling {unit_cls.__name__}.matches for {type_to_match}: {e}", exc_info=True)
                 scores[unit_cls.__name__] = f"ERROR: {e}"  # Log error in scores dict
 
-        logger.debug(f"Scores for {type_to_match} ({field_info=}): {scores}")
+        # Sort scores for clearer logging (highest first)
+        sorted_scores = dict(
+            sorted(scores.items(), key=lambda item: item[1] if isinstance(item[1], (int, float)) else -1, reverse=True)
+        )
+        logger.debug(
+            f"Scores for {original_type_for_cache} (unwrapped: {type_to_match}, {field_info=}): {sorted_scores}"
+        )
 
         # --- Handle Fallbacks (Collections/Any) --- #
         if best_unit is None and highest_score == 0.0:
             # Use type_to_match (unwrapped) and its origin
-            if origin in (dict, list, set, tuple) or type_to_match in (dict, list, set, tuple):
+            # Check origin of the *unwrapped* type
+            unwrapped_origin = get_origin(type_to_match)
+            if unwrapped_origin in (dict, list, set, tuple) or type_to_match in (dict, list, set, tuple):
                 logger.debug(f"Type {type_to_match} did not match any unit directly, falling back for collection type.")
+                # Re-check score for JsonFieldMapping explicitly if it wasn't the best_unit
                 json_score = JsonFieldMapping.matches(type_to_match, field_info)
                 if json_score > 0:
                     best_unit = JsonFieldMapping
-                else:
-                    logger.warning(f"Even JsonFieldMapping did not match fallback collection type: {type_to_match}")
+                    logger.debug(f"Selected JsonFieldMapping as fallback for collection {type_to_match}")
+                else:  # Should not happen if JsonFieldMapping.matches covers collections
+                    logger.warning(f"JsonFieldMapping did not match fallback collection type: {type_to_match}")
             elif type_to_match is Any:
                 logger.debug("Type is Any, falling back to JsonFieldMapping.")
                 # Check score first in case Any has a specific override somewhere
                 json_score = JsonFieldMapping.matches(type_to_match, field_info)
-                if json_score > 0:
+                if json_score > 0:  # JsonFieldMapping.matches should return > 0 for Any
                     best_unit = JsonFieldMapping
+                    logger.debug("Selected JsonFieldMapping as fallback for Any type.")
                 else:  # Should not happen with current JsonFieldMapping.matches
-                    logger.warning("Even JsonFieldMapping did not match Any type.")
+                    logger.warning("JsonFieldMapping did not match Any type.")
 
         # Final Logging
         if best_unit is None:
@@ -240,6 +262,7 @@ class BidirectionalTypeMapper:
                 f"No specific mapping unit found for Python type: {original_type_for_cache} (unwrapped to {type_to_match}) with field_info: {field_info}"
             )
 
+        # Re-enable cache write
         self._pydantic_cache[cache_key] = best_unit  # Cache using original key
         return best_unit
 

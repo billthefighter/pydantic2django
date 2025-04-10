@@ -288,10 +288,12 @@ class StrFieldMapping(TypeMappingUnit):  # Base for Char/Text
             # TODO: Also check field_info.json_schema_extra? Some libraries put constraints there.
 
             if has_max_length:
-                return 1.1  # Higher score than exact match (1.0) for plain str if max_length is specified
+                # Higher score than TextFieldMapping's 1.0 for plain str,
+                # but lower than SlugField's enhanced score with hints.
+                return 1.1
             else:
-                # If no max_length hint, give a lower score than TextFieldMapping
-                return 0.9  # Lower score than TextFieldMapping's 1.0 for plain str
+                # If no max_length hint, give a lower score than TextFieldMapping (1.0)
+                return 0.9
         return base_score  # Return base score for non-str types (e.g., subclass check)
 
     def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
@@ -339,11 +341,12 @@ class TextFieldMapping(StrFieldMapping):
             # TODO: Also check field_info.json_schema_extra?
 
             if not has_max_length:
-                # Prefer TextField for plain str with no length constraint
-                return 1.0  # Base exact match score
+                # Prefer TextField (1.0) for plain str with no length constraint
+                # If SlugField hints match, it should score higher (e.g., 1.2+).
+                return 1.0
             else:
-                # Lower score if max_length *is* specified, StrFieldMapping should win
-                return 0.4  # Lower than StrFieldMapping's base subclass score (0.5)
+                # Lower score significantly if max_length *is* specified, StrFieldMapping should win
+                return 0.4
         return base_score
 
     # TextField doesn't typically have max_length in Django by default
@@ -389,51 +392,84 @@ class SlugFieldMapping(StrFieldMapping):
 
     @classmethod
     def matches(cls, python_type: type, field_info: Optional[FieldInfo] = None) -> float:
-        score = super().matches(python_type, field_info)
-        if score == 0:
+        # Don't match if it's not a string type initially
+        if python_type != str:
             return 0.0
 
-        # Check for specific hints that suggest a SlugField
+        score = 0.0  # Initialize score
+        has_any_slug_hint = False
+        pattern = None  # Initialize pattern
+
         if field_info:
             # Try extracting pattern from metadata (Pydantic V2+)
-            pattern = None
             if field_info.metadata:
-                # Look for StringConstraints or pattern string directly
-                pattern_obj = next(
-                    (m for m in field_info.metadata if isinstance(m, StringConstraints)),
-                    None,
-                )
-                if pattern_obj:
-                    pattern = pattern_obj.pattern
-                elif isinstance(field_info.metadata[0], str) and field_info.metadata[0].startswith(
-                    "^"
-                ):  # Check if first metadata is a pattern string
+                try:
+                    constraint_meta = next(
+                        (m for m in field_info.metadata if isinstance(m, StringConstraints) or hasattr(m, "pattern")),
+                        None,
+                    )
+                except TypeError:  # Handle cases where metadata is not iterable
+                    logger.warning("SlugFieldMapping: FieldInfo metadata was not iterable.")
+                    constraint_meta = None
+
+                if constraint_meta and hasattr(constraint_meta, "pattern"):
+                    pattern = getattr(constraint_meta, "pattern", None)  # Use getattr safely
+                elif (
+                    field_info.metadata
+                    and isinstance(field_info.metadata[0], str)
+                    and field_info.metadata[0].startswith("^")
+                ):
+                    # Fallback: Check if the first metadata item is a pattern string itself
                     pattern = field_info.metadata[0]
-                logger.debug(f"SlugFieldMapping: Extracted pattern from metadata: {pattern}")
 
-            # Try extracting pattern from constraints (Pydantic V1/V2)
-            if pattern is None and getattr(field_info, "pattern", None):
-                pattern = field_info.pattern  # Kept getattr for V1 compat, linter might warn
-                logger.debug(f"SlugFieldMapping: Extracted pattern from field_info.pattern: {pattern}")
+            # Try extracting pattern from field_info attribute (less preferred now, V1 compat?)
+            if pattern is None and hasattr(field_info, "pattern"):  # Use hasattr for safety
+                field_pattern = getattr(field_info, "pattern", None)
+                if field_pattern:
+                    pattern = field_pattern
 
-            # Check if the pattern matches the typical slug pattern
-            # Note: Using direct string comparison. Raw string r"^[-\w]+$" might be clearer.
-            if pattern == "^[-\\w]+$":  # Ensure backslash is escaped for comparison if needed by context
-                logger.debug(f"SlugFieldMapping: Matched standard slug pattern: '{pattern}'")
-                score += 0.3  # Strong indicator
-            else:
-                logger.debug(f"SlugFieldMapping: Pattern '{pattern}' did not match standard slug pattern '^[-\\w]+$'.")
+            # 1. Check pattern (Strongest indicator)
+            # Compare against raw, single-escaped, and double-escaped pattern strings
+            raw_slug_pattern = r"^[-\w]+$"  # Raw string
+            single_escaped_slug_pattern = "^[-\\w]+$"  # Standard escaped string
+            double_escaped_slug_pattern = "^[-\\\\w]+$"  # Double escaped as seen in metadata
+            logger.debug(
+                f"SlugFieldMapping: Comparing extracted pattern '{pattern}' (type: {type(pattern)}) with standard slug patterns."
+            )
 
-            # Max length constraint check (common for slugs)
-            if getattr(field_info, "max_length", None) is not None:
-                # Slugs often have a max_length (like 50 for Django's default)
-                score += 0.1
+            if pattern in (raw_slug_pattern, single_escaped_slug_pattern, double_escaped_slug_pattern):
+                logger.debug("SlugFieldMapping: Matched standard slug pattern. Score -> 1.3")
+                score = 1.3  # High score for direct pattern match
+                has_any_slug_hint = True
+            elif pattern:
+                logger.debug(f"SlugFieldMapping: Pattern '{pattern}' did not match standard slug patterns.")
 
-        # Check for 'slug' in the field name (weak indicator)
-        if field_info and field_info.alias and "slug" in field_info.alias.lower():
-            score += 0.05
+            # 2. Check title/description/alias for 'slug' (Weaker indicator)
+            if not has_any_slug_hint and "slug" in (
+                f"{field_info.title or ''} {field_info.description or ''} {field_info.alias or ''}".lower()
+            ):
+                logger.debug("SlugFieldMapping: Found 'slug' in title/description/alias. Score -> 1.15")
+                score = 1.15  # Higher than StrField (1.1), lower than pattern match (1.3)
+                has_any_slug_hint = True
 
-        return round(score, 2)
+            # 3. Check max_length (Very weak indicator, mainly helps differentiate from TextField)
+            has_max_length = False
+            if hasattr(field_info, "metadata"):
+                for item in field_info.metadata:
+                    if hasattr(item, "max_length") and item.max_length is not None:
+                        has_max_length = True
+                        break
+
+            if has_max_length and not has_any_slug_hint:
+                # Slugs often have max_length, slightly prefer over TextField if no other hints
+                # This score (1.05) is slightly above TextField (1.0)
+                # but below StrField with max_length (1.1)
+                logger.debug("SlugFieldMapping: Found max_length hint only. Score -> 1.05")
+                score = 1.05
+
+        final_score = round(score, 2)
+        logger.debug(f"SlugFieldMapping final score for str with FieldInfo type {type(field_info)}: {final_score}")
+        return final_score
 
     def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
         return super().pydantic_to_django_kwargs(py_type, field_info)
