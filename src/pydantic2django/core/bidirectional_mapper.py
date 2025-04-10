@@ -17,7 +17,7 @@ import logging
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, TypeVar, get_args, get_origin
+from typing import Any, Optional, TypeVar, get_args, get_origin, Literal
 from uuid import UUID
 
 from django.db import models
@@ -64,7 +64,7 @@ class TypeMappingUnit:
                 "Subclasses of TypeMappingUnit must define 'python_type' and 'django_field_type' class attributes."
             )
 
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
         """Generate Django field constructor kwargs from Pydantic FieldInfo."""
         kwargs = {}
         if field_info:
@@ -125,20 +125,32 @@ class IntFieldMapping(TypeMappingUnit):
     python_type = int
     django_field_type = models.IntegerField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class BigIntFieldMapping(TypeMappingUnit):
     python_type = int
     django_field_type = models.BigIntegerField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class SmallIntFieldMapping(TypeMappingUnit):
     python_type = int
     django_field_type = models.SmallIntegerField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class PositiveIntFieldMapping(TypeMappingUnit):
     python_type = int
     django_field_type = models.PositiveIntegerField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
     def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
         kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
@@ -151,9 +163,15 @@ class PositiveIntFieldMapping(TypeMappingUnit):
 class PositiveSmallIntFieldMapping(PositiveIntFieldMapping):
     django_field_type = models.PositiveSmallIntegerField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class PositiveBigIntFieldMapping(PositiveIntFieldMapping):
     django_field_type = models.PositiveBigIntegerField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class AutoFieldMapping(TypeMappingUnit):
@@ -161,31 +179,52 @@ class AutoFieldMapping(TypeMappingUnit):
     django_field_type = models.AutoField
     # Note: PK handling (frozen=True, default=None) is done in the base django_to_pydantic_field_info_kwargs
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class BigAutoFieldMapping(AutoFieldMapping):
     django_field_type = models.BigAutoField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class SmallAutoFieldMapping(AutoFieldMapping):
     django_field_type = models.SmallAutoField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class BoolFieldMapping(TypeMappingUnit):
     python_type = bool
     django_field_type = models.BooleanField
 
+    # Add default handling
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        # BooleanFields often default to None/NULL in DB without explicit default,
+        # but Pydantic bool defaults to False. Align by setting Django default=False.
+        if "default" not in kwargs:
+            kwargs["default"] = False
+        return kwargs
+
 
 class FloatFieldMapping(TypeMappingUnit):
     python_type = float
     django_field_type = models.FloatField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class StrFieldMapping(TypeMappingUnit):  # Base for Char/Text
     python_type = str
     django_field_type = models.CharField  # Default to CharField
 
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
-        kwargs = super().pydantic_to_django_kwargs(field_info)
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
         pyd_max_length = None
         if field_info and hasattr(field_info, "metadata"):
             for item in field_info.metadata:
@@ -213,8 +252,8 @@ class TextFieldMapping(StrFieldMapping):
     django_field_type = models.TextField
 
     # TextField doesn't typically have max_length in Django by default
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
-        kwargs = super().pydantic_to_django_kwargs(field_info)
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
         # Check metadata for max_length
         pyd_max_length = None
         if field_info and hasattr(field_info, "metadata"):
@@ -232,8 +271,8 @@ class EmailFieldMapping(StrFieldMapping):
     python_type = EmailStr
     django_field_type = models.EmailField
 
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
-        kwargs = super().pydantic_to_django_kwargs(field_info)
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
         # Ensure default max_length for EmailField if not specified via metadata
         pyd_max_length = None
         if field_info and hasattr(field_info, "metadata"):
@@ -250,20 +289,47 @@ class SlugFieldMapping(StrFieldMapping):
     python_type = str  # Pydantic doesn't have a specific Slug type
     django_field_type = models.SlugField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class URLFieldMapping(StrFieldMapping):
     python_type = HttpUrl
     django_field_type = models.URLField
+
+    # Add default max_length for URLField
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        # Ensure default max_length for URLField if not specified via metadata
+        pyd_max_length = None
+        if field_info and hasattr(field_info, "metadata"):
+            for item in field_info.metadata:
+                if hasattr(item, "max_length"):
+                    pyd_max_length = item.max_length
+                    break
+        if pyd_max_length is None and "max_length" not in kwargs:
+            kwargs["max_length"] = 200  # Default for URLField matching test
+        return kwargs
 
 
 class IPAddressFieldMapping(StrFieldMapping):
     python_type = IPvAnyAddress  # Pydantic's type covers v4/v6
     django_field_type = models.GenericIPAddressField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class FilePathFieldMapping(StrFieldMapping):
     python_type = Path
     django_field_type = models.FilePathField
+
+    # Add default max_length for FilePathField
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        if "max_length" not in kwargs:
+            kwargs["max_length"] = 100  # Default for FilePathField
+        return kwargs
 
 
 class FileFieldMapping(StrFieldMapping):
@@ -271,14 +337,23 @@ class FileFieldMapping(StrFieldMapping):
     python_type = str
     django_field_type = models.FileField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class ImageFieldMapping(FileFieldMapping):
     django_field_type = models.ImageField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class UUIDFieldMapping(TypeMappingUnit):
     python_type = UUID
     django_field_type = models.UUIDField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class DateTimeFieldMapping(TypeMappingUnit):
@@ -287,28 +362,40 @@ class DateTimeFieldMapping(TypeMappingUnit):
     # auto_now / auto_now_add are Django specific, Pydantic uses default_factory typically
     # which we aren't mapping reliably from Django defaults.
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class DateFieldMapping(TypeMappingUnit):
     python_type = datetime.date
     django_field_type = models.DateField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class TimeFieldMapping(TypeMappingUnit):
     python_type = datetime.time
     django_field_type = models.TimeField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class DurationFieldMapping(TypeMappingUnit):
     python_type = datetime.timedelta
     django_field_type = models.DurationField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
 
 
 class DecimalFieldMapping(TypeMappingUnit):
     python_type = Decimal
     django_field_type = models.DecimalField
 
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
-        kwargs = super().pydantic_to_django_kwargs(field_info)
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
         # Pydantic v2 uses metadata for constraints
         max_digits = None
         decimal_places = None
@@ -337,6 +424,9 @@ class BinaryFieldMapping(TypeMappingUnit):
     python_type = bytes
     django_field_type = models.BinaryField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class JsonFieldMapping(TypeMappingUnit):
     # Map complex Python types (dict, list, tuple, set, Json) to JSONField
@@ -344,16 +434,41 @@ class JsonFieldMapping(TypeMappingUnit):
     python_type = Any  # Or could use Json type: from pydantic import Json
     django_field_type = models.JSONField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class EnumFieldMapping(TypeMappingUnit):
     python_type = Enum  # Placeholder, actual enum type determined dynamically
     django_field_type = models.CharField  # Default, could be IntegerField
 
-    def pydantic_to_django_kwargs(self, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
-        kwargs = super().pydantic_to_django_kwargs(field_info)
-        python_type = field_info.annotation if field_info else None
-        if python_type and inspect.isclass(python_type) and issubclass(python_type, Enum):
-            members = list(python_type)
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        # Use the passed py_type directly
+        # python_type = field_info.annotation if field_info else None # Old way
+        origin_type = get_origin(py_type)
+
+        if origin_type is Literal:
+            literal_args = get_args(py_type)
+            if not literal_args:
+                logger.warning("Literal type has no arguments.")
+                return kwargs  # Return base kwargs
+
+            # Assume CharField for Literal, calculate max_length and choices
+            choices = [(str(arg), str(arg)) for arg in literal_args]
+            max_length = max(len(str(arg)) for arg in literal_args) if literal_args else 10
+
+            # Directly modify and return kwargs here for Literal
+            instance_kwargs = super().pydantic_to_django_kwargs(py_type, field_info)  # Get base kwargs again for safety
+            instance_kwargs["max_length"] = max_length
+            instance_kwargs["choices"] = choices
+            # Explicitly set field type in instance kwargs? No, the mapper should handle type.
+            # self.django_field_type = models.CharField # This modifies the class attribute, affecting subsequent calls!
+            return instance_kwargs  # Return the specifically constructed kwargs for Literal
+
+        elif py_type and inspect.isclass(py_type) and issubclass(py_type, Enum):
+            # This block is now only for actual Enums
+            members = list(py_type)
             enum_values = [member.value for member in members]
             choices = [(member.value, member.name) for member in members]
             kwargs["choices"] = choices
@@ -386,15 +501,32 @@ class ForeignKeyMapping(TypeMappingUnit):
     python_type = PydanticRelatedFieldType  # Placeholder
     django_field_type = models.ForeignKey
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class OneToOneFieldMapping(TypeMappingUnit):
     python_type = PydanticRelatedFieldType  # Placeholder
     django_field_type = models.OneToOneField
 
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        return super().pydantic_to_django_kwargs(py_type, field_info)
+
 
 class ManyToManyFieldMapping(TypeMappingUnit):
     python_type = PydanticListOfRelated  # Placeholder (List[Any])
     django_field_type = models.ManyToManyField
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        # M2M doesn't use most standard kwargs like null, default from base
+        # It needs specific handling in get_django_mapping for 'to' and 'blank'
+        # Return minimal kwargs, mainly title/description from FieldInfo
+        base_kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        allowed_m2m_keys = {"verbose_name", "help_text", "blank"}  # Add others if needed
+        m2m_kwargs = {k: v for k, v in base_kwargs.items() if k in allowed_m2m_keys}
+        # M2M fields should always have blank=True by default if mapping from Pydantic list
+        m2m_kwargs.setdefault("blank", True)
+        return m2m_kwargs
 
 
 class BidirectionalTypeMapper:
@@ -409,50 +541,49 @@ class BidirectionalTypeMapper:
 
     def _build_registry(self) -> list[type[TypeMappingUnit]]:
         """Discover and order TypeMappingUnit subclasses."""
-        # Order matters: More specific Django types first
-        # (e.g., AutoField before IntegerField, EmailField before CharField)
+        # Order matters: More specific Django types first, BUT base types need to be matched correctly.
+        # Place base types (Str, Int) before their more specific variants (Slug, Email, Auto)
+        # Ensure exact matches are found before subclass matches override them.
         ordered_units = [
-            # Specific PKs first
-            BigAutoFieldMapping,
-            SmallAutoFieldMapping,
-            AutoFieldMapping,
-            # Specific Numerics
-            PositiveBigIntFieldMapping,
-            PositiveSmallIntFieldMapping,
-            PositiveIntFieldMapping,
-            DecimalFieldMapping,
-            # Specific Strings
-            EmailFieldMapping,
-            URLFieldMapping,
-            SlugFieldMapping,
-            IPAddressFieldMapping,
-            FilePathFieldMapping,
-            # File Fields (map to str)
-            ImageFieldMapping,
-            FileFieldMapping,
-            # Other specific types
-            UUIDFieldMapping,
-            # Base relationship types (before less specific fields they might inherit from)
-            ManyToManyFieldMapping,
-            OneToOneFieldMapping,
-            ForeignKeyMapping,
-            # General types
-            IntFieldMapping,
-            BigIntFieldMapping,
-            SmallIntFieldMapping,
+            # Base Primitives First (for exact matching)
+            StrFieldMapping,  # Base for CharField, Text, Slug, Email etc.
+            IntFieldMapping,  # Base for IntegerField, AutoField etc.
             BoolFieldMapping,
             FloatFieldMapping,
+            # Other Base Types
+            DecimalFieldMapping,
+            UUIDFieldMapping,
             DateTimeFieldMapping,
             DateFieldMapping,
             TimeFieldMapping,
             DurationFieldMapping,
             BinaryFieldMapping,
-            JsonFieldMapping,
-            # General String types last
+            JsonFieldMapping,  # Catches dict, list, set, tuple, Any
+            FilePathFieldMapping,  # Needs Path, maps to str subclass conceptually
+            # Specific String Subclasses
             TextFieldMapping,
-            StrFieldMapping,  # Catches CharField
-            # Enum handled dynamically
-            # Add other units here
+            EmailFieldMapping,
+            URLFieldMapping,
+            SlugFieldMapping,
+            IPAddressFieldMapping,
+            # File Fields (map Path/str)
+            ImageFieldMapping,
+            FileFieldMapping,
+            # Specific Integer Subclasses
+            BigIntFieldMapping,
+            SmallIntFieldMapping,
+            PositiveBigIntFieldMapping,
+            PositiveSmallIntFieldMapping,
+            PositiveIntFieldMapping,
+            # PK Fields last among integers
+            BigAutoFieldMapping,
+            SmallAutoFieldMapping,
+            AutoFieldMapping,
+            # Relationships (handled separately in find method, but keep for completeness)
+            ManyToManyFieldMapping,
+            OneToOneFieldMapping,
+            ForeignKeyMapping,
+            # Enum handled dynamically by find method
         ]
         # TODO: Add validation to ensure no overlaps in django_field_type?
         return ordered_units
@@ -468,6 +599,8 @@ class BidirectionalTypeMapper:
         result_unit = None  # Store result before caching
 
         # Specific checks first
+        origin = get_origin(py_type)  # Get origin early for checks
+
         if inspect.isclass(py_type) and issubclass(py_type, Enum):
             result_unit = EnumFieldMapping
         elif inspect.isclass(py_type) and issubclass(py_type, BaseModel):
@@ -483,43 +616,73 @@ class BidirectionalTypeMapper:
                 # Fallback? Map to JSON? Or raise error?
                 result_unit = JsonFieldMapping  # Fallback to JSON
         else:
-            # Check direct matches in registry by python_type
-            for unit_cls in self._registry:
-                # Skip relationship placeholders here, handled above/below
-                if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
-                    continue
-                # Need careful check for subclass/exact match
-                try:
-                    # Exact match first for non-class types like Any
+            # Check for Literal before iterating registry
+            if origin is Literal:
+                result_unit = EnumFieldMapping  # Use Enum logic for choices
+            else:
+                # Simplify matching: One loop for exact match, then one loop for subclass match.
+                # This avoids complex conditions within a single loop.
+
+                # 1. Exact match pass
+                for unit_cls in self._registry:
+                    # Skip relationships and placeholders handled elsewhere
+                    if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping, EnumFieldMapping):
+                        continue
+                    # Use direct equality which works for primitives (int, bool, str, float, bytes, etc.) and types like Any
                     if py_type == unit_cls.python_type:
                         result_unit = unit_cls
-                        break
-                    # Then check subclass for class types
-                    if inspect.isclass(py_type) and issubclass(py_type, unit_cls.python_type):
-                        result_unit = unit_cls
-                        break
-                except TypeError:
-                    # issubclass fails on non-class types (like Any, generics)
-                    # Already handled by exact match check above
-                    pass
+                        break  # Found exact match
 
-            # Handle complex types (dict, list, etc.) if no direct match found
-            if result_unit is None:
-                origin = get_origin(py_type)
-                if origin in (dict, list, tuple, set):
-                    args = get_args(py_type)
-                    # Check for List[BaseModel] -> ManyToMany
-                    if origin is list and args and inspect.isclass(args[0]) and issubclass(args[0], BaseModel):
-                        if self.relationship_accessor.is_source_model_known(args[0]):
-                            result_unit = ManyToManyFieldMapping
-                        else:
-                            logger.warning(
-                                f"List field with BaseModel {args[0].__name__} not in relationship accessor."
-                            )
-                            result_unit = JsonFieldMapping  # Fallback collection to JSON
+                # 2. Subclass match pass (if no exact match found)
+                if result_unit is None:
+                    for unit_cls in self._registry:
+                        if unit_cls in (
+                            ForeignKeyMapping,
+                            OneToOneFieldMapping,
+                            ManyToManyFieldMapping,
+                            EnumFieldMapping,
+                        ):
+                            continue
+                        try:
+                            # Check issubclass only if both are actual classes
+                            if (
+                                inspect.isclass(py_type)
+                                and inspect.isclass(unit_cls.python_type)
+                                and issubclass(py_type, unit_cls.python_type)
+                            ):
+                                # Important: Only assign if it's a *true* subclass, not the type itself
+                                # Prevents mapping `int` to `BigAutoField` just because BigAutoField maps to `int`.
+                                if py_type is not unit_cls.python_type:
+                                    # Check if a more specific subclass mapping already exists (e.g. EmailStr vs str)
+                                    # If py_type is EmailStr, we want EmailFieldMapping, not StrFieldMapping
+                                    is_more_specific_match = False
+                                    for check_unit in self._registry:
+                                        if check_unit.python_type == py_type and issubclass(
+                                            check_unit.django_field_type, unit_cls.django_field_type
+                                        ):
+                                            is_more_specific_match = True
+                                            break
+                                    if not is_more_specific_match:
+                                        result_unit = unit_cls
+                                        # Don't break here, allow potentially more specific subclass match later in registry?
+                                        # Example: If Path matches StrFieldMapping, keep checking for FilePathFieldMapping.
+                                        # Registry order should handle selecting the most specific subclass mapping.
+                        except TypeError:
+                            pass  # issubclass fails on non-classes
+
+            # Handle complex types (dict, list, etc.) if no direct match found yet
+            if result_unit is None and origin:  # Check origin was successfully retrieved
+                args = get_args(py_type)
+                # Check for List[BaseModel] -> ManyToMany
+                if origin is list and args and inspect.isclass(args[0]) and issubclass(args[0], BaseModel):
+                    if self.relationship_accessor.is_source_model_known(args[0]):
+                        result_unit = ManyToManyFieldMapping
                     else:
-                        # Fallback for other collections
-                        result_unit = JsonFieldMapping
+                        logger.warning(f"List field with BaseModel {args[0].__name__} not in relationship accessor.")
+                        result_unit = JsonFieldMapping  # Fallback collection to JSON
+                else:
+                    # Fallback for other collections
+                    result_unit = JsonFieldMapping
 
         if result_unit is None:
             logger.warning(f"No specific mapping unit found for Python type: {py_type}")
@@ -595,7 +758,8 @@ class BidirectionalTypeMapper:
 
         instance_unit = unit_cls()  # Instantiate to call methods
         django_field_type = instance_unit.django_field_type
-        kwargs = instance_unit.pydantic_to_django_kwargs(field_info)
+        # Pass base_py_type to kwargs method
+        kwargs = instance_unit.pydantic_to_django_kwargs(base_py_type, field_info)
 
         # --- Handle Relationships --- #
         if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
