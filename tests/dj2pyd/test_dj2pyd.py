@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, List, Optional, Dict, Callable, Tuple
+from typing import Any, List, Optional, Dict, Callable, Tuple, cast, ForwardRef, get_args
 
 from pydantic import BaseModel, Field, EmailStr, Json, HttpUrl, IPvAnyAddress
 from pydantic_core import PydanticUndefined
@@ -644,8 +644,10 @@ class TestDjangoPydanticConverter:
             "auto_field": initial_pk,  # Include PK for update identification
             "char_field": "Updated Value",
             "integer_field": 200,
-            "foreign_key_field": related2.id,  # Update FK by ID
-            "many_to_many_field": [m2m2.id, m2m3.id],  # Update M2M (removes m2m1, keeps m2m2, adds m2m3)
+            # Provide dict for FK matching expected nested Pydantic structure
+            "foreign_key_field": {"id": related2.id, "name": related2.name},
+            # Provide list of dicts for M2M
+            "many_to_many_field": [{"id": m2m2.id, "name": m2m2.name}, {"id": m2m3.id, "name": m2m3.name}],
             # Include other fields that might be required by model validation
             "boolean_field": dj_instance.boolean_field,
             "null_boolean_field": dj_instance.null_boolean_field,
@@ -764,11 +766,12 @@ class TestDjangoPydanticConverter:
         converter0 = DjangoPydanticConverter(dj_instance, max_depth=0)
         pyd_instance0 = converter0.to_pydantic()
         assert pyd_instance0.foreign_key_field is None
-        assert pyd_instance0.many_to_many_field == []
+        assert pyd_instance0.many_to_many_field == []  # type: ignore[attr-defined]
 
         # Test depth 1
         converter1 = DjangoPydanticConverter(dj_instance, max_depth=1)
         pyd_instance1 = converter1.to_pydantic()
-        assert isinstance(pyd_instance1.foreign_key_field, PydanticRelated)
-        assert len(pyd_instance1.many_to_many_field) == 1
-        assert isinstance(pyd_instance1.many_to_many_field[0], PydanticRelated)
+        # Note: Accessing dynamically generated fields below
+        assert isinstance(pyd_instance1.foreign_key_field, BaseModel)  # type: ignore[attr-defined]
+        assert len(pyd_instance1.many_to_many_field) == 1  # type: ignore[attr-defined]
+        assert isinstance(pyd_instance1.many_to_many_field[0], BaseModel)  # type: ignore[attr-defined]

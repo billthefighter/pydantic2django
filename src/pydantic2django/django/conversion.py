@@ -2,9 +2,11 @@
 Provides functionality to convert Django model instances to Pydantic models.
 """
 import dataclasses
-import datetime
+import datetime as dt
 import json
 import logging
+from datetime import date, time, timedelta
+from decimal import Decimal
 from typing import Annotated, Any, ForwardRef, Generic, Optional, TypeVar, Union, cast, get_args, get_origin
 from uuid import UUID
 
@@ -18,11 +20,11 @@ from django.db.models.fields.reverse_related import (
     OneToOneRel,
 )
 from django.utils.timezone import get_default_timezone, is_aware, make_aware
-from pydantic import BaseModel, Field, Json, TypeAdapter, create_model
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 
 # from .mapping import TypeMapper # Removed old import
 # Add imports for new mapper and accessor
-from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper, MappingError
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 
 # Potentially useful imports from the project (adjust as needed)
@@ -229,307 +231,190 @@ def django_to_pydantic(
         pydantic_annotation = pydantic_field.annotation
         origin = get_origin(pydantic_annotation)
         args = get_args(pydantic_annotation)
-
-        # Get metadata for the corresponding Django field, if it exists
         meta = django_metadata.get(field_name)
 
-        if meta:
-            logger.debug(
-                f"Found Django metadata for '{field_name}': Type={meta.django_field_type.__name__}, Relation={meta.is_relation}"
-            )
-        else:
-            logger.debug(
-                f"No direct Django metadata found for '{field_name}'. Assuming property/method or Pydantic-only field."
-            )
-
-        # --- Handle Relationships using Metadata ---
+        # --- 1. Handle Relations ---
         if meta and meta.is_relation:
-            # 1. ManyToManyField / List[BaseModel]
-            # Check if the Pydantic annotation is List[BaseModel]
-            is_pydantic_list_of_models = False
-            related_pydantic_model_in_list: Optional[type[BaseModel]] = None
-            if origin is list and args:
-                # Check if the argument is a Pydantic BaseModel class
-                arg_type = args[0]
-                if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
-                    is_pydantic_list_of_models = True
-                    related_pydantic_model_in_list = arg_type
-                elif isinstance(arg_type, ForwardRef):  # Handle List[ForwardRef(...)]
-                    is_pydantic_list_of_models = True  # Assume it *will* be a BaseModel
-                    # Cannot get class name easily here, just proceed
+            if depth >= max_depth:
+                logger.warning(
+                    f"Max depth ({max_depth}) reached for relation '{field_name}' at depth {depth}. Assigning PK(s) or None/[] based on relation type."
+                )
+                if meta.is_m2m:
+                    data[field_name] = []  # Default for max depth M2M is empty list
+                else:  # FK or O2O
+                    data[field_name] = None  # Default for max depth FK/O2O is None
+                continue  # Relation handled (depth limit), move to next field
 
-            if meta.is_m2m and is_pydantic_list_of_models:
-                target_model = related_pydantic_model_in_list  # May be None if ForwardRef
-                # If ForwardRef, we must proceed assuming it resolves to BaseModel
-                if target_model or (isinstance(args[0], ForwardRef)):
-                    logger.debug(
-                        f"Handling M2M relationship for '{field_name}' -> {target_model.__name__ if target_model else args[0]}"
-                    )
-                    related_manager = django_value  # Django related manager
-                    converted_related = []
-                    try:
-                        related_queryset = related_manager.all()
-                        for related_obj in related_queryset:
-                            # We need the *actual* Pydantic class for the recursive call.
-                            # If target_model is None (was ForwardRef), we *cannot* proceed here.
-                            # This indicates an issue in model generation/resolution order.
-                            # However, the django_to_pydantic function assumes the target pydantic_model is already resolved.
-                            # We'll rely on the caller (or tests) providing the correct, resolved `pydantic_model`.
-                            # Let's assume related_pydantic_model_in_list MUST be the resolved class here.
-                            if not target_model:
-                                # If we are here, args[0] was a ForwardRef that SHOULD have been resolved
-                                # before django_to_pydantic was called with this pydantic_model definition.
-                                # Attempt to resolve it now based on the parent model's namespace? Risky.
-                                # Let's rely on the provided pydantic_model having resolved annotations.
-                                # Re-evaluate the annotation from the provided *resolved* model.
-                                resolved_annotation = pydantic_model.model_fields[field_name].annotation
-                                resolved_origin = get_origin(resolved_annotation)
-                                resolved_args = get_args(resolved_annotation)
-                                if (
-                                    resolved_origin is list
-                                    and resolved_args
-                                    and isinstance(resolved_args[0], type)
-                                    and issubclass(resolved_args[0], BaseModel)
-                                ):
-                                    target_model = resolved_args[0]
-                                else:
-                                    logger.error(
-                                        f"Could not resolve ForwardRef in List for M2M field '{field_name}'. Skipping related object conversion."
-                                    )
-                                    continue  # Skip this related object
+            # --- Attempt Recursive Conversion ---
+            target_related_pydantic_model: Optional[type[BaseModel]] = None
 
-                            try:
-                                converted_related.append(
-                                    django_to_pydantic(
-                                        related_obj,
-                                        target_model,  # Use the resolved model type
-                                        exclude=exclude,
-                                        depth=depth + 1,
-                                        max_depth=max_depth,
-                                        django_metadata=None,  # Let recursive call extract metadata
-                                    )
-                                )
-                            except ValueError as e:
-                                logger.error(f"Failed converting related object in M2M '{field_name}': {e}")
-                                continue  # Skip item on depth error
-                    except Exception as e:
-                        logger.error(f"Error accessing M2M manager for '{field_name}': {e}", exc_info=True)
-                        converted_related = []
-                    data[field_name] = converted_related
-                else:
-                    logger.warning(
-                        f"Could not determine target Pydantic model for M2M field '{field_name}'. Assigning raw manager."
-                    )
-                    data[field_name] = django_value  # Fallback?
-
-            # 2. ForeignKey or OneToOneField / Optional[BaseModel] or BaseModel
-            elif meta.is_fk or meta.is_o2o:
-                # Determine the target Pydantic model from the annotation
-                target_pydantic_model: Optional[type[BaseModel]] = None
-                # Need to handle ForwardRef annotations as well
-                annotation_to_check = pydantic_annotation
-                if isinstance(annotation_to_check, ForwardRef):
-                    # If the main annotation is a ForwardRef, we assume it resolves to BaseModel
-                    # We cannot determine the *actual* model here, rely on caller providing resolved model
-                    # Attempt resolution like in M2M case:
+            # Determine target Pydantic model for FK/O2O
+            if meta.is_fk or meta.is_o2o:
+                # Simplified logic: get potential model from annotation
+                potential_model_type = next((t for t in args if isinstance(t, type) and issubclass(t, BaseModel)), None)
+                if (
+                    not potential_model_type
+                    and isinstance(pydantic_annotation, type)
+                    and issubclass(pydantic_annotation, BaseModel)
+                ):
+                    potential_model_type = pydantic_annotation
+                # Add ForwardRef resolution attempt if needed (simplified)
+                if isinstance(next((t for t in args if t is not type(None)), pydantic_annotation), ForwardRef):
+                    # Ensure we use the *resolved* annotation if the original was ForwardRef
                     resolved_annotation = pydantic_model.model_fields[field_name].annotation
-                    if isinstance(resolved_annotation, type) and issubclass(resolved_annotation, BaseModel):
-                        target_pydantic_model = resolved_annotation
-                    elif get_origin(resolved_annotation) is Union:  # Check Optional[ForwardRef] -> Optional[Model]
-                        resolved_args = get_args(resolved_annotation)
-                        potential_model = next((t for t in resolved_args if t is not type(None)), None)
-                        if isinstance(potential_model, type) and issubclass(potential_model, BaseModel):
-                            target_pydantic_model = potential_model
-                    else:
-                        logger.warning(
-                            f"Could not resolve ForwardRef annotation '{annotation_to_check}' for FK/O2O field '{field_name}'. Cannot convert relation."
-                        )
-                        # Decide on fallback: assign PK or None? Assign PK for now.
-                        data[field_name] = getattr(db_obj, f"{field_name}_id", None)
+                    potential_model_type = next(
+                        (
+                            t
+                            for t in get_args(resolved_annotation)  # Check args of resolved Optional[Model] etc.
+                            if isinstance(t, type) and issubclass(t, BaseModel)
+                        ),
+                        # Fallback check if resolved annotation is directly the model (not Optional[Model])
+                        resolved_annotation
+                        if isinstance(resolved_annotation, type) and issubclass(resolved_annotation, BaseModel)
+                        else None,
+                    )
 
-                elif (
-                    origin is Union and len(args) == 2 and type(None) in args
-                ):  # Optional[Model] or Optional[ForwardRef]
-                    potential_model_type = next((t for t in args if t is not type(None)), None)
-                    if isinstance(potential_model_type, type) and issubclass(potential_model_type, BaseModel):
-                        target_pydantic_model = potential_model_type
-                    elif isinstance(potential_model_type, ForwardRef):
-                        # Attempt resolution like above
-                        resolved_annotation = pydantic_model.model_fields[field_name].annotation
-                        resolved_args = get_args(resolved_annotation)
-                        potential_model = next((t for t in resolved_args if t is not type(None)), None)
-                        if isinstance(potential_model, type) and issubclass(potential_model, BaseModel):
-                            target_pydantic_model = potential_model
-                        else:
-                            logger.warning(
-                                f"Could not resolve ForwardRef inside Optional for FK/O2O field '{field_name}'. Cannot convert relation."
-                            )
-                            data[field_name] = None  # Assign None for Optional field if resolution fails
+                target_related_pydantic_model = potential_model_type
 
-                elif isinstance(pydantic_annotation, type) and issubclass(pydantic_annotation, BaseModel):  # Model
-                    target_pydantic_model = pydantic_annotation
-
-                if target_pydantic_model:
-                    logger.debug(f"Handling FK/O2O relationship for '{field_name}' -> {target_pydantic_model.__name__}")
-                    related_obj = django_value  # The related Django instance or None
+                if target_related_pydantic_model:
+                    logger.debug(
+                        f"Handling FK/O2O relationship for '{field_name}' -> {target_related_pydantic_model.__name__}"
+                    )
+                    related_obj = django_value
                     if related_obj:
                         try:
                             data[field_name] = django_to_pydantic(
                                 related_obj,
-                                target_pydantic_model,
+                                target_related_pydantic_model,
                                 exclude=exclude,
                                 depth=depth + 1,
                                 max_depth=max_depth,
-                                django_metadata=None,  # Let recursive call extract metadata
                             )
                         except ValueError as e:
                             logger.error(f"Failed converting related object in FK/O2O '{field_name}': {e}")
-                            data[field_name] = None  # Set to None if conversion fails due to depth
+                            data[field_name] = None  # Assign None on conversion failure (e.g. nested depth limit)
                     else:
-                        data[field_name] = None  # Related object was None in Django
-                elif data.get(field_name) is None:  # Ensure field is added if not handled above
-                    # Pydantic field is not a nested model, assign raw Django value (likely PK)
-                    logger.debug(
-                        f"Treating related field '{field_name}' as simple value (e.g., PK). Value: {django_value!r}"
-                    )
-                    # Check if django_value is a related manager or instance before accessing _id
-                    if isinstance(django_value, models.Model):
-                        # For FK/O2O where Pydantic expects PK, assign the PK
-                        pk_name = getattr(django_value._meta.pk, "name", "pk")
-                        data[field_name] = getattr(django_value, pk_name, None)
-                    elif django_value is None:  # Handle case where FK is None
-                        data[field_name] = None
-                    else:  # Assign raw value if not a model instance (e.g., property?)
-                        data[field_name] = django_value
-
-            else:
-                # This case might occur if metadata says it's a relation but Pydantic annotation doesn't match
-                # or if it's an unhandled relation type (GenericForeignKey?)
-                logger.warning(
-                    f"Mismatch or unhandled relation type for field '{field_name}'. Django meta: {meta}, Pydantic type: {pydantic_annotation}. Assigning raw value: {django_value!r}"
-                )
-                data[field_name] = django_value
-
-        # --- Handle Simple Fields (or fields without direct Django metadata) ---
-        else:
-            # Check specifically for FileField and ImageField subclasses
-            if meta and issubclass(meta.django_field_type, models.FileField):
-                field_value = getattr(db_obj, field_name)
-                data[field_name] = field_value.url if field_value else None
-                logger.debug(f"Handling FileField/ImageField '{field_name}' -> URL: {data[field_name]}")
-
-            elif meta and meta.django_field_type == models.JSONField:
-                # Directly check the pydantic annotation here to see if target is Json or Optional[Json]
-                pydantic_annotation_origin = get_origin(pydantic_annotation)
-                pydantic_annotation_args = get_args(pydantic_annotation)
-
-                is_target_pydantic_json = False
-
-                def _check_if_json(type_hint: Any) -> bool:
-                    """Helper to check if a type hint resolves to pydantic.Json, handling Annotated."""
-                    logger.debug(f"_check_if_json: ENTER - Checking type hint: {type_hint!r} ({type(type_hint)})")
-                    origin = get_origin(type_hint)
-                    args = get_args(type_hint)
-                    result = False
-                    try:
-                        if origin is Annotated:
-                            # Check the core type and metadata within Annotated
-                            if len(args) > 0:
-                                # Check metadata items first (most common for pydantic.Json)
-                                if len(args) > 1:
-                                    for meta_item in args[1:]:
-                                        # Try checking the item's class directly
-                                        if meta_item.__class__ is Json:
-                                            logger.debug(
-                                                f"_check_if_json: Found Json in Annotated metadata by __class__: {meta_item!r}"
-                                            )
-                                            result = True
-                                            break  # Found it
-                                        # Fallback type check
-                                        elif type(meta_item) is Json:
-                                            logger.debug(
-                                                f"_check_if_json: Found Json in Annotated metadata by type(): {meta_item!r}"
-                                            )
-                                            result = True
-                                            break  # Found it
-                                        # Fallback name check
-                                        elif getattr(meta_item, "__name__", None) == "Json":
-                                            logger.debug(
-                                                f"_check_if_json: Found Json in Annotated metadata by name: {meta_item!r}"
-                                            )
-                                            result = True
-                                            break  # Found it
-                                # Fallback: Check the base type within Annotated recursively
-                                # ONLY if not found in metadata
-                                if not result:
-                                    logger.debug(f"_check_if_json: Checking Annotated base type: {args[0]!r}")
-                                    if _check_if_json(args[0]):
-                                        result = True
-
-                        elif origin is Json:
-                            logger.debug(f"_check_if_json: Found Json as origin: {type_hint!r}")
-                            result = True
-                        # Check if the type hint itself (if not a generic alias) is Json
-                        elif type(type_hint) is Json:
-                            logger.debug(f"_check_if_json: Found Json by direct type check: {type_hint!r}")
-                            result = True
-                        elif getattr(type_hint, "__name__", None) == "Json":
-                            logger.debug(f"_check_if_json: Found Json by direct name check: {type_hint!r}")
-                            result = True
-                    finally:
-                        # Ensure log happens even on error within the try block
-                        status_msg = "IS Json" if result else "is NOT Json"
-                        logger.debug(f"_check_if_json: EXIT - Type hint {type_hint!r} {status_msg}.")
-
-                    return result
-
-                logger.debug(
-                    f"Field '{field_name}': About to call _check_if_json for annotation: {pydantic_annotation!r}"
-                )
-                if _check_if_json(pydantic_annotation):
-                    is_target_pydantic_json = True
-                elif pydantic_annotation_origin is Union:
-                    logger.debug(f"Field '{field_name}': Checking Union args: {pydantic_annotation_args!r}")
-                    # Check if Json[...] or Annotated[..., Json] is one of the Union args
-                    for arg in pydantic_annotation_args:
-                        if arg is not type(None):
-                            logger.debug(f"Field '{field_name}': About to call _check_if_json for Union arg: {arg!r}")
-                            if _check_if_json(arg):
-                                is_target_pydantic_json = True
-                                break  # Found it
-                        else:
-                            logger.debug(f"Field '{field_name}': Skipping NoneType in Union.")
-
-                logger.debug(
-                    f"Field '{field_name}' (JSONField): Annotation={pydantic_annotation!r}, IsTargetJson={is_target_pydantic_json}"
-                )
-                logger.debug(f"Field '{field_name}': Django value type: {type(django_value)}, value: {django_value!r}")
-
-                if is_target_pydantic_json:
-                    # Target is pydantic.Json or Optional[pydantic.Json], expects string/bytes input
-                    logger.debug(f"Field '{field_name}': Pydantic type is Json. Attempting serialization.")
-                    value_to_assign = None
-                    if django_value is not None:
-                        try:
-                            # Serialize the Python object from Django JSONField into a JSON string
-                            value_to_assign = json.dumps(django_value)
-                            logger.debug(f"Field '{field_name}': Serialized value: {value_to_assign!r}")
-                        except TypeError as e:
-                            logger.error(f"Failed to serialize JSON for field '{field_name}': {e}", exc_info=True)
-                            value_to_assign = None  # Assign None on serialization failure
-                    data[field_name] = value_to_assign
-                    logger.debug(f"Field '{field_name}': Assigning serialized value: {data[field_name]!r}")
+                        data[field_name] = None  # Django FK/O2O was None
+                    continue  # Relation handled (recursion success/failure/was None), move to next field
                 else:
-                    # Target is likely dict, list, Any, etc. - assign the Python object directly
-                    logger.debug(f"Field '{field_name}': Pydantic type is NOT Json. Assigning raw value.")
-                    data[field_name] = django_value
-                    logger.debug(f"Field '{field_name}': Assigning raw value: {data[field_name]!r}")
+                    # Could not determine target Pydantic model, assign PK
+                    logger.warning(
+                        f"Could not determine target Pydantic model for FK/O2O '{field_name}'. Assigning PK."
+                    )
+                    # Extract PK using field_name_id convention
+                    data[field_name] = getattr(db_obj, f"{field_name}_id", None)
+                    continue  # Relation handled (assigned PK), move to next field
+
+            # Determine target Pydantic model for M2M
+            elif meta.is_m2m:
+                # Simplified logic: get potential model from List[Model] or List[ForwardRef]
+                target_related_pydantic_model = None
+                if origin is list and args:
+                    potential_model_type = args[0]
+                    if isinstance(potential_model_type, type) and issubclass(potential_model_type, BaseModel):
+                        target_related_pydantic_model = potential_model_type
+                    elif isinstance(potential_model_type, ForwardRef):
+                        # Ensure we use the *resolved* annotation if the original was ForwardRef
+                        resolved_annotation = pydantic_model.model_fields[field_name].annotation
+                        resolved_args = get_args(resolved_annotation)
+                        if (
+                            resolved_args
+                            and isinstance(resolved_args[0], type)
+                            and issubclass(resolved_args[0], BaseModel)
+                        ):
+                            target_related_pydantic_model = resolved_args[0]
+
+                if target_related_pydantic_model:
+                    logger.debug(
+                        f"Handling M2M relationship for '{field_name}' -> List[{target_related_pydantic_model.__name__}]"
+                    )
+                    related_manager = django_value
+                    converted_related = []
+                    if hasattr(related_manager, "all"):
+                        try:
+                            for related_obj in related_manager.all():
+                                try:
+                                    converted_related.append(
+                                        django_to_pydantic(
+                                            related_obj,
+                                            target_related_pydantic_model,
+                                            exclude=exclude,
+                                            depth=depth + 1,
+                                            max_depth=max_depth,
+                                        )
+                                    )
+                                except ValueError as e:
+                                    logger.error(f"Failed converting related object in M2M '{field_name}': {e}")
+                                    continue  # Skip item on depth error
+                        except Exception as e:
+                            logger.error(f"Error accessing M2M manager for '{field_name}': {e}", exc_info=True)
+                    else:
+                        logger.warning(
+                            f"Expected a manager for M2M field '{field_name}' but got {type(django_value)}. Assigning empty list."
+                        )
+                    data[field_name] = converted_related
+                    continue  # Relation handled (recursion), move to next field
+                else:
+                    # Could not determine target Pydantic model, assign PK list
+                    logger.warning(
+                        f"Could not determine target Pydantic model for M2M '{field_name}'. Assigning PK list."
+                    )
+                    related_manager = django_value
+                    pk_list = []
+                    if hasattr(related_manager, "values_list"):
+                        try:
+                            pk_list = list(related_manager.values_list("pk", flat=True))
+                        except Exception as e:
+                            logger.error(f"Error getting PKs for M2M field '{field_name}': {e}", exc_info=True)
+                    else:
+                        logger.warning(
+                            f"Expected a manager for M2M field '{field_name}' but got {type(django_value)}. Assigning empty PK list."
+                        )
+                    data[field_name] = pk_list
+                    continue  # Relation handled (assigned PK list), move to next field
+
+        # --- 2. Handle FileField/ImageField ---
+        if meta and issubclass(meta.django_field_type, models.FileField):
+            field_value = getattr(db_obj, field_name)  # Use original django_value which is the FieldFile
+            data[field_name] = field_value.url if field_value else None
+            logger.debug(f"Handling FileField/ImageField '{field_name}' -> URL: {data.get(field_name)}")
+            continue  # FileField handled, move to next field
+
+        # --- 3. Handle JSONField ---
+        if meta and meta.django_field_type == models.JSONField:
+            pydantic_annotation_origin = get_origin(pydantic_annotation)
+            pydantic_annotation_args = get_args(pydantic_annotation)
+            is_target_pydantic_json = False
+            if _is_pydantic_json_annotation(pydantic_annotation):  # Use the improved helper
+                is_target_pydantic_json = True
+
+            logger.debug(
+                f"Field '{field_name}' (JSONField): Annotation={pydantic_annotation!r}, IsTargetJson={is_target_pydantic_json}"
+            )
+            logger.debug(f"Field '{field_name}': Django value type: {type(django_value)}, value: {django_value!r}")
+
+            if is_target_pydantic_json:
+                logger.debug(f"Field '{field_name}': Pydantic type is Json. Attempting serialization.")
+                value_to_assign = None
+                if django_value is not None:
+                    try:
+                        value_to_assign = json.dumps(django_value)
+                        logger.debug(f"Field '{field_name}': Serialized value: {value_to_assign!r}")
+                    except TypeError as e:
+                        logger.error(f"Failed to serialize JSON for field '{field_name}': {e}", exc_info=True)
+                        value_to_assign = None
+                data[field_name] = value_to_assign
+                logger.debug(f"Field '{field_name}': Assigning serialized value: {data.get(field_name)!r}")
             else:
-                # Includes simple types, properties, Pydantic-only fields
-                logger.debug(
-                    f"Handling simple/property/Pydantic-only field '{field_name}' with value: {django_value!r}"
-                )
+                logger.debug(f"Field '{field_name}': Pydantic type is NOT Json. Assigning raw value.")
                 data[field_name] = django_value
+                logger.debug(f"Field '{field_name}': Assigning raw value: {data.get(field_name)!r}")
+
+            continue  # JSONField handled, move to next field
+
+        # --- 4. Handle Simple Fields (Default) ---
+        logger.debug(f"Handling simple/property/other field '{field_name}' with value: {django_value!r}")
+        data[field_name] = django_value
 
     # Instantiate the Pydantic model with the collected data
     try:
@@ -620,7 +505,8 @@ def generate_pydantic_class(
         django_metadata = _extract_django_model_metadata(django_model_cls)
 
     field_definitions: dict[str, tuple[Any, Any]] = {}
-    model_dependencies: set[Union[type[BaseModel], ForwardRef]] = set()
+    # Use set[Any] for dependencies to avoid complex Union typing with ForwardRef
+    model_dependencies: set[Any] = set()
 
     # TEMPORARILY place a ForwardRef to handle self-references during field processing
     # This will be replaced by the actual model later.
@@ -637,59 +523,155 @@ def generate_pydantic_class(
         if meta.is_relation and meta.related_model:
             related_model_cls = meta.related_model
             logger.debug(f"  Relation field '{field_name}' -> {related_model_cls.__name__} (Depth: {depth})")
-            try:
-                # Recursive call happens HERE - populates cache for dependencies
-                related_pydantic_model_ref = generate_pydantic_class(
-                    related_model_cls,
-                    mapper,
-                    model_name=None,
-                    cache=cache,
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                    pydantic_base=pydantic_base,
-                    django_metadata=None,
+            # Check depth *before* recursive call
+            if depth >= max_depth:
+                # Max depth reached - represent relation by its PK (Optional[int])
+                logger.warning(
+                    f"Max recursion depth ({max_depth}) reached for {related_model_cls.__name__} relation '{field_name}'. Representing by PK."
                 )
-                model_dependencies.add(related_pydantic_model_ref)
+                python_type = Optional[int]
+                # M2M should be List[Optional[int]]? Or just skip M2M beyond depth? Let's use Optional[List[int]] for now.
                 if meta.is_m2m:
-                    python_type = list[related_pydantic_model_ref]  # type: ignore
+                    python_type = Optional[list[int]]
                     field_info_kwargs = {"default_factory": list}
-                else:
-                    python_type = related_pydantic_model_ref
-            except ValueError as e:
-                logger.error(f"  Failed generating related model for '{field_name}' due to depth: {e}")
-                python_type = Any
-                meta.is_nullable = True  # Ensure field is optional if relation failed
-        # --- Handle Simple Fields using BidirectionalTypeMapper ---
-        else:
-            try:
-                python_type, field_info_kwargs = mapper.get_pydantic_mapping(meta.django_field)
-                logger.debug(
-                    f"  Mapped simple field '{field_name}' to Pydantic type: {python_type}, kwargs: {field_info_kwargs}"
-                )
-            except MappingError as e:
-                logger.warning(f"  Mapping failed for field '{field_name}': {e}. Falling back to Any.")
-                python_type = Any
-                field_info_kwargs = {}
-            except Exception as e:
-                logger.error(f"  Unexpected error mapping field '{field_name}': {e}", exc_info=True)
-                python_type = Any
-                field_info_kwargs = {}
+                else:  # FK or O2O
+                    python_type = Optional[int]
+                    field_info_kwargs = {"default": None}
+                is_relation_field = False  # Not a relation field for dependency tracking
+            else:
+                # Depth not exceeded, proceed with recursive generation
+                is_relation_field = True
+                try:
+                    # Generate or get related Pydantic model (might return ForwardRef)
+                    related_pydantic_model_ref = generate_pydantic_class(
+                        related_model_cls,
+                        mapper,
+                        model_name=None,  # Generate default name
+                        cache=cache,
+                        depth=depth + 1,
+                        max_depth=max_depth,
+                        pydantic_base=pydantic_base,
+                        django_metadata=None,  # Let recursive call extract
+                    )
+                    # Determine the field type (List or single Optional model)
+                    if meta.is_m2m:
+                        python_type = list[related_pydantic_model_ref]  # type: ignore
+                        field_info_kwargs = {"default_factory": list}
+                    else:  # FK or O2O
+                        # Use Optional because FK/O2O can be null
+                        python_type = Optional[related_pydantic_model_ref]
+                        field_info_kwargs = {"default": None}
 
-        # --- Final Type Adjustment and Field Definition ---
+                    # Track dependencies only if recursive call didn't return a basic type (e.g., Optional[int] from deeper level)
+                    # Check for type (actual class) or ForwardRef object
+                    if isinstance(related_pydantic_model_ref, type) or type(related_pydantic_model_ref) is ForwardRef:
+                        model_dependencies.add(related_pydantic_model_ref)  # type: ignore[arg-type]
+                    else:
+                        logger.warning(
+                            f"Recursive call for relation '{meta.field_name}' did not return Model or ForwardRef. Type: {type(related_pydantic_model_ref)}. Dependency not tracked."
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error generating related model for field '{meta.field_name}': {e}", exc_info=True)
+                    # Fallback if recursive generation fails
+                    python_type = Optional[Any]
+                    field_info_kwargs = {"default": None}
+                    is_relation_field = False
+
+        elif issubclass(meta.django_field_type, models.FileField):
+            # FileField and ImageField map to Optional[str] (URL)
+            logger.debug(f"  Mapping File/Image field '{field_name}' to Optional[str]")
+            python_type = Optional[str]
+            field_info_kwargs = {"default": None}  # File fields are often optional, default to None
+
+        else:
+            # Handle other non-relational fields using direct mapping
+            TYPE_MAP = {
+                models.CharField: str,
+                models.TextField: str,
+                models.EmailField: str,
+                models.SlugField: str,
+                models.URLField: str,
+                models.GenericIPAddressField: str,  # Pydantic v2 handles IP Addr str
+                models.UUIDField: UUID,
+                models.BooleanField: bool,
+                models.NullBooleanField: Optional[bool],  # Deprecated in Django, but handle
+                models.IntegerField: int,
+                models.SmallIntegerField: int,
+                models.BigIntegerField: int,
+                models.PositiveIntegerField: int,
+                models.PositiveSmallIntegerField: int,
+                models.PositiveBigIntegerField: int,
+                models.FloatField: float,
+                models.DecimalField: Decimal,
+                models.DateField: date,
+                models.DateTimeField: dt.datetime,
+                models.TimeField: time,
+                models.DurationField: timedelta,
+                models.BinaryField: bytes,
+                models.JSONField: Any,  # Map to Any, Pydantic handles dict/list
+                # AutoFields are PKs, typically handled if needed, map to int/UUID? Usually Optional[int]
+                models.AutoField: Optional[int],
+                models.BigAutoField: Optional[int],
+                models.SmallAutoField: Optional[int],
+            }
+            try:
+                # Use type.__mro__ to handle potential subclasses if needed?
+                # For now, direct type matching.
+                base_field_type = meta.django_field_type
+                if base_field_type in TYPE_MAP:
+                    python_type = TYPE_MAP[base_field_type]
+                    logger.debug(f"  Mapped Django type {base_field_type.__name__} to Pydantic type {python_type}")
+                else:
+                    # Fallback for unmapped types
+                    logger.warning(
+                        f"  Django field type '{base_field_type.__name__}' not explicitly mapped for field '{field_name}'. Defaulting to Any."
+                    )
+                    python_type = Any  # Default to Any if no specific mapping found
+
+                # Set default based on Django field's default if NOT_PROVIDED
+                if meta.default is not models.NOT_PROVIDED:
+                    field_info_kwargs = {"default": meta.default}
+                elif meta.is_nullable:
+                    field_info_kwargs = {"default": None}
+                # Special case for PKs (usually AutoFields)
+                elif meta.is_pk and python_type == Optional[int]:  # Make PKs optional for creation
+                    field_info_kwargs = {"default": None}
+
+                # else: Field is required, no default needed for Field(...)
+
+            except Exception as e:
+                logger.error(
+                    f"  Error mapping field '{field_name}' of type '{meta.django_field_type.__name__}': {e}",
+                    exc_info=True,
+                )
+                python_type = None  # Skip this field
+
+        # --- Final Type Adjustment and Field Definition (Runs if python_type was determined) ---
         if python_type is not None:
-            # Handle nullable based on metadata AFTER potential recursion failures
-            final_type = Optional[python_type] if meta.is_nullable else python_type
+            # Apply Optional if the Django field is nullable, unless type is already Optional
+            final_type = python_type
+            origin_type = get_origin(python_type)
+            if (
+                meta.is_nullable and origin_type is not Optional and origin_type is not Union
+            ):  # Avoid Optional[Optional[...]]
+                final_type = Optional[python_type]
+
+            # Determine Field definition based on defaults
             if "default" in field_info_kwargs or "default_factory" in field_info_kwargs:
                 field_instance = Field(**field_info_kwargs)
-            elif meta.is_m2m:
-                field_instance = Field(default_factory=list, **field_info_kwargs)
+            # M2M is handled under relations, but check nullable for non-relation Optionals
             elif meta.is_nullable:
-                field_instance = Field(default=None, **field_info_kwargs)
+                # Ensure default=None is set if not already handled by kwargs
+                field_info_kwargs.setdefault("default", None)
+                field_instance = Field(**field_info_kwargs)
             else:
-                if field_info_kwargs:
+                # Required field, potentially with mapper-provided defaults already in kwargs
+                if field_info_kwargs:  # Use default from mapper if present
                     field_instance = Field(**field_info_kwargs)
-                else:
-                    field_instance = ...
+                else:  # Otherwise, mark as required
+                    field_instance = ...  # Pydantic V2 uses Ellipsis for required fields
+
             field_definitions[field_name] = (final_type, field_instance)
             logger.debug(f"  Defined field '{field_name}': Type={final_type}, Definition={field_instance!r}")
 
@@ -1002,7 +984,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         # TODO: Add more robust timezone handling based on Django settings (USE_TZ)
         is_field_aware = getattr(django_field, "is_aware", False)  # Approximation
 
-        if isinstance(pydantic_value, datetime.datetime):
+        if isinstance(pydantic_value, dt.datetime):
             current_value_aware = is_aware(pydantic_value)
             # Assume field needs aware if Django's USE_TZ is True (needs better check)
             if not current_value_aware and is_field_aware:
