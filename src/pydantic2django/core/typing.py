@@ -3,6 +3,7 @@ import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import is_dataclass
+from types import UnionType
 from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel
@@ -138,37 +139,34 @@ class TypeHandler:
 
             if origin:
                 # Handle Generic Alias (List, Dict, Union, Optional, Callable, Type)
-                module_name = getattr(origin, "__module__", None)
-                type_name = getattr(origin, "__name__", None)
+                origin_module = getattr(origin, "__module__", "")
+                origin_name = getattr(origin, "__name__", "")
 
-                # Add import for the origin type itself if it's from typing
-                if module_name == "typing":
-                    if origin is Union:
-                        # Optional is Union[T, None], handled below
-                        is_optional = len(args) == 2 and type(None) in args
-                        if is_optional:
-                            TypeHandler._add_import(imports, "typing", "Optional")
-                        else:
-                            TypeHandler._add_import(imports, "typing", "Union")
-                    # Add common typing constructs like List, Dict, Callable, Type, Any
-                    elif type_name and type_name not in ("NoneType", "Generic"):
-                        # Ensure capitalization matches actual typing names (List, Dict, etc.)
-                        # Convert common lowercase names from get_origin to capitalized versions
-                        capitalized_name = (
-                            type_name.capitalize() if type_name in ["list", "dict", "tuple", "set"] else type_name
-                        )
-                        if capitalized_name in [
-                            "List",
-                            "Dict",
-                            "Tuple",
-                            "Set",
-                            "Callable",
-                            "Type",
-                            "Any",
-                            "Optional",
-                            "Union",
-                        ]:
-                            TypeHandler._add_import(imports, "typing", capitalized_name)
+                # Determine the canonical name used in 'typing' imports (e.g., List, Dict, Callable)
+                typing_name = None
+                if origin is list:
+                    typing_name = "List"
+                elif origin is dict:
+                    typing_name = "Dict"
+                elif origin is tuple:
+                    typing_name = "Tuple"
+                elif origin is set:
+                    typing_name = "Set"
+                elif origin is Union or origin is UnionType:  # Handle types.UnionType for Python 3.10+
+                    is_optional = len(args) == 2 and type(None) in args
+                    typing_name = "Optional" if is_optional else "Union"
+                elif origin is type:
+                    typing_name = "Type"
+                # Check both typing.Callable and collections.abc.Callable
+                elif origin_module == "typing" and origin_name == "Callable":
+                    typing_name = "Callable"
+                elif origin_module == "collections.abc" and origin_name == "Callable":
+                    typing_name = "Callable"
+                # Add more specific checks if needed (e.g., Sequence, Mapping)
+
+                # Add import if we identified a standard typing construct
+                if typing_name:
+                    TypeHandler._add_import(imports, "typing", typing_name)
 
                 # Traverse arguments regardless of origin's module
                 for arg in args:
@@ -316,9 +314,19 @@ class TypeHandler:
 
         # Final check: If it's still a complex Union, default to Any for mapping
         origin = get_origin(base_type_obj)
-        if origin is Union:  # Handles Union[A, B] etc.
+        if origin is Union:
             logger.debug(f"  Final type is complex Union {base_type_obj!r}, defaulting base object to Any for mapping.")
             base_type_obj = Any
+        # Add check for Callable simplification
+        elif origin is Callable or (
+            hasattr(base_type_obj, "__module__")
+            and base_type_obj.__module__ == "collections.abc"
+            and base_type_obj.__name__ == "Callable"
+        ):
+            logger.debug(
+                f"  Final type is complex Callable {base_type_obj!r}, simplifying base object to Callable origin."
+            )
+            base_type_obj = Callable
 
         # --- Result Assembly ---
         imports = TypeHandler.get_required_imports(field_type)  # Imports based on original

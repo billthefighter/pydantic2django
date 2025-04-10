@@ -18,12 +18,12 @@ from django.db.models.fields.reverse_related import (
     OneToOneRel,
 )
 from django.utils.timezone import get_default_timezone, is_aware, make_aware
-from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic import BaseModel, Field, Json, TypeAdapter, create_model
 
 # from .mapping import TypeMapper # Removed old import
 # Add imports for new mapper and accessor
-from ..core.bidirectional_mapper import BidirectionalTypeMapper, MappingError
-from ..core.relationships import RelationshipConversionAccessor
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper, MappingError
+from pydantic2django.core.relationships import RelationshipConversionAccessor
 
 # Potentially useful imports from the project (adjust as needed)
 # from .mapping import TypeMapper # Might not be directly needed if we create reverse mapping here
@@ -419,15 +419,95 @@ def django_to_pydantic(
                 logger.debug(f"Handling FileField/ImageField '{field_name}' -> URL: {data[field_name]}")
 
             elif meta and meta.django_field_type == models.JSONField:
-                type_to_check = pydantic_annotation
-                is_pydantic_json_type = _is_pydantic_json_annotation(type_to_check)  # Use module-level helper
+                # Directly check the pydantic annotation here to see if target is Json or Optional[Json]
+                pydantic_annotation_origin = get_origin(pydantic_annotation)
+                pydantic_annotation_args = get_args(pydantic_annotation)
 
-                logger.debug(f"Field '{field_name}': Annotation={type_to_check}, IsJsonType={is_pydantic_json_type}")
+                is_target_pydantic_json = False
+
+                def _check_if_json(type_hint: Any) -> bool:
+                    """Helper to check if a type hint resolves to pydantic.Json, handling Annotated."""
+                    logger.debug(f"_check_if_json: ENTER - Checking type hint: {type_hint!r} ({type(type_hint)})")
+                    origin = get_origin(type_hint)
+                    args = get_args(type_hint)
+                    result = False
+                    try:
+                        if origin is Annotated:
+                            # Check the core type and metadata within Annotated
+                            if len(args) > 0:
+                                # Check metadata items first (most common for pydantic.Json)
+                                if len(args) > 1:
+                                    for meta_item in args[1:]:
+                                        # Try checking the item's class directly
+                                        if meta_item.__class__ is Json:
+                                            logger.debug(
+                                                f"_check_if_json: Found Json in Annotated metadata by __class__: {meta_item!r}"
+                                            )
+                                            result = True
+                                            break  # Found it
+                                        # Fallback type check
+                                        elif type(meta_item) is Json:
+                                            logger.debug(
+                                                f"_check_if_json: Found Json in Annotated metadata by type(): {meta_item!r}"
+                                            )
+                                            result = True
+                                            break  # Found it
+                                        # Fallback name check
+                                        elif getattr(meta_item, "__name__", None) == "Json":
+                                            logger.debug(
+                                                f"_check_if_json: Found Json in Annotated metadata by name: {meta_item!r}"
+                                            )
+                                            result = True
+                                            break  # Found it
+                                # Fallback: Check the base type within Annotated recursively
+                                # ONLY if not found in metadata
+                                if not result:
+                                    logger.debug(f"_check_if_json: Checking Annotated base type: {args[0]!r}")
+                                    if _check_if_json(args[0]):
+                                        result = True
+
+                        elif origin is Json:
+                            logger.debug(f"_check_if_json: Found Json as origin: {type_hint!r}")
+                            result = True
+                        # Check if the type hint itself (if not a generic alias) is Json
+                        elif type(type_hint) is Json:
+                            logger.debug(f"_check_if_json: Found Json by direct type check: {type_hint!r}")
+                            result = True
+                        elif getattr(type_hint, "__name__", None) == "Json":
+                            logger.debug(f"_check_if_json: Found Json by direct name check: {type_hint!r}")
+                            result = True
+                    finally:
+                        # Ensure log happens even on error within the try block
+                        status_msg = "IS Json" if result else "is NOT Json"
+                        logger.debug(f"_check_if_json: EXIT - Type hint {type_hint!r} {status_msg}.")
+
+                    return result
+
+                logger.debug(
+                    f"Field '{field_name}': About to call _check_if_json for annotation: {pydantic_annotation!r}"
+                )
+                if _check_if_json(pydantic_annotation):
+                    is_target_pydantic_json = True
+                elif pydantic_annotation_origin is Union:
+                    logger.debug(f"Field '{field_name}': Checking Union args: {pydantic_annotation_args!r}")
+                    # Check if Json[...] or Annotated[..., Json] is one of the Union args
+                    for arg in pydantic_annotation_args:
+                        if arg is not type(None):
+                            logger.debug(f"Field '{field_name}': About to call _check_if_json for Union arg: {arg!r}")
+                            if _check_if_json(arg):
+                                is_target_pydantic_json = True
+                                break  # Found it
+                        else:
+                            logger.debug(f"Field '{field_name}': Skipping NoneType in Union.")
+
+                logger.debug(
+                    f"Field '{field_name}' (JSONField): Annotation={pydantic_annotation!r}, IsTargetJson={is_target_pydantic_json}"
+                )
                 logger.debug(f"Field '{field_name}': Django value type: {type(django_value)}, value: {django_value!r}")
 
-                if is_pydantic_json_type:
-                    # Target is pydantic.Json, expects string or bytes
-                    logger.debug(f"Field '{field_name}': Pydantic type IS Json. Attempting serialization.")
+                if is_target_pydantic_json:
+                    # Target is pydantic.Json or Optional[pydantic.Json], expects string/bytes input
+                    logger.debug(f"Field '{field_name}': Pydantic type is Json. Attempting serialization.")
                     value_to_assign = None
                     if django_value is not None:
                         try:
@@ -438,10 +518,10 @@ def django_to_pydantic(
                             logger.error(f"Failed to serialize JSON for field '{field_name}': {e}", exc_info=True)
                             value_to_assign = None  # Assign None on serialization failure
                     data[field_name] = value_to_assign
-                    logger.debug(f"Field '{field_name}': Assigning JSON string: {data[field_name]!r}")
+                    logger.debug(f"Field '{field_name}': Assigning serialized value: {data[field_name]!r}")
                 else:
-                    # Target is likely dict, list, Any - assign the Python object directly
-                    logger.debug(f"Field '{field_name}': Pydantic type IS NOT Json. Assigning raw value.")
+                    # Target is likely dict, list, Any, etc. - assign the Python object directly
+                    logger.debug(f"Field '{field_name}': Pydantic type is NOT Json. Assigning raw value.")
                     data[field_name] = django_value
                     logger.debug(f"Field '{field_name}': Assigning raw value: {data[field_name]!r}")
             else:
@@ -512,43 +592,41 @@ def generate_pydantic_class(
         f"Generating Pydantic model '{pydantic_model_name}' for Django model '{django_model_cls.__name__}' (Depth: {depth})"
     )
 
-    # --- Cache Check ---
-    # Check if the actual model or a ForwardRef is already in the cache
+    # --- Cache Check --- (Check if ACTUAL model is already cached)
     if pydantic_model_name in cache:
         cached_item = cache[pydantic_model_name]
-        # If it's a real class (not ForwardRef), return it directly
         if isinstance(cached_item, type) and issubclass(cached_item, BaseModel):
             logger.debug(f"Cache hit (actual class) for name '{pydantic_model_name}' (Depth: {depth})")
             return cached_item
-        # If it's a ForwardRef (meaning we are potentially in a recursion loop or hit max depth earlier)
         elif isinstance(cached_item, ForwardRef):
+            # If a ForwardRef is in the cache, it means we hit max_depth earlier or are in a loop
             logger.debug(f"Cache hit (ForwardRef) for name '{pydantic_model_name}' (Depth: {depth})")
-            return cached_item  # Return the existing ForwardRef
+            return cached_item
 
-    # --- Max Depth Check ---
+    # --- Max Depth Check --- (Return ForwardRef, but DON'T cache it here)
     if depth > max_depth:
         logger.warning(
             f"Max recursion depth ({max_depth}) reached for {django_model_cls.__name__}. Returning ForwardRef."
         )
-        # Ensure ForwardRef is placed in cache if max depth is hit *before* processing this model
-        if pydantic_model_name not in cache:
-            forward_ref = ForwardRef(pydantic_model_name)
-            cache[pydantic_model_name] = forward_ref
-            return forward_ref
-        else:  # Should already be a ForwardRef if we hit this path after the cache check above
-            return cache[pydantic_model_name]  # type: ignore
+        # Store the ForwardRef in the cache ONLY if max depth is reached
+        # This prevents premature caching before dependencies are potentially resolved.
+        forward_ref = ForwardRef(pydantic_model_name)
+        cache[pydantic_model_name] = forward_ref  # Cache the ForwardRef when hitting max depth
+        return forward_ref
 
-    # --- Initial Cache Setup ---
-    forward_ref = ForwardRef(pydantic_model_name)
-    cache[pydantic_model_name] = forward_ref
-    logger.debug(f"Placed ForwardRef '{pydantic_model_name}' in cache (Depth: {depth})")
-
+    # --- Process Fields (Recursively generate dependencies FIRST) ---
     # Extract metadata if not provided
     if django_metadata is None:
         django_metadata = _extract_django_model_metadata(django_model_cls)
 
     field_definitions: dict[str, tuple[Any, Any]] = {}
     model_dependencies: set[Union[type[BaseModel], ForwardRef]] = set()
+
+    # TEMPORARILY place a ForwardRef to handle self-references during field processing
+    # This will be replaced by the actual model later.
+    temp_forward_ref = ForwardRef(pydantic_model_name)
+    cache[pydantic_model_name] = temp_forward_ref
+    logger.debug(f"Placed TEMPORARY ForwardRef '{pydantic_model_name}' in cache for self-ref handling (Depth: {depth})")
 
     for field_name, meta in django_metadata.items():
         logger.debug(f"  Processing field: {field_name} ({meta.django_field_type.__name__}) ...")
@@ -560,6 +638,7 @@ def generate_pydantic_class(
             related_model_cls = meta.related_model
             logger.debug(f"  Relation field '{field_name}' -> {related_model_cls.__name__} (Depth: {depth})")
             try:
+                # Recursive call happens HERE - populates cache for dependencies
                 related_pydantic_model_ref = generate_pydantic_class(
                     related_model_cls,
                     mapper,
@@ -572,14 +651,14 @@ def generate_pydantic_class(
                 )
                 model_dependencies.add(related_pydantic_model_ref)
                 if meta.is_m2m:
-                    python_type = list[related_pydantic_model_ref]
+                    python_type = list[related_pydantic_model_ref]  # type: ignore
                     field_info_kwargs = {"default_factory": list}
                 else:
                     python_type = related_pydantic_model_ref
             except ValueError as e:
                 logger.error(f"  Failed generating related model for '{field_name}' due to depth: {e}")
                 python_type = Any
-                meta.is_nullable = True
+                meta.is_nullable = True  # Ensure field is optional if relation failed
         # --- Handle Simple Fields using BidirectionalTypeMapper ---
         else:
             try:
@@ -595,8 +674,10 @@ def generate_pydantic_class(
                 logger.error(f"  Unexpected error mapping field '{field_name}': {e}", exc_info=True)
                 python_type = Any
                 field_info_kwargs = {}
+
         # --- Final Type Adjustment and Field Definition ---
         if python_type is not None:
+            # Handle nullable based on metadata AFTER potential recursion failures
             final_type = Optional[python_type] if meta.is_nullable else python_type
             if "default" in field_info_kwargs or "default_factory" in field_info_kwargs:
                 field_instance = Field(**field_info_kwargs)
@@ -618,11 +699,11 @@ def generate_pydantic_class(
         model_cls = create_model(
             pydantic_model_name,
             __base__=model_base,
-            **field_definitions,
+            **field_definitions,  # type: ignore
         )
         logger.info(f"Successfully created Pydantic model class '{pydantic_model_name}'")
 
-        # --- IMPORTANT: Update cache with the *actual* class ---
+        # --- IMPORTANT: Update cache with the *actual* class, replacing the temp ForwardRef ---
         cache[pydantic_model_name] = model_cls
         logger.debug(f"Updated cache for '{pydantic_model_name}' with actual class object.")
 
@@ -630,6 +711,9 @@ def generate_pydantic_class(
 
     except Exception as e:
         logger.error(f"Failed to create Pydantic model '{pydantic_model_name}' using create_model: {e}", exc_info=True)
+        # If creation fails, remove the temporary ForwardRef if it exists
+        if cache.get(pydantic_model_name) is temp_forward_ref:
+            del cache[pydantic_model_name]
         raise ValueError(f"Failed to create Pydantic model '{pydantic_model_name}'") from e
 
 
@@ -693,13 +777,19 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         # Generate the Pydantic class definition immediately
         self.pydantic_model_cls = self._generate_pydantic_class()
 
-        # Rebuild the generated model to resolve forward references
-        # Pass the cache containing generated models/refs as the namespace
+        #          logger.debug(f"Skipping update_forward_refs for ForwardRef in cache: {item_name}")
+
+        # Rebuild the main model AFTER resolving refs in the cache.
+        # No need for _types_namespace if update_forward_refs worked.
         try:
-            self.pydantic_model_cls.model_rebuild(force=True, _types_namespace=self._generation_cache)
-            logger.info(f"Rebuilt {self.pydantic_model_cls.__name__} to resolve ForwardRefs.")
+            self.pydantic_model_cls.model_rebuild(force=True)
+            logger.info(f"Rebuilt {self.pydantic_model_cls.__name__} after resolving ForwardRefs.")
         except Exception as e:
-            logger.warning(f"Failed to rebuild {self.pydantic_model_cls.__name__} post-generation: {e}", exc_info=True)
+            # Log warning if final rebuild still fails
+            logger.warning(
+                f"Failed to rebuild {self.pydantic_model_cls.__name__} even after update_forward_refs: {e}",
+                exc_info=True,
+            )
 
     # Helper map for TypeAdapter in to_django
     _INTERNAL_TYPE_TO_PYTHON_TYPE = {

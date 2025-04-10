@@ -11,16 +11,16 @@ from pydantic import BaseModel, Field, EmailStr, Json, HttpUrl, IPvAnyAddress
 from pydantic_core import PydanticUndefined
 from django.db import models  # Import models for type hints in fixtures if needed
 
-# Configure logging to show DEBUG messages for the conversion module
-logging.basicConfig(level=logging.DEBUG)  # Basic config for root logger
-logger = logging.getLogger("pydantic2django.django.conversion")
-logger.setLevel(logging.DEBUG)
-# Ensure handlers are set up if basicConfig didn't catch it
-if not logging.getLogger().handlers:
+# Configure logging FOR THE CONVERSION MODULE specifically
+conv_logger = logging.getLogger("pydantic2django.django.conversion")
+conv_logger.setLevel(logging.DEBUG)
+# Ensure handlers are set up (add a handler if none exist)
+if not conv_logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
-    logging.getLogger().addHandler(handler)
+    conv_logger.addHandler(handler)
+    conv_logger.propagate = False  # Prevent duplication if root logger also has handlers
 
 # Import the function to test
 from pydantic2django.django.conversion import django_to_pydantic

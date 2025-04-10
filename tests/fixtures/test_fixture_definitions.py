@@ -116,15 +116,15 @@ def test_relationship_models(relationship_models):
 
     address = Address(street="123 Main St", city="Anytown", country="USA")
     profile = Profile(bio="Test bio", website="http://example.com")
-    tags = [Tag(name="tag1"), Tag(name="tag2")]
+    tags = [Tag(tag_name="tag1"), Tag(tag_name="tag2")]
 
-    user = User(name="John Doe", address=address, profile=profile, tags=tags)
+    user = User(name="Test User", address=address, profile=profile, tags=tags)
 
-    assert user.name == "John Doe"
+    assert user.name == "Test User"
     assert user.address.street == "123 Main St"
     assert user.profile.bio == "Test bio"
     assert len(user.tags) == 2
-    assert user.tags[0].name == "tag1"
+    assert user.tags[0].tag_name == "tag1"
 
 
 def test_method_model(method_model):
