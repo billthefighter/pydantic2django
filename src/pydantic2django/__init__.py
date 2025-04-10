@@ -19,18 +19,6 @@ from .django.admin import (
     register_model_admins,
 )
 
-# Imports from .core.discovery commented out - names not found in file
-# from .core.discovery import (
-#     ModelDiscovery,
-#     find_missing_models,
-#     topological_sort,
-# )
-# from .factory import DjangoModelFactory # Commented out - class not found in factories.py
-from .django.mapping import (
-    TypeMapper,
-    TypeMappingDefinition,
-)
-
 # Corrected import paths based on current structure
 from .django.models import Pydantic2DjangoBaseClass
 
@@ -47,9 +35,6 @@ __all__ = [
     "DynamicModelAdmin",
     "register_model_admin",
     "register_model_admins",
-    # Type mapping
-    "TypeMapper",
-    "TypeMappingDefinition",
     # Import handling
     "ImportHandler",
     # Logging

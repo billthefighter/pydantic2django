@@ -1,9 +1,9 @@
 import inspect
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import is_dataclass
-from typing import Any, TypeVar, Union, get_args, get_origin
+from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -243,65 +243,132 @@ class TypeHandler:
 
     @staticmethod
     def process_field_type(field_type: Any) -> dict[str, Any]:
-        """Process a field type to get name, flags, and imports."""
-        logger.debug(f"Processing field type: {field_type}")
+        """Process a field type to get name, flags, imports, and contained dataclasses."""
+        logger.debug(f"Received field_type: {field_type!r}, type: {type(field_type)}")
+        logger.debug(f"Processing field type: {field_type!r}")
         is_optional = False
         is_list = False
-        base_type_obj = field_type
+        imports = {}
+        contained_dataclasses: set[type] = set()
+        simplified_type = field_type  # Start with the original
 
+        # Helper function (remains the same)
+        def _is_potential_dataclass(t: Any) -> bool:
+            return inspect.isclass(t) and is_dataclass(t)
+
+        def _find_contained_dataclasses(current_type: Any):
+            origin = get_origin(current_type)
+            args = get_args(current_type)
+            if origin:
+                for arg in args:
+                    if arg is not type(None):
+                        _find_contained_dataclasses(arg)
+            elif _is_potential_dataclass(current_type):
+                contained_dataclasses.add(current_type)
+
+        _find_contained_dataclasses(field_type)
+        if contained_dataclasses:
+            logger.debug(f"  Found potential contained dataclasses: {[dc.__name__ for dc in contained_dataclasses]}")
+
+        # --- Simplification Loop ---
+        # Repeatedly unwrap until we hit a base type or Any
+        processed = True
+        while processed:
+            processed = False
+            origin = get_origin(simplified_type)
+            args = get_args(simplified_type)
+
+            # 1. Unwrap Optional[T] (Union[T, NoneType])
+            if origin is Union and len(args) == 2 and type(None) in args:
+                is_optional = True  # Flag it
+                simplified_type = next(arg for arg in args if arg is not type(None))
+                logger.debug(f"  Unwrapped Optional, current type: {simplified_type!r}")
+                processed = True
+                continue  # Restart loop with unwrapped type
+
+            # 2. Unwrap List[T] or Sequence[T]
+            if origin in (list, Sequence):
+                is_list = True  # Flag it
+                if args:
+                    simplified_type = args[0]
+                    logger.debug(f"  Unwrapped List/Sequence, current element type: {simplified_type!r}")
+                else:
+                    simplified_type = Any  # List without args -> List[Any]
+                    logger.debug("  Unwrapped List/Sequence without args, assuming Any")
+                processed = True
+                continue  # Restart loop with unwrapped element type
+
+            # 3. Unwrap Literal[...]
+            if origin is Literal:
+                if args:
+                    simplified_type = type(args[0])  # Use type of the *value*
+                    logger.debug(f"  Unwrapped Literal, current type: {simplified_type!r}")
+                else:
+                    simplified_type = Any  # Literal without args?
+                    logger.debug("  Unwrapped Literal without args? Assuming Any")
+                processed = True
+                continue  # Restart loop with unwrapped type
+
+        # --- Post-Loop Handling ---
+        # At this point, simplified_type should be the base type (int, str, datetime, Any, etc.)
+        # or a complex type we don't simplify further (like a raw Union or a specific class)
+        base_type_obj = simplified_type
+
+        # Final check: If it's still a complex Union, default to Any for mapping
         origin = get_origin(base_type_obj)
-        args = get_args(base_type_obj)
-        if origin is Union and type(None) in args and len(args) == 2:
-            is_optional = True
-            base_type_obj = next(arg for arg in args if arg is not type(None))
-            logger.debug(f"Unwrapped Optional. Inner type: {base_type_obj}")
-            origin = get_origin(base_type_obj)
-            args = get_args(base_type_obj)
+        if origin is Union:  # Handles Union[A, B] etc.
+            logger.debug(f"  Final type is complex Union {base_type_obj!r}, defaulting base object to Any for mapping.")
+            base_type_obj = Any
 
-        if origin is list or origin is list:
-            is_list = True
-            if args:
-                base_type_obj = args[0]
-                logger.debug(f"Unwrapped List. Inner type: {base_type_obj}")
-            else:
-                base_type_obj = Any
-                logger.debug("Unwrapped List without args, assuming Any.")
-
-        all_imports = TypeHandler.get_required_imports(field_type)
-        type_name = TypeHandler.get_class_name(base_type_obj)
-        logger.debug(f"Base type name: {type_name}")
+        # --- Result Assembly ---
+        imports = TypeHandler.get_required_imports(field_type)  # Imports based on original
+        type_string = TypeHandler.format_type_string(field_type)  # Formatting based on original
 
         result = {
-            "type": type_name,
+            "type_str": type_string,
+            "type_obj": base_type_obj,  # THIS is the crucial simplified type object
             "is_optional": is_optional,
             "is_list": is_list,
-            "imports": all_imports,
+            "imports": imports,
+            "contained_dataclasses": contained_dataclasses,
         }
-        logger.debug(f"Processed type result: {result}")
+        logger.debug(f"  Processed type result: {result!r}")  # Use !r for clearer debug
         return result
 
     @staticmethod
     def format_type_string(type_obj: Any) -> str:
         """Return a string representation suitable for generated code."""
-        # This version reconstructs the type string from processed info
-        processed = TypeHandler.process_field_type(type_obj)
-        base_name = processed["type"]
-        # Attempt to get a more precise name if it's a known complex type
-        if base_name in ["Union", "Callable", "Type", "Dict"]:
-            raw_repr = TypeHandler._get_raw_type_string(type_obj)
-            base_name = raw_repr.replace("typing.", "")
-            match = TypeHandler.PATTERNS["angle_bracket_class"].match(base_name)
-            if match:
-                base_name = match.group(1).split(".")[-1]
+        # --- Simplified version to break recursion ---
+        # Get the raw string representation first
+        raw_repr = TypeHandler._get_raw_type_string(type_obj)
 
-        if processed["is_list"]:
-            # Avoid double wrapping if base_name is already List[...]
-            if not base_name.startswith("List["):
-                base_name = f"List[{base_name}]"
-        if processed["is_optional"]:
-            # Avoid double wrapping if base_name is already Optional[...]
-            if not base_name.startswith("Optional["):
-                base_name = f"Optional[{base_name}]"
+        # Basic cleanup for common typing constructs
+        base_name = raw_repr.replace("typing.", "")
+
+        # Attempt to refine based on origin/args if needed (optional)
+        origin = get_origin(type_obj)
+        args = get_args(type_obj)
+
+        if origin is Union and len(args) == 2 and type(None) in args:
+            # Handle Optional[T]
+            inner_type_str = TypeHandler.format_type_string(next(arg for arg in args if arg is not type(None)))
+            return f"Optional[{inner_type_str}]"
+        elif origin in (list, Sequence):
+            # Handle List[T] / Sequence[T]
+            if args:
+                inner_type_str = TypeHandler.format_type_string(args[0])
+                return f"List[{inner_type_str}]"  # Prefer List for generated code
+            else:
+                return "List[Any]"
+        elif origin is Union:  # Non-optional Union
+            inner_types = [TypeHandler.format_type_string(arg) for arg in args]
+            return f"Union[{', '.join(inner_types)}]"
+        elif origin is Literal:
+            inner_values = [repr(arg) for arg in args]
+            return f"Literal[{', '.join(inner_values)}]"
+        # Add other origins like Dict, Tuple, Callable if needed
+
+        # Fallback to the cleaned raw representation
         return base_name
 
     @staticmethod

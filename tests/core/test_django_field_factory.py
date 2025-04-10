@@ -9,8 +9,8 @@ from django.apps import apps
 from pydantic import BaseModel, EmailStr, Field
 from pydantic.fields import FieldInfo
 from pydantic2django.core.factories import ConversionCarrier, FieldConversionResult, BaseFieldFactory
-from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory
-from pydantic2django.django.mapping import TypeMapper
+from pydantic2django.pydantic.factory import PydanticFieldFactory
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.relationships import RelationshipConversionAccessor, RelationshipMapper
 from pydantic2django.core.context import ModelContext
 
@@ -31,6 +31,12 @@ class DjangoFieldFactoryTestParams:
 def empty_relationship_accessor():
     """Fixture providing an empty RelationshipConversionAccessor."""
     return RelationshipConversionAccessor()
+
+
+@pytest.fixture
+def bidirectional_mapper(empty_relationship_accessor):
+    """Fixture providing a BidirectionalTypeMapper with an empty relationship accessor."""
+    return BidirectionalTypeMapper(relationship_accessor=empty_relationship_accessor)
 
 
 @pytest.fixture
@@ -59,15 +65,27 @@ def populated_relationship_accessor(relationship_models):
 
 
 @pytest.fixture
-def field_factory(populated_relationship_accessor):
-    """Fixture providing a PydanticFieldFactory with populated relationships."""
-    return PydanticFieldFactory(available_relationships=populated_relationship_accessor)
+def populated_bidirectional_mapper(populated_relationship_accessor):
+    """Fixture providing a BidirectionalTypeMapper with a populated relationship accessor."""
+    return BidirectionalTypeMapper(relationship_accessor=populated_relationship_accessor)
 
 
 @pytest.fixture
-def empty_field_factory(empty_relationship_accessor):
-    """Fixture providing a PydanticFieldFactory with empty relationships."""
-    return PydanticFieldFactory(available_relationships=empty_relationship_accessor)
+def field_factory(populated_relationship_accessor, populated_bidirectional_mapper):
+    """Fixture providing a PydanticFieldFactory with populated relationships and mapper."""
+    # PydanticFieldFactory now requires both
+    return PydanticFieldFactory(
+        relationship_accessor=populated_relationship_accessor, bidirectional_mapper=populated_bidirectional_mapper
+    )
+
+
+@pytest.fixture
+def empty_field_factory(empty_relationship_accessor, bidirectional_mapper):
+    """Fixture providing a PydanticFieldFactory with empty relationships and basic mapper."""
+    # PydanticFieldFactory now requires both
+    return PydanticFieldFactory(
+        relationship_accessor=empty_relationship_accessor, bidirectional_mapper=bidirectional_mapper
+    )
 
 
 @pytest.fixture(scope="function")

@@ -38,6 +38,49 @@ class ImportHandler:
         if self.module_mappings:
             logger.info(f"Using module mappings: {self.module_mappings}")
 
+    def add_import(self, module: str, name: str):
+        """Adds a single import based on module and name strings."""
+        if not module or module == "builtins":
+            return
+
+        # Apply module mappings
+        if module in self.module_mappings:
+            module = self.module_mappings[module]
+
+        # Clean name (e.g., remove generics for import statement)
+        clean_name = self._clean_generic_type(name)
+
+        # Check if already imported
+        if name in self.imported_names:
+            # Could verify module matches, but usually name is unique enough
+            logger.debug(f"Skipping already imported name: {name} (from module {module})")
+            return
+        if clean_name != name and clean_name in self.imported_names:
+            logger.debug(f"Skipping already imported clean name: {clean_name} (from module {module})")
+            return
+
+        # Determine category
+        # Simplistic: If module is known Pydantic, Django, or common stdlib -> context
+        # Otherwise, if it's 'typing' -> extra_type
+        # TODO: Refine categorization if needed (e.g., dedicated django_imports set)
+        import_statement = f"from {module} import {clean_name}"
+        if module == "typing":
+            self.extra_type_imports.add(clean_name)  # Add only name to typing imports set
+            logger.debug(f"Adding typing import: {clean_name}")
+        # elif module.startswith("django."):
+        # Add to a dedicated django set if we create one
+        #    self.context_class_imports.add(import_statement)
+        #    logger.info(f"Adding Django import: {import_statement}")
+        else:
+            # Default to context imports for non-typing
+            self.context_class_imports.add(import_statement)
+            logger.info(f"Adding context class import: {import_statement}")
+
+        # Mark as imported
+        self.imported_names[name] = module
+        if clean_name != name:
+            self.imported_names[clean_name] = module
+
     def add_pydantic_model_import(self, model_class: type) -> None:
         """
         Add an import statement for a Pydantic model.

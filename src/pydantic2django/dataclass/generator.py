@@ -7,7 +7,9 @@ from django.db import models
 
 # Core imports
 from pydantic2django.core.base_generator import BaseStaticGenerator
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.factories import ConversionCarrier
+from pydantic2django.core.relationships import RelationshipConversionAccessor
 
 # Base Django model (assuming a common one might be used, or default to models.Model)
 # Let's assume we might want to use Pydantic2DjangoBaseClass as a default still, needs import.
@@ -50,10 +52,17 @@ class DataclassDjangoModelGenerator(
         # 2. Initialize Dataclass-specific factories
         # Dataclass factories might not need RelationshipAccessor, check their definitions
         # Assuming they don't for now.
-        self.dataclass_field_factory = field_factory_instance or DataclassFieldFactory()
+        # --- Correction: They DO need them now ---
+        self.relationship_accessor = RelationshipConversionAccessor()
+        self.bidirectional_mapper = BidirectionalTypeMapper()
+
+        self.dataclass_field_factory = field_factory_instance or DataclassFieldFactory(
+            relationship_accessor=self.relationship_accessor,
+            bidirectional_mapper=self.bidirectional_mapper,
+        )
         self.dataclass_model_factory = model_factory_instance or DataclassModelFactory(
-            field_factory=self.dataclass_field_factory
-            # No relationship_accessor needed based on original code structure?
+            field_factory=self.dataclass_field_factory,
+            relationship_accessor=self.relationship_accessor,  # Pass only accessor
         )
 
         # 3. Call the base class __init__

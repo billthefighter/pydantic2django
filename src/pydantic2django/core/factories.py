@@ -8,6 +8,8 @@ from django.db import models
 # Use absolute imports from within the package
 from pydantic2django.core.context import ModelContext  # Assuming ModelContext is here
 
+# Correct import path for ImportHandler:
+
 logger = logging.getLogger(__name__)
 
 # --- Generic Type Variables ---
@@ -43,6 +45,7 @@ class ConversionCarrier(Generic[SourceModelType]):
     django_meta_class: Optional[type] = None
     django_model: Optional[type[models.Model]] = None  # Changed from DjangoModelType
     model_context: Optional[ModelContext] = None
+    # Removed import_handler from carrier
 
     def model_key(self) -> str:
         """Generate a unique key for the source model."""
@@ -68,6 +71,25 @@ class FieldConversionResult:
     context_field: Optional[Any] = None  # Holds original field_info if handled by context
     error_str: Optional[str] = None
     field_definition_str: Optional[str] = None  # Added field definition string
+    # Added required_imports dictionary
+    required_imports: dict[str, list[str]] = field(default_factory=dict)
+
+    def add_import(self, module: str, name: str):
+        """Helper to add an import to this result."""
+        if not module or module == "builtins":
+            return
+        current_names = self.required_imports.setdefault(module, [])
+        if name not in current_names:
+            current_names.append(name)
+
+    def add_import_for_obj(self, obj: Any):
+        """Helper to add an import for a given object (class, function, etc.)."""
+        if hasattr(obj, "__module__") and hasattr(obj, "__name__"):
+            module = obj.__module__
+            name = obj.__name__
+            self.add_import(module, name)
+        else:
+            logger.warning(f"Could not determine import for object: {obj!r}")
 
     def __str__(self):
         status = "Success" if self.django_field else ("Context" if self.context_field else f"Error: {self.error_str}")
