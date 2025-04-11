@@ -1,6 +1,6 @@
 """
 Generated Django models from Pydantic models.
-Generated at: 2025-04-11 11:09:44
+Generated at: 2025-04-11 14:01:29
 """
 
 
@@ -14,6 +14,7 @@ from typing import TypeVar
 from django.db import models
 
 # Pydantic2Django imports
+from pydantic2django.django.base_django_model import Dataclass2DjangoBaseClass
 
 # Additional type imports from typing module
 
@@ -239,7 +240,13 @@ class DjangoFunctionToolCallEvent(Dataclass2DjangoBaseClass):
     Django model for FunctionToolCallEvent.
     """
 
-    part = models.JSONField(blank=False, null=False)
+    part = models.ForeignKey(
+        blank=False,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name="functiontoolcallevent_part_set",
+        to="pai2django.djangotoolcallpart",
+    )
     call_id = models.TextField(blank=False, null=False)
     event_kind = models.CharField(
         blank=False,

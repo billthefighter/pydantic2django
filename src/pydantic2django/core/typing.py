@@ -276,6 +276,23 @@ class TypeHandler:
             origin = get_origin(simplified_type)
             args = get_args(simplified_type)
 
+            # 0. Unwrap Annotated[T, ...]
+            # Check if the origin exists and has the name 'Annotated'
+            # This check is more robust than `origin is Annotated` across Python versions
+            if origin is not None and getattr(origin, "__name__", "") == "Annotated":
+                if args:
+                    core_type = args[0]
+                    metadata = args[1:]
+                    simplified_type = core_type
+                    logger.debug(f"  Unwrapped Annotated, current type: {simplified_type!r}, metadata: {metadata!r}")
+                    processed = True
+                    continue  # Restart loop with unwrapped type
+                else:
+                    logger.warning("  Found Annotated without arguments? Treating as Any.")
+                    simplified_type = Any
+                    processed = True
+                    continue
+
             # 1. Unwrap Optional[T] (Union[T, NoneType])
             if origin is Union and len(args) == 2 and type(None) in args:
                 is_optional = True  # Flag it

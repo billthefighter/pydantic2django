@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, Optional, Type, Union, Dict, Literal
+from typing import Any, List, Optional, Type, Union, Dict, Literal, Annotated
 from uuid import UUID
 
 import pytest
@@ -380,6 +380,31 @@ PYD_TO_DJ_CONSTRAINT_CASES = [
 ]
 
 
+PYD_TO_DJ_DEFAULT_FACTORY_CASES = [
+    PydToDjParams(
+        "uuid_default_factory",
+        UUID,
+        models.UUIDField,
+        {"null": False, "blank": False},  # No 'default' expected
+        field_info=FieldInfo(annotation=UUID, default_factory=UUID),
+    ),
+    PydToDjParams(
+        "datetime_default_factory",
+        datetime.datetime,
+        models.DateTimeField,
+        {"null": False, "blank": False},  # No 'default' expected
+        field_info=FieldInfo(annotation=datetime.datetime, default_factory=datetime.datetime.now),
+    ),
+    PydToDjParams(
+        "list_default_factory",
+        list[int],
+        models.JSONField,
+        {"null": False, "blank": False},  # No 'default' expected
+        field_info=FieldInfo(annotation=list[int], default_factory=list),
+    ),
+]
+
+
 class ColorEnum(Enum):
     RED = "r"
     GREEN = "g"
@@ -581,6 +606,41 @@ PYD_TO_DJ_UNION_CASES = [
     ),
 ]
 
+PYD_TO_DJ_ANNOTATED_CASES = [
+    # Annotated Union of BaseModels -> Expect placeholder + signal for multi-FK generation
+    PydToDjParams(
+        "annotated_union_model_a_b",
+        Annotated[Union[UnionModelA, UnionModelB], "SomeMetadata"],  # Using simple metadata
+        models.JSONField,  # Placeholder type
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [UnionModelA, UnionModelB],
+                "is_optional": False,
+            },
+            "null": True,  # Base nullability for multi-FK
+            "blank": True,
+        },
+        # FieldInfo not strictly needed here as type itself is complex
+        # field_info=FieldInfo(annotation=Annotated[Union[UnionModelA, UnionModelB], "SomeMetadata"])
+    ),
+    # Optional Annotated Union
+    PydToDjParams(
+        "optional_annotated_union_model_a_b",
+        Optional[Annotated[Union[UnionModelA, UnionModelB], "SomeMetadata"]],
+        models.JSONField,  # Placeholder type
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [UnionModelA, UnionModelB],
+                "is_optional": True,  # Reflects the Optional wrapper
+            },
+            "null": True,  # Always nullable for multi-FK
+            "blank": True,
+        },
+    ),
+]
+
 # --- Test Functions ---
 
 
@@ -676,6 +736,62 @@ def test_get_django_mapping_relationships(mapper: BidirectionalTypeMapper, param
     dj_kwargs.pop("related_name", None)
     params.expected_kwargs.pop("related_name", None)
     assert dj_kwargs == params.expected_kwargs
+
+
+@pytest.mark.parametrize("params", PYD_TO_DJ_DEFAULT_FACTORY_CASES, ids=lambda p: p.test_id)
+def test_get_django_mapping_default_factories(mapper: BidirectionalTypeMapper, params: PydToDjParams):
+    """Tests that Pydantic default_factory does not result in a Django default kwarg."""
+    logger.debug(f"Testing: {params.test_id}")
+    dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
+    assert dj_type is params.expected_dj_type
+    assert (
+        "default" not in dj_kwargs
+    ), f"Django default kwarg should not be present when Pydantic uses default_factory (got: {dj_kwargs.get('default')})"
+    # Check other expected kwargs are still present
+    expected_kwargs_no_default = params.expected_kwargs.copy()
+    expected_kwargs_no_default.pop("default", None)
+    kwargs_no_default = dj_kwargs.copy()
+    kwargs_no_default.pop("default", None)
+    assert (
+        kwargs_no_default == expected_kwargs_no_default
+    ), f"Other kwargs mismatch. Expected {expected_kwargs_no_default}, got {kwargs_no_default}"
+
+
+@pytest.mark.parametrize("params", PYD_TO_DJ_ANNOTATED_CASES, ids=lambda p: p.test_id)
+def test_get_django_mapping_annotated_unions(mapper: BidirectionalTypeMapper, params: PydToDjParams):
+    """Tests mapping complex Pydantic Annotated[Union[...]] types."""
+    logger.debug(f"Testing Annotated Union: {params.test_id}")
+    parent_model = None  # Not testing self-ref here
+
+    # Pass parent_model to the mapper method
+    dj_type, dj_kwargs = mapper.get_django_mapping(
+        params.python_type, params.field_info, parent_pydantic_model=parent_model
+    )
+
+    # Expect JSONField placeholder and _union_details signal
+    assert dj_type is params.expected_dj_type, f"Expected placeholder type {params.expected_dj_type}, got {dj_type}"
+    assert "_union_details" in dj_kwargs, "Missing '_union_details' signal in kwargs for Annotated[Union[...]]"
+
+    # Sort model lists before comparison for stability
+    expected_models = sorted(params.expected_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
+    actual_models = sorted(dj_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
+    assert actual_models == expected_models, "Model list in '_union_details' does not match"
+
+    # Compare the rest of the _union_details dict
+    assert dj_kwargs["_union_details"]["type"] == params.expected_kwargs["_union_details"]["type"]
+    assert dj_kwargs["_union_details"]["is_optional"] == params.expected_kwargs["_union_details"]["is_optional"]
+
+    # Remove _union_details before comparing the rest of the kwargs
+    del dj_kwargs["_union_details"]
+    expected_kwargs_no_details = params.expected_kwargs.copy()
+    del expected_kwargs_no_details["_union_details"]
+
+    # Compare remaining kwargs (like null/blank)
+    dj_kwargs.pop("related_name", None)  # Ignore related_name
+    expected_kwargs_no_details.pop("related_name", None)
+    assert (
+        dj_kwargs == expected_kwargs_no_details
+    ), f"Remaining kwargs mismatch. Expected {expected_kwargs_no_details}, got {dj_kwargs}"
 
 
 # Django -> Pydantic Tests

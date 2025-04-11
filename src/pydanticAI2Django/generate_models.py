@@ -3,7 +3,7 @@ from enum import Enum
 from typing import TypeVar
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("model_conversion")
 
 # Configure more detailed logging for the import handler

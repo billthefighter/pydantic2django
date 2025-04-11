@@ -89,18 +89,18 @@ class TypeMappingUnit:
                 kwargs["verbose_name"] = field_info.title
             if field_info.description:
                 kwargs["help_text"] = field_info.description
-            if field_info.default is not PydanticUndefined and field_info.default is not None:
-                # Skip None default if it matches null=True implicitly - NO, include default=None if explicitly set
-                # Django doesn't handle callable defaults easily here
-                if not callable(field_info.default):
-                    kwargs["default"] = field_info.default
-            elif field_info.default is None:  # Explicitly check for None default
-                kwargs["default"] = None  # Add default=None if present in FieldInfo
-            elif field_info.default_factory is not None:
-                logger.warning(
-                    f"Pydantic field has default_factory, which is not directly mappable to Django default. "
-                    f"Ignoring for {getattr(field_info, 'name', 'unknown field')}."
-                )
+
+            # Only consider `default` if `default_factory` is None
+            if field_info.default_factory is None:
+                if field_info.default is not PydanticUndefined and field_info.default is not None:
+                    # Django doesn't handle callable defaults easily here
+                    if not callable(field_info.default):
+                        kwargs["default"] = field_info.default
+                elif field_info.default is None:  # Explicitly check for None default
+                    kwargs["default"] = None  # Add default=None if present in FieldInfo
+            # else: If default_factory is present, do not add a 'default' kwarg.
+            # No warning needed as this is now expected behavior.
+
             # Note: Frozen, ge, le etc. are validation rules, map separately if needed
         return kwargs
 
@@ -901,8 +901,9 @@ class EnumFieldMapping(TypeMappingUnit):
             kwargs["max_length"] = max_length
             logger.debug(f"Enum/Literal {py_type} maps to CharField with max_length={max_length}.")
 
-        # Add hint for the mapper
+        # Add the hint to the kwargs to be used by the caller
         kwargs["_field_type_hint"] = field_type_hint
+
         return kwargs
 
     def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
