@@ -47,7 +47,7 @@ def test_generate_basic_dataclass_model(basic_dataclass):
 
     # Asserts need to match expected Django field types for basic dataclass fields
     assert f"class Django{model_name}(Pydantic2DjangoBaseClass):" in generated_code
-    assert contains_field(generated_code, "string_field", "CharField")
+    assert contains_field(generated_code, "string_field", "TextField")
     assert contains_field(generated_code, "int_field", "IntegerField")
     assert contains_field(generated_code, "float_field", "FloatField")
     assert contains_field(generated_code, "bool_field", "BooleanField")

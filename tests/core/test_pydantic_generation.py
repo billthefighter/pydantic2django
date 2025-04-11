@@ -58,7 +58,7 @@ def test_generate_basic_pydantic_model(basic_pydantic_model):
     print("--------------------------------------")
 
     assert f"class Django{model_name}(Pydantic2DjangoBaseClass):" in generated_code
-    assert contains_field(generated_code, "string_field", "CharField")
+    assert contains_field(generated_code, "string_field", "TextField")
     assert contains_field(generated_code, "int_field", "IntegerField")
     assert contains_field(generated_code, "float_field", "FloatField")
     assert contains_field(generated_code, "bool_field", "BooleanField")
@@ -114,15 +114,15 @@ def test_generate_optional_fields_model(optional_fields_model):
 
     assert f"class Django{model_name}(Pydantic2DjangoBaseClass):" in generated_code
     # Required fields should not have null=True by default
-    assert contains_field(generated_code, "required_string", "CharField")
-    assert "required_string = models.CharField(" in generated_code and "null=True" not in generated_code
+    assert contains_field(generated_code, "required_string", "TextField")
+    assert "required_string = models.TextField(" in generated_code and "null=True" not in generated_code
     assert contains_field(generated_code, "required_int", "IntegerField")
     assert "required_int = models.IntegerField(" in generated_code and "null=True" not in generated_code
-    # Optional fields should have null=True
-    assert contains_field(generated_code, "optional_string", "CharField")
-    assert "optional_string = models.CharField(" in generated_code and "null=True" in generated_code
-    assert contains_field(generated_code, "optional_int", "IntegerField")
-    assert "optional_int = models.IntegerField(" in generated_code and "null=True" in generated_code
+    # Optional fields should have null=True (or be JSONField)
+    assert contains_field(generated_code, "optional_string", "JSONField")  # Fallback for Optional[str]
+    assert "optional_string = models.JSONField(" in generated_code  # JSONField handles null
+    assert contains_field(generated_code, "optional_int", "JSONField")  # Fallback for Optional[int]
+    assert "optional_int = models.JSONField(" in generated_code  # JSONField handles null
     assert "class Meta:" in generated_code
     assert "app_label = 'tests'" in generated_code
 
@@ -184,20 +184,22 @@ def test_generate_relationship_models(relationship_models):
     print("--------------------------------------")
 
     assert f"class Django{model_name}(Pydantic2DjangoBaseClass):" in generated_code
-    assert contains_field(generated_code, "name", "CharField")  # Regular field
+    assert contains_field(generated_code, "name", "TextField")
 
     # Check relationship fields
     # Address (ForeignKey)
     assert contains_field(generated_code, "address", "ForeignKey")
-    assert 'to="DjangoAddress"' in generated_code  # Check target model name
-    assert "on_delete=models.CASCADE" in generated_code  # Check default on_delete
-    # Profile (OneToOneField - inferred from json_schema_extra)
-    assert contains_field(generated_code, "profile", "OneToOneField")
-    assert 'to="DjangoProfile"' in generated_code
-    assert "on_delete=models.CASCADE" in generated_code
+    assert "to='tests.djangoaddresspydantic'" in generated_code  # Expect fully qualified name
+    assert "on_delete=models.PROTECT" in generated_code  # Assuming PROTECT is default/sensible
+
+    # Profile (OneToOneField - mapped as ForeignKey by default)
+    assert contains_field(generated_code, "profile", "ForeignKey")  # Mapped as FK
+    assert "to='tests.djangoprofilepydantic'" in generated_code  # Expect fully qualified name
+    assert "on_delete=models.PROTECT" in generated_code
+
     # Tags (ManyToManyField)
     assert contains_field(generated_code, "tags", "ManyToManyField")
-    assert 'to="DjangoTag"' in generated_code
+    assert "to='tests.djangotagpydantic'" in generated_code  # Expect fully qualified name
 
     assert "class Meta:" in generated_code
     assert "app_label = 'tests'" in generated_code

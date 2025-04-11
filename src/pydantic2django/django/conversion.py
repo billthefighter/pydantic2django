@@ -19,8 +19,10 @@ from django.db.models.fields.reverse_related import (
     ManyToOneRel,
     OneToOneRel,
 )
+from django.db.models.query import QuerySet
 from django.utils.timezone import get_default_timezone, is_aware, make_aware
 from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic.types import Json
 
 # from .mapping import TypeMapper # Removed old import
 # Add imports for new mapper and accessor
@@ -41,46 +43,49 @@ DjangoModelT = TypeVar("DjangoModelT", bound=models.Model)
 
 # --- Helper Functions ---
 def _is_pydantic_json_annotation(annotation: Any) -> bool:
-    """Checks if a type annotation ultimately resolves to pydantic.Json."""
+    """Checks if an annotation represents pydantic.Json, handling Optional and Annotated."""
     origin = get_origin(annotation)
     args = get_args(annotation)
 
-    if origin is Union:  # Handle Optional[T]
-        # Check if it's Optional[Json] or Optional[Annotated[..., Json]]
+    # Direct Json type
+    if annotation is Json:
+        return True
+
+    # Optional[Json]
+    if origin is Union and type(None) in args:
         non_none_args = [arg for arg in args if arg is not type(None)]
-        if len(non_none_args) == 1:
-            return _is_pydantic_json_annotation(non_none_args[0])
-        else:
-            # Union of multiple types, not considered Json for this check
-            return False
+        if len(non_none_args) == 1 and non_none_args[0] is Json:
+            return True
 
+    # Annotated[Json, ...]
     if origin is Annotated:
-        # Check if Json is in the metadata
-        logger.debug(f"Checking Annotated type. Args: {args}")
-        # The first argument is the underlying type, the rest is metadata
-        metadata = args[1:]
-        logger.debug(f"Checking Annotated metadata: {metadata}")
-        found_json_in_metadata = False
-        for item in metadata:
-            # Log details about the item being checked
-            item_name = getattr(item, "__name__", "N/A")
-            logger.debug(f"  Metadata item: {item!r}, Type: {type(item)}, Name: {item_name}")
-            # Check __name__ as pydantic.Json might not be the exact same object
-            if item_name == "Json":
-                logger.debug("  Found Json marker by name in metadata!")
-                found_json_in_metadata = True
-                break  # Found it
-        if not found_json_in_metadata:
-            logger.debug("Did not find Json in Annotated metadata.")
-        return found_json_in_metadata
+        base_type = args[0] if args else None
+        if base_type is Json:
+            return True
 
-    # Direct check: Is the annotation itself pydantic.Json?
-    # This might be less reliable if Json is used within other constructs like Annotated
-    # Check __name__ as pydantic.Json might not be the exact same object
-    is_direct_json = getattr(annotation, "__name__", None) == "Json"
-    if is_direct_json:
-        logger.debug(f"Annotation {annotation} directly identified as Json by name.")
-    return is_direct_json
+    # Optional[Annotated[Json, ...]]
+    if origin is Union and type(None) in args:
+        non_none_arg = next((arg for arg in args if arg is not type(None)), None)
+        if non_none_arg and get_origin(non_none_arg) is Annotated:
+            annotated_args = get_args(non_none_arg)
+            base_type = annotated_args[0] if annotated_args else None
+            if base_type is Json:
+                return True
+
+    # Check cases like Union[Json, str], etc.
+    if origin is Union:
+        # Direct Json in Union
+        if Json in args:
+            return True
+        # Annotated[Json, ...] in Union
+        if any(
+            get_origin(arg) is Annotated and get_args(arg)[0] is Json for arg in args if get_origin(arg) is Annotated
+        ):
+            return True
+
+    # If none of the above match, it's not considered a Json annotation for serialization purposes.
+    logger.debug(f"Annotation {annotation!r} determined NOT to be pydantic.Json type for serialization purposes.")
+    return False
 
 
 # --- Metadata Extraction --- (Moved Before Usage)
@@ -209,13 +214,16 @@ def django_to_pydantic(
     if django_metadata is None:
         django_metadata = _extract_django_model_metadata(db_obj.__class__)
 
-    data = {}
-    exclude_set = exclude or set()
+    exclude = exclude or set()
+    data: dict[str, Any] = {}
+    # Use pre-extracted metadata if available
+    metadata_source = django_metadata or _extract_django_model_metadata(db_obj.__class__)
 
     pydantic_fields = pydantic_model.model_fields
 
     for field_name, pydantic_field in pydantic_fields.items():
-        if field_name in exclude_set:
+        if field_name in exclude:
+            logger.debug(f"Skipping excluded field '{field_name}'")
             continue
 
         logger.debug(
@@ -231,7 +239,7 @@ def django_to_pydantic(
         pydantic_annotation = pydantic_field.annotation
         origin = get_origin(pydantic_annotation)
         args = get_args(pydantic_annotation)
-        meta = django_metadata.get(field_name)
+        meta = metadata_source.get(field_name)
 
         # --- 1. Handle Relations ---
         if meta and meta.is_relation:
@@ -382,35 +390,43 @@ def django_to_pydantic(
 
         # --- 3. Handle JSONField ---
         if meta and meta.django_field_type == models.JSONField:
-            pydantic_annotation_origin = get_origin(pydantic_annotation)
-            pydantic_annotation_args = get_args(pydantic_annotation)
-            is_target_pydantic_json = False
-            if _is_pydantic_json_annotation(pydantic_annotation):  # Use the improved helper
-                is_target_pydantic_json = True
-
-            logger.debug(
-                f"Field '{field_name}' (JSONField): Annotation={pydantic_annotation!r}, IsTargetJson={is_target_pydantic_json}"
-            )
+            logger.debug(f"Field '{field_name}' is a Django JSONField. Attempting serialization.")
             logger.debug(f"Field '{field_name}': Django value type: {type(django_value)}, value: {django_value!r}")
+            value_to_assign = None
+            if django_value is not None:
+                try:
+                    # Always serialize if the source is JSONField
+                    value_to_assign = json.dumps(django_value)
+                    logger.debug(f"Field '{field_name}': Serialized value: {value_to_assign!r}")
+                except TypeError as e:
+                    logger.error(f"Failed to serialize JSON for field '{field_name}': {e}", exc_info=True)
+                    # Fallback: assign raw value if serialization fails? Or None?
+                    # Assigning raw value might still lead to validation error later.
+                    # Let's assign None for now if serialization fails.
+                    value_to_assign = None
+            data[field_name] = value_to_assign
+            logger.debug(f"Field '{field_name}': Assigning serialized/fallback value: {data.get(field_name)!r}")
+            continue  # JSONField handled
 
-            if is_target_pydantic_json:
-                logger.debug(f"Field '{field_name}': Pydantic type is Json. Attempting serialization.")
-                value_to_assign = None
-                if django_value is not None:
-                    try:
-                        value_to_assign = json.dumps(django_value)
-                        logger.debug(f"Field '{field_name}': Serialized value: {value_to_assign!r}")
-                    except TypeError as e:
-                        logger.error(f"Failed to serialize JSON for field '{field_name}': {e}", exc_info=True)
-                        value_to_assign = None
-                data[field_name] = value_to_assign
-                logger.debug(f"Field '{field_name}': Assigning serialized value: {data.get(field_name)!r}")
-            else:
-                logger.debug(f"Field '{field_name}': Pydantic type is NOT Json. Assigning raw value.")
-                data[field_name] = django_value
-                logger.debug(f"Field '{field_name}': Assigning raw value: {data.get(field_name)!r}")
-
-            continue  # JSONField handled, move to next field
+        # --- Check Pydantic Annotation (secondary check for non-JSONField Django types) ---
+        # This path is now less likely to be hit if source is JSONField
+        is_target_pydantic_json = _is_pydantic_json_annotation(pydantic_annotation)
+        if is_target_pydantic_json:
+            logger.debug(
+                f"Field '{field_name}' (Django type: {meta.django_field_type if meta else 'Unknown'}) has pydantic.Json annotation. Attempting serialization."
+            )
+            # Same serialization logic as above
+            value_to_assign = None
+            if django_value is not None:
+                try:
+                    value_to_assign = json.dumps(django_value)
+                except TypeError as e:
+                    logger.error(
+                        f"Failed to serialize non-JSONField '{field_name}' for pydantic.Json target: {e}", exc_info=True
+                    )
+                    value_to_assign = None
+            data[field_name] = value_to_assign
+            continue
 
         # --- 4. Handle Simple Fields (Default) ---
         logger.debug(f"Handling simple/property/other field '{field_name}' with value: {django_value!r}")
@@ -443,7 +459,8 @@ def generate_pydantic_class(
     max_depth: int = 3,
     pydantic_base: Optional[type[BaseModel]] = None,
     django_metadata: Optional[dict[str, DjangoFieldMetadata]] = None,
-) -> Union[type[BaseModel], ForwardRef]:
+    exclude: Optional[set[str]] = None,
+) -> "Union[type[BaseModel], ForwardRef]":
     """
     Dynamically generates a Pydantic model class from a Django model class,
     using pre-extracted metadata if provided.
@@ -460,6 +477,7 @@ def generate_pydantic_class(
         pydantic_base: Optional base for generated Pydantic model.
         django_metadata: Optional pre-extracted metadata for the model's fields.
                          If None, it will be extracted.
+        exclude: Field names to exclude during generation.
 
     Returns:
         A dynamically created Pydantic model class or a ForwardRef if max_depth is hit.
@@ -471,6 +489,9 @@ def generate_pydantic_class(
     if cache is None:
         cache = {}
         logger.debug(f"Initializing generation cache for {django_model_cls.__name__}")
+
+    # Ensure exclude is a set
+    exclude_set = exclude or set()
 
     pydantic_model_name = model_name or f"{django_model_cls.__name__}Pydantic"
     logger.debug(
@@ -515,6 +536,11 @@ def generate_pydantic_class(
     logger.debug(f"Placed TEMPORARY ForwardRef '{pydantic_model_name}' in cache for self-ref handling (Depth: {depth})")
 
     for field_name, meta in django_metadata.items():
+        # --- Check Exclusion BEFORE processing ---
+        if field_name in exclude_set:
+            logger.debug(f"  Skipping excluded field: {field_name}")
+            continue
+
         logger.debug(f"  Processing field: {field_name} ({meta.django_field_type.__name__}) ...")
         python_type: Any = None
         field_info_kwargs: dict = {}
@@ -552,6 +578,7 @@ def generate_pydantic_class(
                         max_depth=max_depth,
                         pydantic_base=pydantic_base,
                         django_metadata=None,  # Let recursive call extract
+                        exclude=exclude,
                     )
                     # Determine the field type (List or single Optional model)
                     if meta.is_m2m:
@@ -785,35 +812,25 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
     }
 
     def _generate_pydantic_class(self) -> type[BaseModel]:
-        """Generates the Pydantic model class for the Django model."""
-        logger.info(f"Generating Pydantic class for {self.django_model_cls.__name__}")
-        # Reset cache for this generation process
-        self._generation_cache = {}
-        # Pass the pre-extracted metadata AND the mapper instance
-        generated_type = generate_pydantic_class(
-            self.django_model_cls,
+        """Internal helper to generate or retrieve the Pydantic model class."""
+        # Pass the stored exclude set during generation
+        generated_cls = generate_pydantic_class(
+            django_model_cls=self.django_model_cls,
             mapper=self.mapper,
+            model_name=self.model_name,
             cache=self._generation_cache,
+            depth=0,
             max_depth=self.max_depth,
             pydantic_base=self.pydantic_base,
-            model_name=self.model_name,
-            django_metadata=self._django_metadata,  # Pass stored metadata
+            django_metadata=self._django_metadata,  # Pass pre-extracted metadata
+            exclude=self.exclude,  # Pass the exclude set here
         )
 
-        if isinstance(generated_type, ForwardRef):
-            logger.error(
-                f"Pydantic model generation for {self.django_model_cls.__name__} resulted in an unresolved ForwardRef, likely due to exceeding max_depth ({self.max_depth})."
-            )
-            raise TypeError(
-                f"Could not fully resolve Pydantic model for {self.django_model_cls.__name__} due to recursion depth."
-            )
-        elif not issubclass(generated_type, self.pydantic_base):
-            # This case should ideally not happen if generate_pydantic_class works correctly
-            logger.error(f"Generated type is not a {self.pydantic_base.__name__} subclass: {type(generated_type)}")
+        # Ensure the result is a type and subclass of BaseModel
+        if not isinstance(generated_cls, type) or not issubclass(generated_cls, BaseModel):
             raise TypeError(f"Generated type is not a valid {self.pydantic_base.__name__}.")
 
-        # The generated_type should be a subclass of BaseModel (or the specified base)
-        return generated_type
+        return generated_cls
 
     def to_pydantic(self, db_obj: Optional[DjangoModelT] = None) -> PydanticModelT:
         """
@@ -945,6 +962,48 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
                     raise ValueError(
                         f"Cannot save non-nullable FK '{django_field.name}': Nested Pydantic model missing PK."
                     )
+
+        elif isinstance(pydantic_value, dict):
+            # Handle dictionary input - extract PK
+            related_pk = pydantic_value.get(related_pk_name)
+            if related_pk is not None:
+                try:
+                    # Adapt and validate the extracted PK
+                    internal_type_name = django_field.target_field.get_internal_type()
+                    python_type = self._INTERNAL_TYPE_TO_PYTHON_TYPE.get(internal_type_name)
+                    adapted_pk: Any = None
+                    if python_type:
+                        pk_adapter = TypeAdapter(python_type)
+                        adapted_pk = pk_adapter.validate_python(related_pk)
+                    else:
+                        logger.warning(
+                            f"Could not determine specific Python type for PK internal type '{internal_type_name}' on field '{django_field.name}'. Assigning raw PK value from dict."
+                        )
+                        adapted_pk = related_pk
+
+                    # Set the FK using the ID field (attname)
+                    fk_field_name = django_field.attname
+                    setattr(target_django_instance, fk_field_name, adapted_pk)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to adapt PK '{related_pk}' extracted from dict for FK field '{django_field.name}': {e}"
+                    )
+                    if django_field.null or isinstance(django_field, OneToOneField):
+                        setattr(target_django_instance, django_field.attname, None)
+                        setattr(target_django_instance, django_field.name, None)  # Clear object too
+                    else:
+                        raise ValueError(
+                            f"Invalid PK value '{related_pk}' in dict for non-nullable FK field '{django_field.name}'."
+                        ) from e
+            else:
+                logger.error(
+                    f"Cannot set FK '{django_field.name}': Dictionary input missing PK '{related_pk_name}'. Dict: {pydantic_value}"
+                )
+                if django_field.null or isinstance(django_field, OneToOneField):
+                    setattr(target_django_instance, django_field.attname, None)
+                    setattr(target_django_instance, django_field.name, None)  # Clear object too
+                else:
+                    raise ValueError(f"Cannot save non-nullable FK '{django_field.name}': Dictionary input missing PK.")
 
         else:  # Assume pydantic_value is the PK itself
             try:
@@ -1137,7 +1196,8 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
                     )
                 related_pk_name = related_pk_field.name
 
-                related_objs_or_pks: Union[list[models.Model], list[Any]] = []
+                # Update type hint to include QuerySet
+                related_objs_or_pks: Union[list[models.Model], list[Any], QuerySet[models.Model]] = []
                 if not pydantic_m2m_list:
                     pass  # Handled by manager.set([])
                 elif all(isinstance(item, BaseModel) for item in pydantic_m2m_list):
@@ -1167,10 +1227,13 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
                                     f"Could not find PK '{related_pk_name}' in related instance data: {related_instance_dict}"
                                 )
                         target_queryset = related_model_cls.objects.filter(pk__in=related_instances_pks)
-                        # Use set() for efficient addition
-                        getattr(target_django_instance, field_name).set(target_queryset)
+                        # Assign the queryset to be used by the final set() call
+                        related_objs_or_pks = target_queryset
                     except Exception as e:
                         logger.error(f"Failed to extract PKs from dictionary list for M2M field '{field_name}': {e}")
+                        # Optionally re-raise or handle error appropriately
+                        # If we don't assign, related_objs_or_pks remains empty, clearing the relation
+
                 elif all(not isinstance(item, (BaseModel, dict)) for item in pydantic_m2m_list):
                     # Assume list of PKs if not BaseModels or dicts, use TypeAdapter for conversion
                     try:

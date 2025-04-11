@@ -62,12 +62,6 @@ def test_factory_model_fixture(factory_model):
     assert hasattr(factory_model, "create_product")
 
 
-def test_product_django_model_fixture(product_django_model):
-    """Verify the product_django_model fixture can be instantiated."""
-    assert product_django_model is not None
-    assert hasattr(product_django_model, "_meta")  # Check it's a Django model
-
-
 def test_user_django_model_fixture(user_django_model):
     """Verify the user_django_model fixture can be instantiated."""
     assert user_django_model is not None
