@@ -64,8 +64,30 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
         metadata = field_info.metadata or {}  # Ensure metadata is a dict
         django_meta_options = metadata.get("django", {})
 
-        # Initialize result with required_imports dict
+        # --- Resolve Forward Reference String if necessary --- #
+        type_to_map = original_field_type
         result = FieldConversionResult(field_info=field_info, field_name=field_name)
+
+        if isinstance(original_field_type, str):
+            logger.debug(
+                f"Field '{field_name}' has string type '{original_field_type}'. Attempting resolution via RelationshipAccessor."
+            )
+            # Assume string type is a model name known to the accessor
+            # Use the newly added method:
+            resolved_source_model = self.relationship_accessor.get_source_model_by_name(original_field_type)
+            if resolved_source_model:
+                logger.debug(f"Resolved string '{original_field_type}' to type {resolved_source_model}")
+                type_to_map = resolved_source_model
+            else:
+                # Critical Error: If it's a string but not in accessor, mapping will fail.
+                logger.error(
+                    f"Field '{field_name}' type is string '{original_field_type}' but was not found in RelationshipAccessor. Cannot map."
+                )
+                result.error_str = f"Unresolved forward reference or unknown model name: {original_field_type}"
+                result.context_field = field_info
+                return result
+        # --- End Forward Reference Resolution ---
+
         logger.debug(
             f"Processing dataclass field {model_name}.{field_name}: Type={original_field_type}, Metadata={metadata}"
         )
@@ -76,14 +98,14 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
                 # Pass field_info.type, but no Pydantic FieldInfo equivalent for metadata
                 # The mapper primarily relies on the type itself.
                 django_field_class, constructor_kwargs = self.bidirectional_mapper.get_django_mapping(
-                    python_type=original_field_type,
+                    python_type=type_to_map,
                     field_info=None,  # Pass None for field_info
                 )
                 # Add import for the Django field class itself using the result's helper
                 result.add_import_for_obj(django_field_class)
 
             except MappingError as e:
-                logger.error(f"Mapping error for '{model_name}.{field_name}' (type: {original_field_type}): {e}")
+                logger.error(f"Mapping error for '{model_name}.{field_name}' (type: {type_to_map}): {e}")
                 result.error_str = str(e)
                 result.context_field = field_info
                 return result
@@ -277,9 +299,15 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
         Passes import handler down.
         """
         # --- Pass import handler via carrier --- (or could add to factory state)
+        # Need to set import handler on carrier if passed during init
+        # NOTE: BaseModelFactory.make_django_model does this now.
+        # carrier.import_handler = self.import_handler
         super().make_django_model(carrier)
         # Register relationship after successful model creation (moved from original)
         if carrier.source_model and carrier.django_model:
+            logger.debug(
+                f"Mapping relationship in accessor: {carrier.source_model.__name__} -> {carrier.django_model.__name__}"
+            )
             self.relationship_accessor.map_relationship(
                 source_model=carrier.source_model, django_model=carrier.django_model
             )
@@ -312,11 +340,14 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
             # Need globals and potentially locals from the source model's module
             source_module = sys.modules.get(source_model.__module__)
             globalns = getattr(source_module, "__dict__", None)
-            # TODO: Consider how to get locals if needed, often globals are sufficient
-            localns = None  # Usually not needed for top-level class definitions
+            # Revert: Use only globals, assuming types are resolvable in module scope
+            localns = None
 
-            resolved_types = get_type_hints(source_model, globalns=globalns, localns=localns)
-            logger.debug(f"Resolved types for {source_model.__name__}: {resolved_types}")
+            # resolved_types = get_type_hints(source_model, globalns=globalns, localns=localns)
+            # logger.debug(f"Resolved types for {source_model.__name__} using {globalns=}, {localns=}: {resolved_types}")
+            # Use updated call without potentially incorrect locals:
+            resolved_types = get_type_hints(source_model, globalns=globalns, localns=None)
+            logger.debug(f"Resolved types for {source_model.__name__} using module globals: {resolved_types}")
 
             dataclass_fields = dataclasses.fields(source_model)
         except (TypeError, NameError) as e:  # Catch errors during type hint resolution or fields() call
@@ -341,21 +372,43 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
                 # Fallback to original, which might be a string
                 resolved_type = field_info.type
 
-            # --- Modify FieldInfo temporarily with resolved type for create_field ---
-            # Let's modify the field_info temporarily (less ideal, but avoids cascading changes):
-            original_type = field_info.type
+            # --- Prepare field type for create_field --- #
+            type_for_create_field = resolved_type  # Start with the result from get_type_hints
+
+            # If the original type annotation was a string (ForwardRef)
+            # and get_type_hints failed to resolve it (resolved_type is None or still the string),
+            # try to find the resolved type from the dict populated earlier.
+            # This specifically handles nested dataclasses defined in local scopes like fixtures.
+            if isinstance(field_info.type, str):
+                explicitly_resolved = resolved_types.get(field_name)
+                if explicitly_resolved and not isinstance(explicitly_resolved, str):
+                    logger.debug(
+                        f"Using explicitly resolved type {explicitly_resolved!r} for forward ref '{field_info.type}'"
+                    )
+                    type_for_create_field = explicitly_resolved
+                elif resolved_type is field_info.type:  # Check if resolved_type is still the unresolved string
+                    logger.error(
+                        f"Type hint for '{field_name}' is string '{field_info.type}' but was not resolved by get_type_hints. Skipping field."
+                    )
+                    carrier.invalid_fields.append(
+                        (field_name, f"Could not resolve forward reference: {field_info.type}")
+                    )
+                    continue  # Skip this field
+
+            # Temporarily modify a copy of field_info or pass type directly if possible.
+            # Modifying field_info directly is simpler for now.
+            original_type_attr = field_info.type
             try:
-                # Directly modify the attribute (works for standard dataclasses.Field)
-                field_info.type = resolved_type
-                logger.debug(f"Temporarily setting field_info.type to resolved type: {resolved_type!r}")
+                field_info.type = type_for_create_field  # Use the determined type
+                logger.debug(f"Calling create_field for '{field_name}' with type: {field_info.type!r}")
 
                 field_result = self.field_factory.create_field(
                     field_info=field_info, model_name=source_model.__name__, carrier=carrier
                 )
             finally:
-                # Restore original type to avoid side effects if field_info is reused
-                field_info.type = original_type
-                logger.debug("Restored original field_info.type")
+                # Restore original type attribute
+                field_info.type = original_type_attr
+                logger.debug("Restored original field_info.type attribute")
 
             # Process the result (errors, definitions)
             if field_result.error_str:

@@ -246,9 +246,9 @@ def optional_fields_model():
 
     class OptionalModel(BaseModel):
         required_string: str
-        optional_string: str | None = None
+        optional_string: Optional[str] = None
         required_int: int
-        optional_int: int | None = None
+        optional_int: Optional[int] = None
 
     return OptionalModel
 
@@ -435,6 +435,28 @@ def advanced_types_dataclass():
     return AdvancedTypesDC
 
 
+# --- Define Relationship Dataclasses at Module Level for Resolution ---
+@dataclass
+class AddressDC:
+    street: str
+    city: str
+    country: str
+
+
+@dataclass
+class ProfileDC:
+    bio: str
+    website: str
+
+
+@dataclass
+class TagDC:
+    tag_name: str
+
+
+# --- End Module Level Relationship Dataclasses ---
+
+
 @pytest.fixture
 def optional_dataclass():
     """Fixture providing a dataclass with optional fields."""
@@ -443,8 +465,8 @@ def optional_dataclass():
     class OptionalDC:
         required_string: str
         required_int: int
-        optional_string: str | None = None
-        optional_int: int | None = None
+        optional_string: Optional[str] = None
+        optional_int: Optional[int] = None
 
     return OptionalDC
 
@@ -470,28 +492,15 @@ def nested_dataclass():
 def relationship_dataclasses():
     """Fixture providing a set of related dataclasses mimicking relationships."""
 
-    @dataclass
-    class AddressDC:
-        street: str
-        city: str
-        country: str
-
-    @dataclass
-    class ProfileDC:
-        bio: str
-        website: str
-
-    @dataclass
-    class TagDC:
-        name: str
-
+    # Define UserDC locally, referencing the module-level types
     @dataclass
     class UserDC:
-        name: str
-        address: AddressDC  # Simulates ForeignKey
-        profile: ProfileDC  # Simulates OneToOne (conceptually)
-        tags: list[TagDC]  # Simulates ManyToMany
+        user_name: str
+        address: AddressDC  # Simulates ForeignKey (references module-level AddressDC)
+        profile: ProfileDC  # Simulates OneToOne (references module-level ProfileDC)
+        tags: list[TagDC]  # Simulates ManyToMany (references module-level TagDC)
 
+    # Return the UserDC defined here PLUS the module-level ones
     return {"AddressDC": AddressDC, "ProfileDC": ProfileDC, "TagDC": TagDC, "UserDC": UserDC}
 
 
@@ -501,7 +510,7 @@ def metadata_dataclass():
 
     @dataclass
     class MetadataDC:
-        name: str = field(metadata={"description": "The name of the item"})
+        item_name: str = field(metadata={"description": "The name of the item"})
         value: int = field(metadata={"units": "meters"})
 
     return MetadataDC

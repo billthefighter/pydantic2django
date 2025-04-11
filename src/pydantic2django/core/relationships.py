@@ -250,3 +250,13 @@ class RelationshipConversionAccessor:
             if is_dataclass and r.dataclass_model == model:
                 return True
         return False
+
+    # Add a method to lookup source type by name
+    def get_source_model_by_name(self, model_name: str) -> Optional[type]:
+        """Find a known source model (Pydantic or Dataclass) by its class name."""
+        for r in self.available_relationships:
+            if r.pydantic_model and r.pydantic_model.__name__ == model_name:
+                return r.pydantic_model
+            if r.dataclass_model and r.dataclass_model.__name__ == model_name:
+                return r.dataclass_model
+        return None

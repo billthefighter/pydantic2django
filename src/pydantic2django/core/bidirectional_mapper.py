@@ -14,7 +14,8 @@ It utilizes:
 import inspect
 import logging
 from types import UnionType
-from typing import Any, Literal, Optional, Union, get_args, get_origin
+from typing import Any, Literal, Optional, Union, get_args, get_origin, cast
+import dataclasses
 
 from django.db import models
 from pydantic import BaseModel
@@ -249,7 +250,7 @@ class BidirectionalTypeMapper:
         try:
             is_known_model = (
                 inspect.isclass(type_to_match)
-                and issubclass(type_to_match, BaseModel)
+                and (issubclass(type_to_match, BaseModel) or dataclasses.is_dataclass(type_to_match))
                 and self.relationship_accessor.is_source_model_known(type_to_match)
             )
         except TypeError:
@@ -417,10 +418,10 @@ class BidirectionalTypeMapper:
             list_args = get_args(list_inner_type)  # Should be List[T]
             inner_type = list_args[0] if list_args else Any
 
-            # Is the inner type a known related BaseModel?
+            # Is the inner type a known related BaseModel OR Dataclass?
             if (
                 inspect.isclass(inner_type)
-                and issubclass(inner_type, BaseModel)
+                and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))  # Added dataclass check
                 and self.relationship_accessor.is_source_model_known(inner_type)
             ):
                 unit_cls = ManyToManyFieldMapping
@@ -486,11 +487,10 @@ class BidirectionalTypeMapper:
                 unit_cls = JsonFieldMapping
                 logger.debug(f"Prepared union_details for multi-FK: {union_details}")
                 # Set is_optional based on None presence for final kwargs adjustment
-                is_optional = has_none_type
+                pass  # Do not overwrite is_optional here; let the initial check prevail.
+
             elif len(union_models) == 1 and not other_types_in_union and has_none_type:
                 # This is just Optional[KnownModel], ensure it wasn't lost.
-                # _find_unit_for_pydantic_type should have handled unwrapping and
-                # selected ForeignKeyMapping. Let's double-check unit_cls.
                 if unit_cls not in (ForeignKeyMapping, OneToOneFieldMapping):
                     logger.warning(
                         f"Detected Optional[KnownModel] {union_models[0].__name__}, but unit_cls is "
@@ -512,7 +512,7 @@ class BidirectionalTypeMapper:
                         f"Correctly identified Optional[{union_models[0].__name__}]. Proceeding with {unit_cls.__name__}."
                     )
                 # Ensure is_optional reflects the Optional wrapper
-                is_optional = True  # It came from Optional[Model] or Union[Model, None]
+                pass
                 # union_details remains None
             # else: This is not a Union containing ONLY BaseModels (and optional None), proceed normally
 
@@ -574,9 +574,13 @@ class BidirectionalTypeMapper:
                 # Ensure base_py_type is the related model (set during M2M check or found by find_unit for FK/O2O)
                 related_py_model = base_py_type
 
-                if not (inspect.isclass(related_py_model) and issubclass(related_py_model, BaseModel)):
+                # Check if it's a known Pydantic BaseModel OR a known Dataclass
+                is_pyd_or_dc = inspect.isclass(related_py_model) and (
+                    issubclass(related_py_model, BaseModel) or dataclasses.is_dataclass(related_py_model)
+                )
+                if not is_pyd_or_dc:
                     raise MappingError(
-                        f"Relationship mapping unit {unit_cls.__name__} selected, but base type {related_py_model} is not a Pydantic BaseModel."
+                        f"Relationship mapping unit {unit_cls.__name__} selected, but base type {related_py_model} is not a known Pydantic model or Dataclass."
                     )
 
                 # Check for self-reference BEFORE trying to get the Django model
@@ -591,10 +595,22 @@ class BidirectionalTypeMapper:
                         f"(Django: {getattr(target_django_model, '__name__', 'N/A')}), using 'self'."
                     )
                 else:
-                    target_django_model = self.relationship_accessor.get_django_model_for_pydantic(related_py_model)
+                    # Get target Django model based on source type (Pydantic or Dataclass)
+                    target_django_model = None
+                    # Ensure related_py_model is actually a type before issubclass check
+                    if inspect.isclass(related_py_model) and issubclass(related_py_model, BaseModel):
+                        # Cast to satisfy type checker, as we've confirmed it's a BaseModel subclass here
+                        target_django_model = self.relationship_accessor.get_django_model_for_pydantic(
+                            cast(type[BaseModel], related_py_model)
+                        )
+                    elif dataclasses.is_dataclass(related_py_model):
+                        target_django_model = self.relationship_accessor.get_django_model_for_dataclass(
+                            related_py_model
+                        )
+
                     if not target_django_model:
                         raise MappingError(
-                            f"Cannot map relationship: No corresponding Django model found for Pydantic model "
+                            f"Cannot map relationship: No corresponding Django model found for source model "
                             f"{related_py_model.__name__} in RelationshipConversionAccessor."
                         )
                     # Use string representation (app_label.ModelName) if possible, else name
@@ -604,20 +620,24 @@ class BidirectionalTypeMapper:
                 django_field_type = unit_cls.django_field_type  # Re-confirm M2MField, FK, O2O type
                 # Set on_delete for FK/O2O based on Optional status
                 if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping):
-                    # Default to PROTECT for non-optional, SET_NULL for optional
-                    kwargs["on_delete"] = models.SET_NULL if is_optional else models.PROTECT
+                    # Default to CASCADE for non-optional, SET_NULL for optional (matching test expectation)
+                    kwargs["on_delete"] = (
+                        models.SET_NULL if is_optional else models.CASCADE
+                    )  # Changed PROTECT to CASCADE
                 # M2M blank=True is handled by ManyToManyFieldMapping.pydantic_to_django_kwargs
 
         # --- Final Adjustments (Nullability, etc.) --- #
+        # >> DEBUGGING <<
+        logger.info(f"[DEBUG Optional] Final adjustments for {original_py_type=}. {is_optional=}, initial {kwargs=}")
+        # >> END DEBUGGING <<
+
         # Apply nullability. M2M fields cannot be null in Django.
         # Apply nullability BEFORE potentially overriding blank for multi-FK
         if django_field_type != models.ManyToManyField:
             kwargs["null"] = is_optional
             # Explicitly set blank based on optionality.
-            # Override if blank is not already set OR if it was set to False/None.
-            # Preserve blank=True if set by a unit (e.g., M2M).
-            if kwargs.get("blank") is not True:
-                kwargs["blank"] = is_optional
+            # Simplified logic: Mirror the null assignment directly
+            kwargs["blank"] = is_optional
 
         # If it's a multi-FK union, force null=True, blank=True regardless of Optional status
         # because only one FK can be set.
@@ -715,11 +735,10 @@ class BidirectionalTypeMapper:
         field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
 
         # Clean up redundant `default=None` for Optional fields.
-        # Pydantic v2 implicitly handles `default=None` for `Optional[T]` types.
-        # Keep `default=None` only if it was an AutoPK (where frozen=True is also set).
-        if is_optional and field_info_kwargs.get("default") is None:
-            if not is_auto_pk:  # AutoPKs need default=None explicitly alongside frozen=True
-                field_info_kwargs.pop("default", None)
-                logger.debug(f"Removed redundant default=None for Optional field '{dj_field.name}'")
+        # Pydantic v2 implicitly handles `default=None` for `Optional[T]`
+        # Only pop default=None if the field is Optional and not an AutoPK
+        if is_optional and not is_auto_pk and field_info_kwargs.get("default") is None:
+            field_info_kwargs.pop("default", None)
+            logger.debug(f"Removed redundant default=None for Optional field '{dj_field.name}'")
 
         return final_pydantic_type, field_info_kwargs

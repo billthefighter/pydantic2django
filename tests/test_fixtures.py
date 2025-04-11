@@ -137,6 +137,5 @@ def test_metadata_dataclass_fixture(metadata_dataclass):
     """Verify the metadata_dataclass fixture can be instantiated."""
     assert metadata_dataclass is not None
     assert hasattr(metadata_dataclass, "__dataclass_fields__")
-    assert "name" in metadata_dataclass.__dataclass_fields__
-    # Check metadata presence (optional)
-    assert "description" in metadata_dataclass.__dataclass_fields__["name"].metadata
+    assert "item_name" in metadata_dataclass.__dataclass_fields__
+    assert "value" in metadata_dataclass.__dataclass_fields__

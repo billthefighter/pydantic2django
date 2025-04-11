@@ -42,6 +42,7 @@ class DataclassDjangoModelGenerator(
         discovery_instance: Optional[DataclassDiscovery] = None,
         model_factory_instance: Optional[DataclassModelFactory] = None,
         field_factory_instance: Optional[DataclassFieldFactory] = None,  # Add field factory param
+        relationship_accessor: Optional[RelationshipConversionAccessor] = None,  # Accept accessor
         module_mappings: Optional[dict[str, str]] = None,
         # Default base class can be models.Model or a custom one
         base_model_class: type[models.Model] = Dataclass2DjangoBaseClass,  # Use the correct base for dataclasses
@@ -53,8 +54,10 @@ class DataclassDjangoModelGenerator(
         # Dataclass factories might not need RelationshipAccessor, check their definitions
         # Assuming they don't for now.
         # --- Correction: They DO need them now ---
-        self.relationship_accessor = RelationshipConversionAccessor()
-        self.bidirectional_mapper = BidirectionalTypeMapper()
+        # Use provided accessor or create a new one
+        self.relationship_accessor = relationship_accessor or RelationshipConversionAccessor()
+        # Create mapper using the (potentially provided) accessor
+        self.bidirectional_mapper = BidirectionalTypeMapper(relationship_accessor=self.relationship_accessor)
 
         self.dataclass_field_factory = field_factory_instance or DataclassFieldFactory(
             relationship_accessor=self.relationship_accessor,

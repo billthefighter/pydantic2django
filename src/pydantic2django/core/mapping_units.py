@@ -772,8 +772,9 @@ class DecimalFieldMapping(TypeMappingUnit):
                 if hasattr(item, "decimal_places"):
                     decimal_places = item.decimal_places
 
-        kwargs["max_digits"] = max_digits if max_digits is not None else 19  # Default
-        kwargs["decimal_places"] = decimal_places if decimal_places is not None else 10  # Default
+        # Use more standard defaults if not provided
+        kwargs["max_digits"] = max_digits if max_digits is not None else 10  # Standard Default
+        kwargs["decimal_places"] = decimal_places if decimal_places is not None else 2  # Standard Default
         return kwargs
 
     def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:

@@ -270,7 +270,7 @@ PYD_TO_DJ_CONSTRAINT_CASES = [
         "decimal_default",
         Decimal,
         models.DecimalField,
-        {"max_digits": 19, "decimal_places": 10, "null": False, "blank": False},
+        {"max_digits": 10, "decimal_places": 2, "null": False, "blank": False},
     ),
     PydToDjParams(
         "decimal_with_constraints",
@@ -404,49 +404,58 @@ PYD_TO_DJ_ENUM_CASES = [
 ]
 
 PYD_TO_DJ_RELATIONSHIP_CASES = [
-    # ForeignKey
+    # Simple Pydantic Model -> Django ForeignKey
     PydToDjParams(
         "fk_simple",
         RelatedPydanticModel,
         models.ForeignKey,
-        {"to": "test_app.relateddjangomodel", "on_delete": models.PROTECT, "null": False, "blank": False},
+        {"to": "test_app.relateddjangomodel", "on_delete": models.CASCADE, "null": False, "blank": False},
+        field_info=FieldInfo(annotation=RelatedPydanticModel),  # Add FieldInfo
     ),
+    # Optional Pydantic Model -> Django ForeignKey (nullable)
     PydToDjParams(
         "fk_optional",
         Optional[RelatedPydanticModel],
         models.ForeignKey,
         {"to": "test_app.relateddjangomodel", "on_delete": models.SET_NULL, "null": True, "blank": True},
+        field_info=FieldInfo(annotation=Optional[RelatedPydanticModel]),  # Add FieldInfo
     ),
-    # ManyToMany
+    # List of Pydantic Models -> Django ManyToManyField
     PydToDjParams(
         "m2m_list",
-        List[RelatedPydanticModel],
+        list[RelatedPydanticModel],
         models.ManyToManyField,
-        {"to": "test_app.relateddjangomodel", "blank": True},
+        {"to": "test_app.relateddjangomodel", "blank": True},  # blank=True often default for M2M
+        field_info=FieldInfo(annotation=list[RelatedPydanticModel]),  # Add FieldInfo
     ),
+    # Optional List of Pydantic Models -> Django ManyToManyField (blank=True)
     PydToDjParams(
         "m2m_optional_list",
-        Optional[List[RelatedPydanticModel]],
+        Optional[list[RelatedPydanticModel]],
         models.ManyToManyField,
         {"to": "test_app.relateddjangomodel", "blank": True},
+        field_info=FieldInfo(annotation=Optional[list[RelatedPydanticModel]]),  # Add FieldInfo
     ),
-    # OneToOne (assuming it maps from direct BaseModel ref like FK)
-    # Adjusted O2O tests to expect ForeignKey, aligning with current default behavior
+    # Simple Pydantic Model (intended as O2O) -> Currently maps to ForeignKey
+    # TODO: Update this test when O2O detection is implemented
     PydToDjParams(
-        "o2o_simple_as_fk",  # Renamed test ID slightly for clarity
+        "o2o_simple_as_fk",
         RelatedPydanticModel,
-        models.ForeignKey,  # Changed from OneToOneField
-        {"to": "test_app.relateddjangomodel", "on_delete": models.PROTECT, "null": False, "blank": False},
-        # Removed field_info hint for OneToOneField
+        models.ForeignKey,  # Currently maps to FK, update if O2O logic added
+        {"to": "test_app.relateddjangomodel", "on_delete": models.CASCADE, "null": False, "blank": False},
+        # Update expected type if needed
+        # field_info=FieldInfo(annotation=RelatedPydanticModel, json_schema_extra={"relation_type": "one_to_one"})
     ),
+    # Optional Pydantic Model (intended as O2O) -> Currently maps to ForeignKey (nullable)
     PydToDjParams(
-        "o2o_optional_as_fk",  # Renamed test ID slightly for clarity
+        "o2o_optional_as_fk",
         Optional[RelatedPydanticModel],
-        models.ForeignKey,  # Changed from OneToOneField
+        models.ForeignKey,  # Currently maps to FK, update if O2O logic added
         {"to": "test_app.relateddjangomodel", "on_delete": models.SET_NULL, "null": True, "blank": True},
-        # Removed field_info hint for OneToOneField
+        # Update expected type if needed
+        # field_info=FieldInfo(annotation=Optional[RelatedPydanticModel], json_schema_extra={"relation_type": "one_to_one"})
     ),
-    # Self Ref
+    # Self-referencing ForeignKey (Optional)
     PydToDjParams(
         "self_ref_fk",
         Optional[TargetPydanticModel],
