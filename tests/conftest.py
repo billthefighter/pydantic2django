@@ -5,25 +5,16 @@ import os
 import sys
 from pathlib import Path
 import logging
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from typing import Any, Callable, ClassVar, Optional
+from uuid import UUID
 
 import django
 import pytest
 from django.conf import settings
-
-# Import all fixtures
-from .fixtures.fixtures import (
-    basic_pydantic_model,
-    datetime_pydantic_model,
-    optional_fields_model,
-    constrained_fields_model,
-    relationship_models,
-    method_model,
-    factory_model,
-    product_django_model,
-    user_django_model,
-    context_pydantic_model,
-    context_with_data,
-)
+from django.db import models
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 # Add the project root to the Python path
 project_root = Path(__file__).parent
@@ -63,3 +54,38 @@ def setup_logging():
     for logger_name in ["tests", "pydantic2django"]:
         logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
+
+
+# Fixtures have been moved to tests/fixtures/fixtures.py
+
+# Helper function and classes remain here
+
+
+def get_model_fields(django_model):
+    """Helper function to get fields from a Django model."""
+    return {f.name: f for f in django_model._meta.get_fields()}
+
+
+class UnserializableType:
+    """A type that can't be serialized to JSON."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+
+class ComplexHandler:
+    """A complex handler that can't be serialized."""
+
+    def process(self, data: Any) -> Any:
+        return data
+
+
+class SerializableType(BaseModel):
+    """A type that can be serialized to JSON."""
+
+    value: str
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"value": "example"}]})
+
+
+# --- End of conftest.py content ---

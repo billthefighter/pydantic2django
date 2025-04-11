@@ -20,6 +20,7 @@ pydantic = ">=2.0"
 pre-commit = "^4.1.0"
 email-validator = "^2.1.0"
 torch = "^2.2.0"
+pydantic-ai = "^0.0.53"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -80,7 +81,11 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = [
     "--ds=tests.settings",
-    "--no-migrations",
     "--cov=pydantic2django",
     "--cov-report=term-missing"
 ]
+
+# Add Mypy configuration for src layout
+[tool.mypy]
+mypy_path = "src"
+ignore_missing_imports = true # Add this initially to handle potential stub issues

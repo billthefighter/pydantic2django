@@ -1,0 +1,41 @@
+"""
+Django model for {{ pydantic_model_name }}.
+"""
+
+class {{ model_name }}({{ base_model_name }}):
+    """
+    Django model for {{ pydantic_model_name }}.
+    {% if context_fields %}
+
+    Context Fields:
+        The following fields require context when converting back to Pydantic:
+        {% for field_name, field_type in context_fields %}
+        - {{ field_name }}: {{ field_type }}
+        {% endfor %}
+    {% endif %}
+    """
+
+    {# Iterate through the field definitions dictionary #}
+    {% for field_name, field_def_str in field_definitions.items() %}
+    {{ field_name }} = {{ field_def_str }}
+    {% else %}
+    # No fields defined for this model.
+    pass
+    {% endfor %}
+
+    {% if validation_needed %}
+    # TODO: Add validation to ensure only one of the following fields is set:
+    # {{ multi_fk_field_names | join(', ') }}
+    {% endif %}
+
+    class Meta:
+        app_label = '{{ app_label }}'
+        abstract = False
+
+    {% if context_fields %}
+    def to_pydantic(self, context: Optional["{{ context_class_name }}"]) -> {{ pydantic_model_name }}:
+        """
+        Convert this Django model to The corresponding {{ pydantic_model_name }} object.
+        """
+        return cast({{ pydantic_model_name }}, super().to_pydantic(context=context))
+    {% endif %}

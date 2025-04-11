@@ -5,7 +5,7 @@ This module provides simplified mock implementations of the discovery functions
 to allow examples and tests to run without requiring the full implementation.
 """
 from collections.abc import Callable
-from typing import Optional, Union, get_origin, get_args, List
+from typing import Optional, Union, get_origin, get_args, List, Type, Any, TypeVar
 import logging
 
 # Configure logging
@@ -14,411 +14,127 @@ logger = logging.getLogger("mock_discovery")
 
 from django.db import models
 from pydantic import BaseModel
-from pydantic2django.discovery import ModelDiscovery
-from pydantic2django.relationships import RelationshipConversionAccessor, RelationshipMapper
-from pydantic2django.context_storage import ModelContext
+from dataclasses import is_dataclass, dataclass  # Import dataclass decorator too
 
-# Storage for discovered models
-_discovered_models: dict[str, type[BaseModel]] = {}
-_django_models: dict[str, type[models.Model]] = {}
+# Define ModelType simply as a TypeVar without a complex bound for now
+ModelType = TypeVar("ModelType")
+
+# Corrected imports based on src structure
+from pydantic2django.core.discovery import BaseDiscovery  # Corrected path
+from pydantic2django.core.relationships import RelationshipConversionAccessor, RelationshipMapper  # Corrected path
+from pydantic2django.core.context import ModelContext  # Corrected context import path
+
+# --- Global State --- #
+# Renamed for clarity
+_registered_pydantic_models: dict[str, type[BaseModel]] = {}
+_registered_dataclasses: dict[str, Type] = {}  # Using Type which is Any, maybe refine?
+_registered_django_models: dict[str, type[models.Model]] = {}
 _model_has_context: dict[str, bool] = {}
-_model_contexts: dict[str, ModelContext] = {}  # Store context objects
-
-# Initialize relationships
+_model_contexts: dict[str, ModelContext] = {}
 _relationships = RelationshipConversionAccessor()
+_field_overrides: dict[str, dict[str, dict[str, str]]] = {}
 
-# Store specific field overrides for models
-_field_overrides = {}
-
-
-def set_field_override(model_name: str, field_name: str, field_type: str, target_model: str) -> None:
-    """
-    Set a field override for a model.
-    This allows us to specify a specific field type for a field in a model.
-
-    Args:
-        model_name: The name of the model
-        field_name: The name of the field
-        field_type: The type of field (e.g. "ForeignKey")
-        target_model: The target model for the field
-    """
-    if model_name not in _field_overrides:
-        _field_overrides[model_name] = {}
-    _field_overrides[model_name][field_name] = {"field_type": field_type, "target_model": target_model}
-
-
-def _setup_nested_model_relationships():
-    """Set up relationships between nested Pydantic models."""
-    # Get all models we've registered
-    pydantic_models = _discovered_models.values()
-
-    # Map relationships between models that reference each other
-    from typing import get_origin, get_args, Optional, Union, List
-
-    # For each model, analyze fields to find relationships
-    for model_name, pydantic_model in _discovered_models.items():
-        logger.debug(f"Analyzing model {model_name} for relationships")
-        for field_name, field in pydantic_model.model_fields.items():
-            annotation = field.annotation
-
-            # Check for default_factory fields with RetryStrategy
-            if field_name == "retry_strategy" and hasattr(field, "default_factory"):
-                # For RetryStrategy in ChainStep, manually map the relationship
-                for other_name, other_model in _discovered_models.items():
-                    if other_name == "RetryStrategy" and model_name == "ChainStep":
-                        logger.debug(f"Found default_factory relationship: {model_name}.{field_name} -> {other_name}")
-                        if model_name in _django_models and other_name in _django_models:
-                            django_model = _django_models[model_name]
-                            other_django_model = _django_models[other_name]
-                            map_relationship(pydantic_model, django_model)
-                            map_relationship(other_model, other_django_model)
-                            logger.debug(f"Mapped default_factory relationship: {model_name} <-> Django{model_name}")
-                            logger.debug(f"Mapped default_factory relationship: {other_name} <-> Django{other_name}")
-
-            # Check if this field references another Pydantic model
-            for other_name, other_model in _discovered_models.items():
-                # Skip self-references
-                if other_model == pydantic_model:
-                    continue
-
-                try:
-                    # Try direct match first
-                    if annotation == other_model:
-                        logger.debug(f"Found direct relationship: {model_name}.{field_name} -> {other_name}")
-                        _map_model_relationship(model_name, other_name, pydantic_model, other_model)
-                    # Check for Optional[OtherModel]
-                    elif hasattr(annotation, "__origin__"):
-                        origin = get_origin(annotation)
-                        args = get_args(annotation)
-                        if origin is Union and type(None) in args and other_model in args:
-                            logger.debug(f"Found Optional relationship: {model_name}.{field_name} -> {other_name}")
-                            _map_model_relationship(model_name, other_name, pydantic_model, other_model)
-                        # Check for List[OtherModel]
-                        elif origin is list and len(args) == 1 and args[0] == other_model:
-                            logger.debug(f"Found List relationship: {model_name}.{field_name} -> {other_name}")
-                            _map_model_relationship(model_name, other_name, pydantic_model, other_model)
-                except (AttributeError, TypeError):
-                    # If we can't determine the relationship, just continue
-                    continue
-
-
-def _map_model_relationship(model_name, other_name, pydantic_model, other_model):
-    """Helper to map relationships between models."""
-    # If we find a reference, make sure both models are mapped properly
-    django_model_name = f"Django{model_name}"
-    other_django_model_name = f"Django{other_name}"
-
-    # Get Django models if they exist
-    if model_name in _django_models and other_name in _django_models:
-        django_model = _django_models[model_name]
-        other_django_model = _django_models[other_name]
-
-        # Map both ways for full bidirectional mapping
-        map_relationship(pydantic_model, django_model)
-        map_relationship(other_model, other_django_model)
-
-        logger.debug(f"Mapped relationship: {model_name} <-> {django_model_name}")
-        logger.debug(f"Mapped relationship: {other_name} <-> {other_django_model_name}")
-
-
-class MockDiscovery(ModelDiscovery):
-    """Mock implementation of ModelDiscovery for testing."""
-
-    def __init__(self, initial_models: Optional[dict[str, type[BaseModel]]] = None):
-        """Initialize a new MockDiscovery instance."""
-        logger.debug("Initializing MockDiscovery")
-        super().__init__()
-        # Use initial_models if provided, otherwise default to global
-        self.discovered_models = initial_models if initial_models is not None else _discovered_models
-        self.django_models = {}  # Start with empty django models for this instance
-        self.filtered_models = {}
-        # Create a LOCAL relationship accessor for this instance
-        self.relationship_accessor = RelationshipConversionAccessor()
-        self.field_overrides = _field_overrides  # Field overrides can remain global for simplicity
-        self.contexts = {}  # Start with empty contexts for this instance
-
-        # Populate the LOCAL relationship accessor with the models for THIS instance
-        if self.discovered_models:
-            # Add models to the local relationship accessor
-            for name, model in self.discovered_models.items():
-                logger.debug(f"[MockDiscovery Init] Adding Pydantic model {name} to LOCAL relationship accessor")
-                # Assuming RelationshipMapper needs pydantic_model at least
-                relationship = RelationshipMapper(pydantic_model=model, django_model=None, context=None)
-                self.relationship_accessor.available_relationships.append(relationship)
-
-        # Set up relationships between models within THIS instance's models
-        self._setup_nested_model_relationships_local()
-
-        logger.debug(f"MockDiscovery initialized with {len(self.discovered_models)} instance models")
-
-    # Add a local version of relationship setup
-    def _setup_nested_model_relationships_local(self):
-        """Set up relationships between nested Pydantic models for THIS instance."""
-        from typing import get_origin, get_args, Optional, Union, List
-
-        for model_name, pydantic_model in self.discovered_models.items():
-            logger.debug(f"[Local Setup] Analyzing model {model_name} for relationships")
-            for field_name, field in pydantic_model.model_fields.items():
-                annotation = field.annotation
-                for other_name, other_model in self.discovered_models.items():
-                    if other_model == pydantic_model:
-                        continue  # Skip self-references
-                    try:
-                        is_direct = annotation == other_model
-                        origin = get_origin(annotation)
-                        args = get_args(annotation)
-                        is_optional = origin is Union and type(None) in args and other_model in args
-                        is_list = origin is list and len(args) == 1 and args[0] == other_model
-
-                        if is_direct or is_optional or is_list:
-                            rel_type = "direct" if is_direct else ("Optional" if is_optional else "List")
-                            logger.debug(
-                                f"[Local Setup] Found {rel_type} relationship: {model_name}.{field_name} -> {other_name}"
-                            )
-                            # Map relationship using the local accessor
-                            django_model = self.django_models.get(model_name)
-                            other_django_model = self.django_models.get(other_name)
-
-                            # Only map if the pydantic_model is valid
-                            if pydantic_model:
-                                self.relationship_accessor.map_relationship(pydantic_model, django_model)  # type: ignore
-
-                            # Map the other side if valid
-                            if other_model in self.discovered_models and other_model:
-                                self.relationship_accessor.map_relationship(other_model, other_django_model)  # type: ignore
-
-                    except (AttributeError, TypeError):
-                        continue
-
-    def discover_models(
-        self,
-        package_names: list[str],
-        app_label: str = "django_app",
-        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
-    ) -> None:
-        """Mock implementation of discover_models."""
-        logger.debug(f"discover_models called with packages: {package_names}, app_label: {app_label}")
-        self.discovered_models = _discovered_models
-        self.app_label = app_label
-
-        # Populate filtered_models with fully qualified names
-        self.filtered_models = {}
-        for name, model in self.discovered_models.items():
-            qualified_name = f"{app_label}.{name}"
-            self.filtered_models[qualified_name] = model
-
-        logger.debug(
-            f"discover_models found {len(self.discovered_models)} models: {list(self.discovered_models.keys())}"
-        )
-        logger.debug(f"filtered_models contains: {list(self.filtered_models.keys())}")
-
-    def get_registration_order(self) -> list[str]:
-        """Get the registration order for models.
-
-        Returns:
-            List of fully qualified model names (app_label.model_name)
-        """
-        logger.debug("get_registration_order called")
-        # Simply return the keys from discovered_models in alphabetical order
-        model_names = list(self.discovered_models.keys())
-        model_names.sort()  # Sort alphabetically
-
-        # Add app_label prefix
-        result = [f"{self.app_label}.{name}" for name in model_names]
-        logger.debug(f"Registration order: {result}")
-        return result
-
-    def get_models_in_registration_order(self) -> list[type[BaseModel]]:
-        """Get models in registration order.
-
-        Returns:
-            List of Pydantic model classes in registration order
-        """
-        logger.debug("get_models_in_registration_order called")
-        registration_order = self.get_registration_order()
-        # Make sure we handle the registration_order correctly and avoid double app_labels
-        models = []
-        for name in registration_order:
-            # Remove app_label if present to get the base model name
-            model_name = name.split(".")[-1] if "." in name else name
-            if model_name in self.discovered_models:
-                models.append(self.discovered_models[model_name])
-            elif name in self.filtered_models:
-                models.append(self.filtered_models[name])
-        logger.debug(f"Returning {len(models)} models in registration order")
-        return models
-
-    def setup_dynamic_models(self, app_label: str = "django_app") -> dict[str, type[models.Model]]:
-        """Mock implementation of setup_dynamic_models."""
-        logger.debug(f"setup_dynamic_models called with app_label: {app_label}")
-        self.app_label = app_label
-
-        # Create Django models for each discovered Pydantic model
-        for name, pydantic_model in self.discovered_models.items():
-            if name not in _django_models:
-                logger.debug(f"Creating Django model for {name}")
-
-                # Create the Django model class name
-                # Use standard Django naming convention - no 'Model' suffix
-                model_class_name = f"Django{name}"
-                model_attrs = {
-                    "Meta": type("Meta", (), {"app_label": self.app_label}),
-                    "__module__": f"{self.app_label}.models.{name.lower()}",
-                }
-
-                DynamicModel = type(model_class_name, (models.Model,), model_attrs)
-                _django_models[name] = DynamicModel
-                logger.debug(f"Created model class {model_class_name}")
-
-                # Map the relationship
-                self.map_model_relationship(pydantic_model, DynamicModel)
-            else:
-                logger.debug(f"Django model for {name} already exists")
-                # Ensure relationship is mapped for existing models
-                if name in _django_models:
-                    self.map_model_relationship(pydantic_model, _django_models[name])
-
-        self.django_models = _django_models
-        logger.debug(
-            f"setup_dynamic_models created {len(self.django_models)} models: {list(self.django_models.keys())}"
-        )
-        return self.django_models
-
-    def map_model_relationship(self, pydantic_model: type[BaseModel], django_model: type[models.Model]) -> None:
-        """Map the relationship between a Pydantic model and a Django model."""
-        logger.debug(f"Mapping relationship: {pydantic_model.__name__} <-> {django_model.__name__}")
-        self.relationship_accessor.map_relationship(pydantic_model, django_model)
-
-    def get_relationship_accessor(self) -> RelationshipConversionAccessor:
-        """Get the RelationshipConversionAccessor."""
-        return self.relationship_accessor
-
-    def get_model_has_context(self) -> dict[str, bool]:
-        """Get the dictionary of models with context."""
-        logger.debug(f"get_model_has_context returning {len(_model_has_context)} items")
-        return _model_has_context
-
-    def get_field_overrides(self) -> dict:
-        """Get the field overrides dictionary."""
-        return self.field_overrides
-
-
-def register_model(name: str, model: type[BaseModel], has_context: bool = False) -> None:
-    """
-    Register a Pydantic model for discovery.
-
-    Args:
-        name: The name of the model
-        model: The Pydantic model class
-        has_context: Whether the model has context fields
-    """
-    logger.debug(f"Registering model {name}, has_context={has_context}")
-    _discovered_models[name] = model
-    _model_has_context[name] = has_context
-
-
-def register_django_model(name: str, model: type[models.Model]) -> None:
-    """
-    Register a Django model.
-
-    Args:
-        name: The name of the model
-        model: The Django model class
-    """
-    logger.debug(f"Registering Django model {name}")
-    _django_models[name] = model
-
-
-def map_relationship(pydantic_model: type[BaseModel], django_model: type[models.Model]) -> None:
-    """
-    Map a relationship between a Pydantic model and a Django model.
-
-    Args:
-        pydantic_model: The Pydantic model class
-        django_model: The Django model class
-    """
-    logger.debug(f"Mapping relationship: {pydantic_model.__name__} <-> {django_model.__name__}")
-    _relationships.map_relationship(pydantic_model, django_model)
-
-
-def get_discovered_models() -> dict[str, type[BaseModel]]:
-    """
-    Get all discovered Pydantic models.
-
-    Returns:
-        Dict of discovered Pydantic models
-    """
-    logger.debug(f"get_discovered_models returning {len(_discovered_models)} models: {list(_discovered_models.keys())}")
-    return _discovered_models
-
-
-def get_django_models() -> dict[str, type[models.Model]]:
-    """Get all registered Django models."""
-    logger.debug("get_django_models called")
-
-    # Create Django models from discovered Pydantic models
-    for name, pydantic_model in _discovered_models.items():
-        if name not in _django_models:
-            logger.debug(f"Creating Django model for {name}")
-
-            # Create a unique model class for each model
-            model_class_name = f"Django{name}"
-            model_attrs = {
-                "Meta": type("Meta", (), {"app_label": "django_llm"}),
-                "__module__": f"django_llm.models.{name.lower()}",
-            }
-
-            DynamicModel = type(model_class_name, (models.Model,), model_attrs)
-            _django_models[name] = DynamicModel
-            logger.debug(f"Created model class {model_class_name}")
-
-            # Map the relationship
-            map_relationship(pydantic_model, DynamicModel)
-        else:
-            logger.debug(f"Django model for {name} already exists")
-
-    logger.debug(f"get_django_models returning {len(_django_models)} models: {list(_django_models.keys())}")
-    return _django_models
-
-
-def get_model_has_context() -> dict[str, bool]:
-    """Get the dictionary of models with context."""
-    logger.debug(f"get_model_has_context returning {len(_model_has_context)} items")
-    return _model_has_context
-
-
-def get_relationship_accessor() -> RelationshipConversionAccessor:
-    """Get the RelationshipConversionAccessor."""
-    return _relationships
-
-
-def get_field_overrides() -> dict:
-    """Get the field overrides dictionary."""
-    return _field_overrides
-
-
-def has_field_override(model_name: str, field_name: str) -> bool:
-    """Check if a field override exists for a field."""
-    return model_name in _field_overrides and field_name in _field_overrides[model_name]
-
-
-def get_field_override(model_name: str, field_name: str) -> Optional[dict]:
-    """Get the field override for a field."""
-    if has_field_override(model_name, field_name):
-        return _field_overrides[model_name][field_name]
-    return None
+# --- Helper Functions for Managing Global State --- #
 
 
 def clear() -> None:
-    """Clear all stored models and relationships."""
-    global _discovered_models, _django_models, _model_has_context, _relationships, _field_overrides, _model_contexts
-    logger.debug("Clearing all registered models and relationships")
-    _discovered_models = {}
-    _django_models = {}
+    """Clear all stored models, relationships, contexts, and overrides."""
+    global _registered_pydantic_models, _registered_dataclasses, _registered_django_models
+    global _model_has_context, _relationships, _field_overrides, _model_contexts
+    logger.debug("Clearing all mock discovery state")
+    _registered_pydantic_models = {}
+    _registered_dataclasses = {}
+    _registered_django_models = {}
     _model_has_context = {}
     _field_overrides = {}
     _model_contexts = {}
     _relationships = RelationshipConversionAccessor()
+
+
+def register_model(name: str, model: Type, has_context: bool = False) -> None:
+    """
+    Register a Pydantic model or Dataclass for discovery.
+
+    Args:
+        name: The name of the model.
+        model: The Pydantic model or Dataclass class.
+        has_context: Whether the model has context fields.
+    """
+    logger.debug(
+        f"Registering model '{name}', type: {'Dataclass' if is_dataclass(model) else 'Pydantic'}, has_context={has_context}"
+    )
+    if is_dataclass(model):
+        _registered_dataclasses[name] = model
+    elif isinstance(model, type) and issubclass(model, BaseModel):
+        _registered_pydantic_models[name] = model
+    else:
+        logger.warning(f"Attempted to register unsupported model type for '{name}': {type(model)}")
+        return  # Don't register unknown types
+
+    _model_has_context[name] = has_context
+    # Automatically add the model to the relationship accessor upon registration
+    relationship = RelationshipMapper(
+        pydantic_model=model if isinstance(model, type) and issubclass(model, BaseModel) else None,
+        dataclass_model=model if is_dataclass(model) else None,
+        django_model=None,
+        context=None,
+    )
+    _relationships.available_relationships.append(relationship)
+
+
+def register_django_model(name: str, model: type[models.Model]) -> None:
+    """
+    Register a Django model, usually a mock or predefined one.
+
+    Args:
+        name: The logical name associated with the Django model (often matching a Pydantic/Dataclass name).
+        model: The Django model class.
+    """
+    logger.debug(f"Registering Django model '{name}' ({model.__name__})")
+    _registered_django_models[name] = model
+
+
+def map_relationship(model1: Type, model2: Union[type[models.Model], Type]) -> None:
+    """
+    Explicitly map a relationship between a Pydantic/Dataclass model and its Django counterpart,
+    or between two Pydantic/Dataclass models if needed for the relationship accessor.
+
+    Args:
+        model1: The Pydantic model or Dataclass class.
+        model2: The corresponding Django model class or another Pydantic/Dataclass.
+    """
+    logger.debug(
+        f"Mapping relationship: {getattr(model1, '__name__', str(model1))} <-> {getattr(model2, '__name__', str(model2))}"
+    )
+    # Let the relationship accessor handle the details
+    if isinstance(model2, type) and issubclass(model2, models.Model):
+        _relationships.map_relationship(model1, model2)
+    else:
+        # Handle mapping between two non-Django models if RelationshipAccessor supports it
+        # For now, assume we're mapping to a Django model or use register_model for discovery
+        logger.warning(
+            f"map_relationship currently primarily supports mapping to Django models. Mapping {model1.__name__} <-> {model2.__name__}"
+        )
+        # You might need to extend RelationshipAccessor or RelationshipMapper logic
+        # if direct Pydantic <-> Pydantic mapping is needed beyond simple discovery.
+
+
+def set_field_override(model_name: str, field_name: str, field_type: str, target_model_name: str) -> None:
+    """
+    Set a field override for a model during Django model generation.
+
+    Args:
+        model_name: The name of the model (Pydantic/Dataclass).
+        field_name: The name of the field in the model.
+        field_type: The desired Django field type (e.g., "ForeignKey", "OneToOneField").
+        target_model_name: The name of the target model for the relationship.
+    """
+    logger.debug(
+        f"Setting field override for {model_name}.{field_name}: Type={field_type}, Target='{target_model_name}'"
+    )
+    if model_name not in _field_overrides:
+        _field_overrides[model_name] = {}
+    _field_overrides[model_name][field_name] = {"field_type": field_type, "target_model": target_model_name}
 
 
 def register_context(name: str, context: ModelContext) -> None:
@@ -426,18 +142,202 @@ def register_context(name: str, context: ModelContext) -> None:
     Register a model context for a model.
 
     Args:
-        name: The name of the model
-        context: The ModelContext instance
+        name: The name of the model (Pydantic/Dataclass).
+        context: The ModelContext instance.
     """
+    logger.debug(f"Registering context for model: {name}")
     _model_contexts[name] = context
-    logger.debug(f"Registered context for model: {name}")
+
+
+# --- Global State Getters --- #
+
+
+def get_registered_models() -> dict[str, Type]:
+    """Get all registered Pydantic models and Dataclasses."""
+    # Combine Pydantic and Dataclass dictionaries
+    all_models = {**_registered_pydantic_models, **_registered_dataclasses}
+    logger.debug(f"get_registered_models returning {len(all_models)} models: {list(all_models.keys())}")
+    return all_models
+
+
+def get_registered_django_models() -> dict[str, type[models.Model]]:
+    """Get all registered Django models (mocks or predefined)."""
+    logger.debug(
+        f"get_registered_django_models returning {len(_registered_django_models)} models: {list(_registered_django_models.keys())}"
+    )
+    return _registered_django_models
+
+
+def get_model_has_context() -> dict[str, bool]:
+    """Get the dictionary indicating which models have context."""
+    logger.debug(f"get_model_has_context returning {len(_model_has_context)} items")
+    return _model_has_context
+
+
+def get_relationship_accessor() -> RelationshipConversionAccessor:
+    """Get the singleton RelationshipConversionAccessor instance."""
+    return _relationships
+
+
+def get_field_overrides() -> dict[str, dict[str, dict[str, str]]]:
+    """Get the field overrides dictionary."""
+    return _field_overrides
 
 
 def get_model_contexts() -> dict[str, ModelContext]:
-    """
-    Get all registered model contexts.
-
-    Returns:
-        Dict mapping model names to ModelContext instances
-    """
+    """Get all registered model contexts."""
     return _model_contexts
+
+
+def has_field_override(model_name: str, field_name: str) -> bool:
+    """Check if a field override exists for a specific field."""
+    return model_name in _field_overrides and field_name in _field_overrides[model_name]
+
+
+def get_field_override(model_name: str, field_name: str) -> Optional[dict[str, str]]:
+    """Get the field override details for a specific field."""
+    return _field_overrides.get(model_name, {}).get(field_name)
+
+
+# --- Mock Discovery Class --- #
+
+
+class MockDiscovery(BaseDiscovery[Type]):  # Use Type instead of ModelType
+    """Mock implementation of BaseDiscovery for testing."""
+
+    def __init__(
+        self,
+        model_type_to_discover: str = "all",  # 'pydantic', 'dataclass', 'all'
+        initial_models: Optional[dict[str, Type]] = None,
+    ):
+        """
+        Initialize a new MockDiscovery instance.
+
+        Args:
+            model_type_to_discover: Specifies which type of models ('pydantic', 'dataclass', 'all')
+                                   this instance should pretend to discover.
+            initial_models: Optionally pre-populate with specific models for this instance
+                           (rarely needed, usually use global registration).
+        """
+        logger.debug(f"Initializing MockDiscovery (type: {model_type_to_discover})")
+        super().__init__()  # Initialize base class
+        self.model_type_to_discover = model_type_to_discover
+
+        # Instance state - primarily for filtering/behavior, not data storage
+        # self.discovered_models remains the main dict from BaseDiscovery
+        # self.filtered_models is also from BaseDiscovery
+        # self.dependencies is also from BaseDiscovery
+
+        # If initial_models are provided, use them instead of global ones for this instance.
+        # This deviates from using only global state but allows instance-specific test scenarios.
+        self._instance_models = initial_models
+
+    def _get_source_models(self) -> dict[str, Type]:
+        """Returns the models this instance should 'discover' from."""
+        if self._instance_models is not None:
+            logger.debug("Using instance-specific initial models.")
+            return self._instance_models
+
+        logger.debug("Using globally registered models.")
+        if self.model_type_to_discover == "pydantic":
+            return _registered_pydantic_models
+        elif self.model_type_to_discover == "dataclass":
+            return _registered_dataclasses
+        else:  # 'all'
+            return {**_registered_pydantic_models, **_registered_dataclasses}
+
+    # --- Overriding BaseDiscovery abstract methods --- #
+
+    def _is_target_model(self, obj: Any) -> bool:
+        """Check if an object is the type of model this instance targets."""
+        is_pydantic = isinstance(obj, type) and issubclass(obj, BaseModel)
+        is_dc = is_dataclass(obj) and isinstance(obj, type)
+
+        if self.model_type_to_discover == "pydantic":
+            return is_pydantic
+        elif self.model_type_to_discover == "dataclass":
+            return is_dc
+        else:  # 'all'
+            return is_pydantic or is_dc
+
+    def _default_eligibility_filter(self, model: Type) -> bool:
+        """Mock eligibility: Assume all discovered models are eligible."""
+        # Add specific mock filters if needed (e.g., exclude models starting with '_')
+        return True
+
+    def analyze_dependencies(self) -> None:
+        """Mock dependency analysis - does nothing for now."""
+        # In a real scenario, this would analyze fields of self.filtered_models
+        logger.debug("Mock analyze_dependencies called.")
+        self.dependencies = {}
+
+    def discover_models(
+        self,
+        packages: list[str],  # Renamed from package_names to match base class
+        app_label: str = "django_app",
+        user_filters: Optional[
+            Union[Callable[[Type], bool], list[Callable[[Type], bool]]]
+        ] = None,  # Renamed & updated type
+        # Removed unused mock-specific parameters like _source_module_override
+    ) -> None:
+        """Mock discovery: Populates filtered_models based on registered models and filters."""
+        logger.info("Mock discover_models called.")
+        source_models = self._get_source_models()
+        self.all_models = source_models.copy()  # Store all found before filtering
+        self.filtered_models = {}
+
+        # Normalize user_filters
+        filters_to_apply = []
+        if user_filters:
+            if isinstance(user_filters, list):
+                filters_to_apply.extend(user_filters)
+            else:
+                filters_to_apply.append(user_filters)
+
+        for name, model in source_models.items():
+            is_eligible = self._default_eligibility_filter(model)
+            if is_eligible:
+                for user_filter in filters_to_apply:
+                    try:
+                        # Adapt filter signature if needed, BaseDiscovery expects Callable[[Type[TModel]], bool]
+                        if not user_filter(model):
+                            is_eligible = False
+                            break
+                    except Exception as e:
+                        logger.error(f"Error applying user filter to {name}: {e}")
+                        is_eligible = False
+                        break
+
+            if is_eligible:
+                self.filtered_models[name] = model
+
+        logger.info(f"Mock discovery finished. Filtered models: {list(self.filtered_models.keys())}")
+        # Call analyze_dependencies after filtering
+        self.analyze_dependencies()
+
+    def get_models_in_registration_order(self) -> list[Type]:
+        """Mock topological sort - just returns filtered models in arbitrary order."""
+        logger.debug("Mock get_models_in_registration_order called.")
+        # Add proper topological sort if dependencies are analyzed
+        return list(self.filtered_models.values())
+
+    # --- Mock-specific methods (kept if still relevant) --- #
+    def get_relationship_accessor(self) -> RelationshipConversionAccessor:
+        """Get the global RelationshipConversionAccessor."""
+        return get_relationship_accessor()
+
+    def get_field_overrides(self) -> dict:
+        """Get the global field overrides dictionary."""
+        return get_field_overrides()
+
+    def get_model_contexts(self) -> dict[str, ModelContext]:
+        """Get the global model contexts dictionary."""
+        return get_model_contexts()
+
+    def get_model_has_context(self) -> dict[str, bool]:
+        """Get the global dictionary indicating which models have context."""
+        return get_model_has_context()
+
+
+# --- Remove redundant/complex internal relationship logic --- #
+# ( _setup_nested_model_relationships and _map_model_relationship removed )

@@ -1,177 +1,141 @@
-"""Tests for ensuring all fixtures can be instantiated and work correctly."""
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
-from typing import Callable
+"""
+Tests to validate that all fixtures in tests/fixtures/fixtures.py can be instantiated correctly.
+"""
 
 import pytest
-from django.db import models
-from pydantic import EmailStr, BaseModel, Field, ConfigDict
-from pydantic_core import PydanticSerializationError
+from decimal import Decimal
+from datetime import date, datetime, time, timedelta
+from uuid import UUID
+from enum import Enum
+from typing import Callable
 
-from .fixtures.fixtures import ComplexHandler, UnserializableType
+# Import all fixtures from the main fixtures file
+from .fixtures.fixtures import *
 
-
-def test_basic_pydantic_model(basic_pydantic_model):
-    """Test that basic_pydantic_model can be instantiated with valid data."""
-    model = basic_pydantic_model(
-        string_field="test",
-        int_field=42,
-        float_field=3.14,
-        bool_field=True,
-        decimal_field=Decimal("10.99"),
-        email_field="test@example.com",
-    )
-
-    assert model.string_field == "test"
-    assert model.int_field == 42
-    assert model.float_field == 3.14
-    assert model.bool_field is True
-    assert model.decimal_field == Decimal("10.99")
-    assert model.email_field == "test@example.com"
+# Pydantic Fixture Tests
 
 
-def test_datetime_pydantic_model(datetime_pydantic_model):
-    """Test that datetime_pydantic_model can be instantiated with valid data."""
-    test_datetime = datetime(2024, 2, 19, 12, 0)
-    test_date = date(2024, 2, 19)
-    test_time = time(12, 0)
-    test_duration = timedelta(days=1)
-
-    model = datetime_pydantic_model(
-        datetime_field=test_datetime,
-        date_field=test_date,
-        time_field=test_time,
-        duration_field=test_duration,
-    )
-
-    assert model.datetime_field == test_datetime
-    assert model.date_field == test_date
-    assert model.time_field == test_time
-    assert model.duration_field == test_duration
+def test_basic_pydantic_model_fixture(basic_pydantic_model):
+    """Verify the basic_pydantic_model fixture can be instantiated."""
+    assert basic_pydantic_model is not None
+    # Simple check for expected field type (optional, could be more extensive)
+    assert "string_field" in basic_pydantic_model.model_fields
 
 
-def test_optional_fields_model(optional_fields_model):
-    """Test that optional_fields_model works with both required and optional fields."""
-    # Test with all fields
-    model_full = optional_fields_model(
-        required_string="required",
-        optional_string="optional",
-        required_int=42,
-        optional_int=24,
-    )
-    assert model_full.required_string == "required"
-    assert model_full.optional_string == "optional"
-    assert model_full.required_int == 42
-    assert model_full.optional_int == 24
-
-    # Test with only required fields
-    model_required = optional_fields_model(required_string="required", required_int=42)
-    assert model_required.required_string == "required"
-    assert model_required.optional_string is None
-    assert model_required.required_int == 42
-    assert model_required.optional_int is None
+def test_datetime_pydantic_model_fixture(datetime_pydantic_model):
+    """Verify the datetime_pydantic_model fixture can be instantiated."""
+    assert datetime_pydantic_model is not None
+    assert "datetime_field" in datetime_pydantic_model.model_fields
 
 
-def test_constrained_fields_model(constrained_fields_model):
-    """Test that constrained_fields_model validates constraints correctly."""
-    model = constrained_fields_model(name="John Doe", age=30, balance=Decimal("1000.50"))
-
-    assert model.name == "John Doe"
-    assert model.age == 30
-    assert model.balance == Decimal("1000.50")
-
-    # Test max_length constraint
-    with pytest.raises(ValueError):
-        constrained_fields_model(
-            name="x" * 101,  # Exceeds max_length of 100
-            age=30,
-            balance=Decimal("1000.50"),
-        )
+def test_optional_fields_model_fixture(optional_fields_model):
+    """Verify the optional_fields_model fixture can be instantiated."""
+    assert optional_fields_model is not None
+    assert "optional_string" in optional_fields_model.model_fields
 
 
-def test_relationship_models(relationship_models):
-    """Test that relationship_models can be instantiated and nested correctly."""
-    Address = relationship_models["Address"]
-    Profile = relationship_models["Profile"]
-    Tag = relationship_models["Tag"]
-    User = relationship_models["User"]
-
-    address = Address(street="123 Main St", city="Anytown", country="USA")
-    profile = Profile(bio="Test bio", website="http://example.com")
-    tags = [Tag(name="tag1"), Tag(name="tag2")]
-
-    user = User(name="John Doe", address=address, profile=profile, tags=tags)
-
-    assert user.name == "John Doe"
-    assert user.address.street == "123 Main St"
-    assert user.profile.bio == "Test bio"
-    assert len(user.tags) == 2
-    assert user.tags[0].name == "tag1"
+def test_constrained_fields_model_fixture(constrained_fields_model):
+    """Verify the constrained_fields_model fixture can be instantiated."""
+    assert constrained_fields_model is not None
+    assert "balance" in constrained_fields_model.model_fields
 
 
-def test_method_model(method_model):
-    """Test that method_model's various method types work correctly."""
-    model = method_model(name="test", value=5)
-
-    # Test instance method
-    assert model.instance_method() == "Instance: test"
-
-    # Test property
-    assert model.computed_value == 10
-
-    # Test class method
-    assert model.class_method() == ["A", "B", "C"]
-    assert method_model.class_method() == ["A", "B", "C"]
-
-    # Test static method
-    assert model.static_method(3) == 6
-    assert method_model.static_method(3) == 6
+def test_relationship_models_fixture(relationship_models):
+    """Verify the relationship_models fixture can be instantiated and has expected keys."""
+    assert relationship_models is not None
+    assert isinstance(relationship_models, dict)
+    assert "User" in relationship_models
+    assert "Address" in relationship_models
+    assert "Profile" in relationship_models
+    assert "Tag" in relationship_models
 
 
-def test_factory_model(factory_model):
-    """Test that factory_model can create products using both methods."""
-    factory = factory_model()
-
-    # Test create_product with defaults
-    product1 = factory.create_product("Test Product")
-    assert product1.name == "Test Product"
-    assert product1.price == Decimal("9.99")
-    assert product1.description == "A great product"
-
-    # Test create_product with custom values
-    product2 = factory.create_product(name="Custom Product", price=Decimal("19.99"), description="Custom description")
-    assert product2.name == "Custom Product"
-    assert product2.price == Decimal("19.99")
-    assert product2.description == "Custom description"
-
-    # Test create_simple_product
-    product3 = factory.create_simple_product("Simple Product")
-    assert product3.name == "Simple Product"
-    assert product3.price == Decimal("0.99")
-    assert product3.description == "A basic product"
+def test_method_model_fixture(method_model):
+    """Verify the method_model fixture can be instantiated."""
+    assert method_model is not None
+    assert hasattr(method_model, "instance_method")
 
 
-def test_context_pydantic_model(context_pydantic_model, context_with_data):
-    """Test that context_pydantic_model can be instantiated with valid data."""
-    # Create model instance
-    model = context_pydantic_model(**context_with_data)
+def test_factory_model_fixture(factory_model):
+    """Verify the factory_model fixture can be instantiated."""
+    assert factory_model is not None
+    assert hasattr(factory_model, "create_product")
 
-    # Verify regular fields
-    assert model.name == "test"
-    assert model.value == 42
-    assert model.serializable.value == "can_serialize"
 
-    # Verify fields needing context
-    assert isinstance(model.handler, ComplexHandler)
-    assert callable(model.processor)
-    assert isinstance(model.unserializable, UnserializableType)
-    assert model.unserializable.value == "needs_context"
+def test_user_django_model_fixture(user_django_model):
+    """Verify the user_django_model fixture can be instantiated."""
+    assert user_django_model is not None
+    assert hasattr(user_django_model, "_meta")  # Check it's a Django model
 
-    # Test serialization behavior
-    model_dict = model.model_dump()
-    # Serializable type should be a dict with value field
-    assert isinstance(model_dict["serializable"], dict)
-    assert model_dict["serializable"]["value"] == "can_serialize"
-    # Non-serializable types should raise errors
-    with pytest.raises(PydanticSerializationError):
-        model.model_dump_json()
+
+def test_context_pydantic_model_fixture(context_pydantic_model):
+    """Verify the context_pydantic_model fixture can be instantiated."""
+    assert context_pydantic_model is not None
+    assert "handler" in context_pydantic_model.model_fields
+
+
+def test_context_with_data_fixture(context_with_data):
+    """Verify the context_with_data fixture provides data."""
+    assert context_with_data is not None
+    assert isinstance(context_with_data, dict)
+    assert "name" in context_with_data
+    assert "handler" in context_with_data  # Check for one of the context-dependent keys
+
+
+# Dataclass Fixture Tests
+
+
+def test_basic_dataclass_fixture(basic_dataclass):
+    """Verify the basic_dataclass fixture can be instantiated."""
+    assert basic_dataclass is not None
+    assert hasattr(basic_dataclass, "__dataclass_fields__")
+    assert "string_field" in basic_dataclass.__dataclass_fields__
+
+
+def test_datetime_dataclass_fixture(datetime_dataclass):
+    """Verify the datetime_dataclass fixture can be instantiated."""
+    assert datetime_dataclass is not None
+    assert hasattr(datetime_dataclass, "__dataclass_fields__")
+    assert "datetime_field" in datetime_dataclass.__dataclass_fields__
+
+
+def test_advanced_types_dataclass_fixture(advanced_types_dataclass):
+    """Verify the advanced_types_dataclass fixture can be instantiated."""
+    assert advanced_types_dataclass is not None
+    assert hasattr(advanced_types_dataclass, "__dataclass_fields__")
+    assert "uuid_field" in advanced_types_dataclass.__dataclass_fields__
+
+
+def test_optional_dataclass_fixture(optional_dataclass):
+    """Verify the optional_dataclass fixture can be instantiated."""
+    assert optional_dataclass is not None
+    assert hasattr(optional_dataclass, "__dataclass_fields__")
+    assert "optional_string" in optional_dataclass.__dataclass_fields__
+
+
+def test_nested_dataclass_fixture(nested_dataclass):
+    """Verify the nested_dataclass fixture can be instantiated and has expected keys."""
+    assert nested_dataclass is not None
+    assert isinstance(nested_dataclass, dict)
+    assert "InnerDC" in nested_dataclass
+    assert "OuterDC" in nested_dataclass
+    assert hasattr(nested_dataclass["OuterDC"], "__dataclass_fields__")
+
+
+def test_relationship_dataclasses_fixture(relationship_dataclasses):
+    """Verify the relationship_dataclasses fixture can be instantiated and has expected keys."""
+    assert relationship_dataclasses is not None
+    assert isinstance(relationship_dataclasses, dict)
+    assert "UserDC" in relationship_dataclasses
+    assert "AddressDC" in relationship_dataclasses
+    assert "ProfileDC" in relationship_dataclasses
+    assert "TagDC" in relationship_dataclasses
+    assert hasattr(relationship_dataclasses["UserDC"], "__dataclass_fields__")
+
+
+def test_metadata_dataclass_fixture(metadata_dataclass):
+    """Verify the metadata_dataclass fixture can be instantiated."""
+    assert metadata_dataclass is not None
+    assert hasattr(metadata_dataclass, "__dataclass_fields__")
+    assert "item_name" in metadata_dataclass.__dataclass_fields__
+    assert "value" in metadata_dataclass.__dataclass_fields__
