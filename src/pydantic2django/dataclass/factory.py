@@ -298,6 +298,14 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
             carrier.invalid_fields.append(("_source_model", "Source model missing."))  # Use invalid_fields
             return
 
+        # --- Add check: Ensure source_model is a type ---
+        if not isinstance(source_model, type):
+            error_msg = f"Cannot process fields: expected source_model to be a type, but got {type(source_model)} ({source_model!r}). Problem likely upstream in model discovery/ordering."
+            logger.error(error_msg)
+            carrier.invalid_fields.append(("_source_model", error_msg))
+            return
+        # --- End Add check ---
+
         # --- Use dataclasses.fields for introspection ---
         try:
             # Resolve type hints first to handle forward references (strings)

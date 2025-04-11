@@ -415,14 +415,16 @@ def datetime_dataclass():
     return DateTimeDC
 
 
+# Define StatusEnum at module level so it can be imported
+class StatusEnum(Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @pytest.fixture
 def advanced_types_dataclass():
     """Fixture providing a dataclass with advanced types like Decimal, UUID, and Enum."""
-
-    class StatusEnum(Enum):
-        PENDING = "pending"
-        COMPLETED = "completed"
-        FAILED = "failed"
 
     @dataclass
     class AdvancedTypesDC:

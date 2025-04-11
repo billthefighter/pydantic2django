@@ -1,12 +1,13 @@
 import logging
-from typing import Optional, get_args, get_origin, Type, cast
+from typing import Optional, cast
 from uuid import UUID  # Added for _handle_id_field
 
-from django.db import models
 from django.apps import apps  # Added apps
+from django.db import models
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
+from ..core.bidirectional_mapper import BidirectionalTypeMapper, MappingError  # Import the new mapper
 from ..core.context import ModelContext  # Assuming this exists and is correct
 
 # Core imports
@@ -17,13 +18,11 @@ from ..core.factories import (
     FieldConversionResult,
 )
 from ..core.relationships import RelationshipConversionAccessor
-from ..core.bidirectional_mapper import BidirectionalTypeMapper, MappingError  # Import the new mapper
 
 # Remove old TypeMapper import
 # from ..django.mapping import TypeMapper, TypeMappingDefinition
-
 from ..django.utils.naming import sanitize_related_name
-from ..django.utils.serialization import generate_field_definition_string, FieldSerializer  # Import serialization utils
+from ..django.utils.serialization import FieldSerializer, generate_field_definition_string  # Import serialization utils
 
 # Pydantic utils
 from .utils.introspection import get_model_fields, is_pydantic_model_field_optional
@@ -109,9 +108,21 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
                 result.context_field = field_info
                 return result
 
+            # Store raw kwargs before modifications/checks
+            result.raw_mapper_kwargs = constructor_kwargs.copy()
+
+            # --- Check for Multi-FK Union Signal --- #
+            union_details = constructor_kwargs.pop("_union_details", None)
+            if union_details and isinstance(union_details, dict):
+                logger.info(f"Detected multi-FK union signal for '{field_name}'. Deferring field generation.")
+                # Store the original field name and the details for the generator
+                carrier.pending_multi_fk_unions.append((field_name, union_details))
+                # Store remaining kwargs (null, blank for placeholder) in raw_kwargs if needed? Already done.
+                # Do not set django_field or field_definition_str
+                return result  # Return early, deferring generation
+
             # --- Handle Relationships Specifically (Adjust Kwargs) --- #
-            # Check if it's a relationship type *after* getting mapping
-            # The mapper returns FK/M2M/O2O field types for relationships
+            # Check if it's a relationship type *after* getting mapping AND checking for union signal
             is_relationship = issubclass(
                 django_field_class, (models.ForeignKey, models.OneToOneField, models.ManyToManyField)
             )

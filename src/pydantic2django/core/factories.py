@@ -41,6 +41,8 @@ class ConversionCarrier(Generic[SourceModelType]):
     django_fields: dict[str, models.Field] = field(default_factory=dict)
     relationship_fields: dict[str, models.Field] = field(default_factory=dict)
     context_fields: dict[str, Any] = field(default_factory=dict)  # Store original source field info
+    # Stores (original_field_name, union_details_dict) for multi-FK unions
+    pending_multi_fk_unions: list[tuple[str, dict]] = field(default_factory=list)
     invalid_fields: list[tuple[str, str]] = field(default_factory=list)
     django_meta_class: Optional[type] = None
     django_model: Optional[type[models.Model]] = None  # Changed from DjangoModelType
@@ -73,6 +75,8 @@ class FieldConversionResult:
     field_definition_str: Optional[str] = None  # Added field definition string
     # Added required_imports dictionary
     required_imports: dict[str, list[str]] = field(default_factory=dict)
+    # Store the raw kwargs returned by the mapper
+    raw_mapper_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def add_import(self, module: str, name: str):
         """Helper to add an import to this result."""

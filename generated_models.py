@@ -1,6 +1,6 @@
 """
 Generated Django models from Pydantic models.
-Generated at: 2025-04-09 20:59:51
+Generated at: 2025-04-11 11:09:44
 """
 
 
@@ -14,7 +14,6 @@ from typing import TypeVar
 from django.db import models
 
 # Pydantic2Django imports
-from pydantic2django.base_django_model import Pydantic2DjangoBaseClass
 
 # Additional type imports from typing module
 
@@ -31,14 +30,16 @@ Django model for PartDeltaEvent.
 """
 
 
-class DjangoPartDeltaEvent(Pydantic2DjangoBaseClass):
+class DjangoPartDeltaEvent(Dataclass2DjangoBaseClass):
     """
     Django model for PartDeltaEvent.
     """
 
-    index = models.BigAutoField(blank=False, null=False)
+    index = models.IntegerField(blank=False, null=False)
     delta = models.JSONField(blank=False, null=False)
-    event_kind = models.ImageField(blank=False, default="part_delta", null=False)
+    event_kind = models.CharField(
+        blank=False, choices=[("part_delta", "part_delta")], default="part_delta", max_length=10, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -50,14 +51,16 @@ Django model for PartStartEvent.
 """
 
 
-class DjangoPartStartEvent(Pydantic2DjangoBaseClass):
+class DjangoPartStartEvent(Dataclass2DjangoBaseClass):
     """
     Django model for PartStartEvent.
     """
 
-    index = models.BigAutoField(blank=False, null=False)
+    index = models.IntegerField(blank=False, null=False)
     part = models.JSONField(blank=False, null=False)
-    event_kind = models.ImageField(blank=False, default="part_start", null=False)
+    event_kind = models.CharField(
+        blank=False, choices=[("part_start", "part_start")], default="part_start", max_length=10, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -69,13 +72,13 @@ Django model for TextPart.
 """
 
 
-class DjangoTextPart(Pydantic2DjangoBaseClass):
+class DjangoTextPart(Dataclass2DjangoBaseClass):
     """
     Django model for TextPart.
     """
 
-    content = models.ImageField(blank=False, null=False)
-    part_kind = models.ImageField(blank=False, default="text", null=False)
+    content = models.TextField(blank=False, null=False)
+    part_kind = models.CharField(blank=False, choices=[("text", "text")], default="text", max_length=4, null=False)
 
     class Meta:
         app_label = "pai2django"
@@ -87,13 +90,15 @@ Django model for TextPartDelta.
 """
 
 
-class DjangoTextPartDelta(Pydantic2DjangoBaseClass):
+class DjangoTextPartDelta(Dataclass2DjangoBaseClass):
     """
     Django model for TextPartDelta.
     """
 
-    content_delta = models.ImageField(blank=False, null=False)
-    part_delta_kind = models.ImageField(blank=False, default="text", null=False)
+    content_delta = models.TextField(blank=False, null=False)
+    part_delta_kind = models.CharField(
+        blank=False, choices=[("text", "text")], default="text", max_length=4, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -105,15 +110,17 @@ Django model for ToolCallPart.
 """
 
 
-class DjangoToolCallPart(Pydantic2DjangoBaseClass):
+class DjangoToolCallPart(Dataclass2DjangoBaseClass):
     """
     Django model for ToolCallPart.
     """
 
-    tool_name = models.ImageField(blank=False, null=False)
+    tool_name = models.TextField(blank=False, null=False)
     args = models.JSONField(blank=False, null=False)
-    tool_call_id = models.ImageField(blank=False, null=False)
-    part_kind = models.ImageField(blank=False, default="tool-call", null=False)
+    tool_call_id = models.TextField(blank=False, null=False)
+    part_kind = models.CharField(
+        blank=False, choices=[("tool-call", "tool-call")], default="tool-call", max_length=9, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -125,15 +132,17 @@ Django model for ToolCallPartDelta.
 """
 
 
-class DjangoToolCallPartDelta(Pydantic2DjangoBaseClass):
+class DjangoToolCallPartDelta(Dataclass2DjangoBaseClass):
     """
     Django model for ToolCallPartDelta.
     """
 
-    tool_name_delta = models.JSONField(blank=False, default=None, null=False)
+    tool_name_delta = models.TextField(blank=False, default=None, null=False)
     args_delta = models.JSONField(blank=False, default=None, null=False)
-    tool_call_id = models.JSONField(blank=False, default=None, null=False)
-    part_delta_kind = models.ImageField(blank=False, default="tool_call", null=False)
+    tool_call_id = models.TextField(blank=False, default=None, null=False)
+    part_delta_kind = models.CharField(
+        blank=False, choices=[("tool_call", "tool_call")], default="tool_call", max_length=9, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -145,13 +154,15 @@ Django model for AudioUrl.
 """
 
 
-class DjangoAudioUrl(Pydantic2DjangoBaseClass):
+class DjangoAudioUrl(Dataclass2DjangoBaseClass):
     """
     Django model for AudioUrl.
     """
 
-    url = models.ImageField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="audio-url", null=False)
+    url = models.TextField(blank=False, null=False)
+    kind = models.CharField(
+        blank=False, choices=[("audio-url", "audio-url")], default="audio-url", max_length=9, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -163,14 +174,14 @@ Django model for BinaryContent.
 """
 
 
-class DjangoBinaryContent(Pydantic2DjangoBaseClass):
+class DjangoBinaryContent(Dataclass2DjangoBaseClass):
     """
     Django model for BinaryContent.
     """
 
     data = models.BinaryField(blank=False, null=False)
-    media_type = models.JSONField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="binary", null=False)
+    media_type = models.TextField(blank=False, null=False)
+    kind = models.CharField(blank=False, choices=[("binary", "binary")], default="binary", max_length=6, null=False)
 
     class Meta:
         app_label = "pai2django"
@@ -182,13 +193,15 @@ Django model for DocumentUrl.
 """
 
 
-class DjangoDocumentUrl(Pydantic2DjangoBaseClass):
+class DjangoDocumentUrl(Dataclass2DjangoBaseClass):
     """
     Django model for DocumentUrl.
     """
 
-    url = models.ImageField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="document-url", null=False)
+    url = models.TextField(blank=False, null=False)
+    kind = models.CharField(
+        blank=False, choices=[("document-url", "document-url")], default="document-url", max_length=12, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -200,14 +213,16 @@ Django model for FinalResultEvent.
 """
 
 
-class DjangoFinalResultEvent(Pydantic2DjangoBaseClass):
+class DjangoFinalResultEvent(Dataclass2DjangoBaseClass):
     """
     Django model for FinalResultEvent.
     """
 
-    tool_name = models.JSONField(blank=False, null=False)
-    tool_call_id = models.JSONField(blank=False, null=False)
-    event_kind = models.ImageField(blank=False, default="final_result", null=False)
+    tool_name = models.TextField(blank=False, null=False)
+    tool_call_id = models.TextField(blank=False, null=False)
+    event_kind = models.CharField(
+        blank=False, choices=[("final_result", "final_result")], default="final_result", max_length=12, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -219,14 +234,20 @@ Django model for FunctionToolCallEvent.
 """
 
 
-class DjangoFunctionToolCallEvent(Pydantic2DjangoBaseClass):
+class DjangoFunctionToolCallEvent(Dataclass2DjangoBaseClass):
     """
     Django model for FunctionToolCallEvent.
     """
 
     part = models.JSONField(blank=False, null=False)
-    call_id = models.ImageField(blank=False, null=False)
-    event_kind = models.ImageField(blank=False, default="function_tool_call", null=False)
+    call_id = models.TextField(blank=False, null=False)
+    event_kind = models.CharField(
+        blank=False,
+        choices=[("function_tool_call", "function_tool_call")],
+        default="function_tool_call",
+        max_length=18,
+        null=False,
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -238,14 +259,20 @@ Django model for FunctionToolResultEvent.
 """
 
 
-class DjangoFunctionToolResultEvent(Pydantic2DjangoBaseClass):
+class DjangoFunctionToolResultEvent(Dataclass2DjangoBaseClass):
     """
     Django model for FunctionToolResultEvent.
     """
 
     result = models.JSONField(blank=False, null=False)
-    tool_call_id = models.ImageField(blank=False, null=False)
-    event_kind = models.ImageField(blank=False, default="function_tool_result", null=False)
+    tool_call_id = models.TextField(blank=False, null=False)
+    event_kind = models.CharField(
+        blank=False,
+        choices=[("function_tool_result", "function_tool_result")],
+        default="function_tool_result",
+        max_length=20,
+        null=False,
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -257,13 +284,15 @@ Django model for ImageUrl.
 """
 
 
-class DjangoImageUrl(Pydantic2DjangoBaseClass):
+class DjangoImageUrl(Dataclass2DjangoBaseClass):
     """
     Django model for ImageUrl.
     """
 
-    url = models.ImageField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="image-url", null=False)
+    url = models.TextField(blank=False, null=False)
+    kind = models.CharField(
+        blank=False, choices=[("image-url", "image-url")], default="image-url", max_length=9, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -275,13 +304,13 @@ Django model for ModelRequest.
 """
 
 
-class DjangoModelRequest(Pydantic2DjangoBaseClass):
+class DjangoModelRequest(Dataclass2DjangoBaseClass):
     """
     Django model for ModelRequest.
     """
 
     parts = models.JSONField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="request", null=False)
+    kind = models.CharField(blank=False, choices=[("request", "request")], default="request", max_length=7, null=False)
 
     class Meta:
         app_label = "pai2django"
@@ -293,15 +322,17 @@ Django model for ModelResponse.
 """
 
 
-class DjangoModelResponse(Pydantic2DjangoBaseClass):
+class DjangoModelResponse(Dataclass2DjangoBaseClass):
     """
     Django model for ModelResponse.
     """
 
     parts = models.JSONField(blank=False, null=False)
-    model_name = models.JSONField(blank=False, default=None, null=False)
+    model_name = models.TextField(blank=False, default=None, null=False)
     timestamp = models.DateTimeField(blank=False, null=False)
-    kind = models.ImageField(blank=False, default="response", null=False)
+    kind = models.CharField(
+        blank=False, choices=[("response", "response")], default="response", max_length=8, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -313,16 +344,18 @@ Django model for RetryPromptPart.
 """
 
 
-class DjangoRetryPromptPart(Pydantic2DjangoBaseClass):
+class DjangoRetryPromptPart(Dataclass2DjangoBaseClass):
     """
     Django model for RetryPromptPart.
     """
 
     content = models.JSONField(blank=False, null=False)
-    tool_name = models.JSONField(blank=False, default=None, null=False)
-    tool_call_id = models.ImageField(blank=False, null=False)
+    tool_name = models.TextField(blank=False, default=None, null=False)
+    tool_call_id = models.TextField(blank=False, null=False)
     timestamp = models.DateTimeField(blank=False, null=False)
-    part_kind = models.ImageField(blank=False, default="retry-prompt", null=False)
+    part_kind = models.CharField(
+        blank=False, choices=[("retry-prompt", "retry-prompt")], default="retry-prompt", max_length=12, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -334,15 +367,17 @@ Django model for SystemPromptPart.
 """
 
 
-class DjangoSystemPromptPart(Pydantic2DjangoBaseClass):
+class DjangoSystemPromptPart(Dataclass2DjangoBaseClass):
     """
     Django model for SystemPromptPart.
     """
 
-    content = models.ImageField(blank=False, null=False)
+    content = models.TextField(blank=False, null=False)
     timestamp = models.DateTimeField(blank=False, null=False)
-    dynamic_ref = models.JSONField(blank=False, default=None, null=False)
-    part_kind = models.ImageField(blank=False, default="system-prompt", null=False)
+    dynamic_ref = models.TextField(blank=False, default=None, null=False)
+    part_kind = models.CharField(
+        blank=False, choices=[("system-prompt", "system-prompt")], default="system-prompt", max_length=13, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -354,16 +389,18 @@ Django model for ToolReturnPart.
 """
 
 
-class DjangoToolReturnPart(Pydantic2DjangoBaseClass):
+class DjangoToolReturnPart(Dataclass2DjangoBaseClass):
     """
     Django model for ToolReturnPart.
     """
 
-    tool_name = models.ImageField(blank=False, null=False)
+    tool_name = models.TextField(blank=False, null=False)
     content = models.JSONField(blank=False, null=False)
-    tool_call_id = models.ImageField(blank=False, null=False)
+    tool_call_id = models.TextField(blank=False, null=False)
     timestamp = models.DateTimeField(blank=False, null=False)
-    part_kind = models.ImageField(blank=False, default="tool-return", null=False)
+    part_kind = models.CharField(
+        blank=False, choices=[("tool-return", "tool-return")], default="tool-return", max_length=11, null=False
+    )
 
     class Meta:
         app_label = "pai2django"
@@ -375,14 +412,16 @@ Django model for UserPromptPart.
 """
 
 
-class DjangoUserPromptPart(Pydantic2DjangoBaseClass):
+class DjangoUserPromptPart(Dataclass2DjangoBaseClass):
     """
     Django model for UserPromptPart.
     """
 
     content = models.JSONField(blank=False, null=False)
     timestamp = models.DateTimeField(blank=False, null=False)
-    part_kind = models.ImageField(blank=False, default="user-prompt", null=False)
+    part_kind = models.CharField(
+        blank=False, choices=[("user-prompt", "user-prompt")], default="user-prompt", max_length=11, null=False
+    )
 
     class Meta:
         app_label = "pai2django"

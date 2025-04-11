@@ -8,7 +8,7 @@ logger = logging.getLogger("model_conversion")
 
 # Configure more detailed logging for the import handler
 import_handler_logger = logging.getLogger("pydantic2django.import_handler")
-import_handler_logger.setLevel(logging.INFO)
+import_handler_logger.setLevel(logging.WARNING)
 
 # Type variable for model classes
 T = TypeVar("T")

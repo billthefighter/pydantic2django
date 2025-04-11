@@ -23,6 +23,11 @@ class {{ model_name }}({{ base_model_name }}):
     pass
     {% endfor %}
 
+    {% if validation_needed %}
+    # TODO: Add validation to ensure only one of the following fields is set:
+    # {{ multi_fk_field_names | join(', ') }}
+    {% endif %}
+
     class Meta:
         app_label = '{{ app_label }}'
         abstract = False

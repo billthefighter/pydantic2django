@@ -69,6 +69,37 @@ class TargetPydanticModel(BaseModel):
 # Update ForwardRefs
 TargetPydanticModel.model_rebuild()
 
+
+# Add simple models for Union tests
+class UnionModelA(BaseModel):
+    name: str
+    value_a: int
+
+
+class UnionModelB(BaseModel):
+    name: str
+    value_b: bool
+
+
+# Add dummy models for specific test cases
+class TextPartDelta(BaseModel):
+    text: str
+
+
+class ToolCallPartDelta(BaseModel):
+    tool_call_id: str
+    function_name: str
+
+
+class ToolCallPart(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    # function: FunctionCall # Assume FunctionCall is another model or complex type
+    # For testing purposes, let's keep it simple
+    function_name: str
+    function_args: Dict[str, Any]
+
+
 # --- Fixtures ---
 
 
@@ -78,6 +109,37 @@ def relationship_accessor() -> RelationshipConversionAccessor:
     accessor = RelationshipConversionAccessor()
     accessor.map_relationship(RelatedPydanticModel, RelatedDjangoModel)
     accessor.map_relationship(TargetPydanticModel, TargetDjangoModel)
+
+    # Map the new union models (assuming dummy Django models exist or mapping doesn't strictly require them yet)
+    # We might need dummy Django models if the accessor strictly validates
+    class DummyDjangoUnionA(models.Model):
+        class Meta:
+            app_label = "test_app"  # type: ignore
+
+    class DummyDjangoUnionB(models.Model):
+        class Meta:
+            app_label = "test_app"  # type: ignore
+
+    # Define dummy Django models for the new test cases
+    class DummyDjangoTextPartDelta(models.Model):
+        class Meta:
+            app_label = "test_app_delta"  # type: ignore
+
+    class DummyDjangoToolCallPartDelta(models.Model):
+        class Meta:
+            app_label = "test_app_delta"  # type: ignore
+
+    class DummyDjangoToolCallPart(models.Model):
+        class Meta:
+            app_label = "test_app_tool"  # type: ignore
+
+    accessor.map_relationship(UnionModelA, DummyDjangoUnionA)
+    accessor.map_relationship(UnionModelB, DummyDjangoUnionB)
+    # Map the new dummy models
+    accessor.map_relationship(TextPartDelta, DummyDjangoTextPartDelta)
+    accessor.map_relationship(ToolCallPartDelta, DummyDjangoToolCallPartDelta)
+    accessor.map_relationship(ToolCallPart, DummyDjangoToolCallPart)
+
     return accessor
 
 
@@ -390,6 +452,123 @@ PYD_TO_DJ_RELATIONSHIP_CASES = [
         Optional[TargetPydanticModel],
         models.ForeignKey,
         {"to": "self", "on_delete": models.SET_NULL, "null": True, "blank": True},
+        field_info=FieldInfo(annotation=Optional[TargetPydanticModel]),  # Add FieldInfo
+    ),
+]
+
+# Test cases for Complex Union Types
+PYD_TO_DJ_UNION_CASES = [
+    # Union of BaseModels -> Expect placeholder + signal for multi-FK generation
+    PydToDjParams(
+        "union_model_a_b",
+        Union[UnionModelA, UnionModelB],
+        models.JSONField,  # Placeholder type
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [UnionModelA, UnionModelB],
+                "is_optional": False,
+            },
+            "null": True,  # Base nullability (optional applied later)
+            "blank": True,
+        },
+        field_info=FieldInfo(annotation=Union[UnionModelA, UnionModelB]),  # Add FieldInfo
+    ),
+    PydToDjParams(
+        "optional_union_model_a_b",
+        Optional[Union[UnionModelA, UnionModelB]],
+        models.JSONField,  # Placeholder type
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [UnionModelA, UnionModelB],
+                "is_optional": True,
+            },
+            "null": True,  # Optionality reflected
+            "blank": True,
+        },
+        field_info=FieldInfo(annotation=Optional[Union[UnionModelA, UnionModelB]]),  # Add FieldInfo
+    ),
+    # Union involving Literal and str -> Expect TextField (str usually dominates)
+    PydToDjParams(
+        "union_literal_str",
+        Union[Literal["A", "B"], str],
+        models.TextField,  # Expect TextField as str is present
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=str),  # Use str as annotation, Union passed to mapper
+    ),
+    # Union involving List and str -> Expect JSONField (common fallback)
+    PydToDjParams(
+        "union_list_str",
+        Union[List[int], str],
+        models.JSONField,  # Expect JSONField as it handles lists and mixed types
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=Any),  # Use Any for list/str union annotation
+    ),
+    # Union involving Any and str -> Expect TextField? Or JSON? Let's expect JSON for now.
+    PydToDjParams(
+        "union_any_str",
+        Union[Any, str],
+        models.JSONField,  # JSONField is safer for Any
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=Any),  # Use Any for Any/str union annotation
+    ),
+    # -- Specific cases from user issue --
+    # Union[TextPartDelta, ToolCallPartDelta] -> Multi-FK
+    PydToDjParams(
+        "union_text_tool_deltas",
+        Union[TextPartDelta, ToolCallPartDelta],
+        models.JSONField,  # Placeholder
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [TextPartDelta, ToolCallPartDelta],
+                "is_optional": False,
+            },
+            "null": True,  # Always nullable for multi-fk
+            "blank": True,
+        },
+        field_info=FieldInfo(annotation=Union[TextPartDelta, ToolCallPartDelta]),
+    ),
+    # Optional Union[TextPartDelta, ToolCallPartDelta] -> Multi-FK (Optional)
+    PydToDjParams(
+        "optional_union_text_tool_deltas",
+        Optional[Union[TextPartDelta, ToolCallPartDelta]],
+        models.JSONField,  # Placeholder
+        {
+            "_union_details": {
+                "type": "multi_fk",
+                "models": [TextPartDelta, ToolCallPartDelta],
+                "is_optional": True,
+            },
+            "null": True,  # Always nullable for multi-fk
+            "blank": True,
+        },
+        field_info=FieldInfo(annotation=Optional[Union[TextPartDelta, ToolCallPartDelta]]),
+    ),
+    # str | dict[str, Any] -> JSONField (using UnionType syntax)
+    PydToDjParams(
+        "union_str_dict_uniontype",
+        str | dict[str, Any],  # Use | syntax
+        models.JSONField,
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=Any),  # Annotate as Any
+    ),
+    # str | list[str] -> JSONField (using UnionType syntax)
+    PydToDjParams(
+        "union_str_list_uniontype",
+        str | list[str],  # Use | syntax
+        models.JSONField,
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=Any),  # Annotate as Any
+    ),
+    # str | Literal[...] -> TextField (using UnionType syntax)
+    PydToDjParams(
+        "union_str_literal_uniontype",
+        str | Literal["Opt1", "Opt2"],  # Use | syntax
+        models.TextField,
+        {"null": False, "blank": False},
+        field_info=FieldInfo(annotation=str),  # Annotate as str
     ),
 ]
 
@@ -430,6 +609,43 @@ def test_get_django_mapping_enums(mapper: BidirectionalTypeMapper, params: PydTo
     dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
     assert dj_type is params.expected_dj_type
     assert dj_kwargs == params.expected_kwargs
+
+
+@pytest.mark.parametrize("params", PYD_TO_DJ_UNION_CASES, ids=lambda p: p.test_id)
+def test_get_django_mapping_unions(mapper: BidirectionalTypeMapper, params: PydToDjParams):
+    """Tests mapping complex Pydantic Union types to Django fields."""
+    logger.debug(f"Testing: {params.test_id}")
+    # Determine parent model (only needed for self-ref checks, unlikely in basic union tests)
+    parent_model = None
+
+    # Pass parent_model to the mapper method
+    dj_type, dj_kwargs = mapper.get_django_mapping(
+        params.python_type, params.field_info, parent_pydantic_model=parent_model
+    )
+
+    # Special check for multi-FK union signals
+    if "_union_details" in params.expected_kwargs:
+        assert "_union_details" in dj_kwargs, "Missing '_union_details' signal in kwargs"
+        # Sort model lists before comparison for stability
+        expected_models = sorted(params.expected_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
+        actual_models = sorted(dj_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
+        assert actual_models == expected_models, "Model list in '_union_details' does not match"
+        # Compare the rest of the _union_details dict
+        assert dj_kwargs["_union_details"]["type"] == params.expected_kwargs["_union_details"]["type"]
+        assert dj_kwargs["_union_details"]["is_optional"] == params.expected_kwargs["_union_details"]["is_optional"]
+        # Remove _union_details before comparing the rest of the kwargs
+        del dj_kwargs["_union_details"]
+        del params.expected_kwargs["_union_details"]
+    # For non-multi-FK unions, check type directly
+    else:
+        assert dj_type is params.expected_dj_type
+
+    # Compare remaining kwargs
+    dj_kwargs.pop("related_name", None)  # Ignore related_name
+    params.expected_kwargs.pop("related_name", None)
+    assert (
+        dj_kwargs == params.expected_kwargs
+    ), f"Remaining kwargs mismatch. Expected {params.expected_kwargs}, got {dj_kwargs}"
 
 
 @pytest.mark.parametrize("params", PYD_TO_DJ_RELATIONSHIP_CASES, ids=lambda p: p.test_id)

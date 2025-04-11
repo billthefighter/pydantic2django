@@ -12,8 +12,8 @@ from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 
 # Base Django model (assuming a common one might be used, or default to models.Model)
-# Let's assume we might want to use Pydantic2DjangoBaseClass as a default still, needs import.
-from pydantic2django.django.models import Pydantic2DjangoBaseClass
+# Import the correct base class for dataclasses
+from pydantic2django.django.models import Dataclass2DjangoBaseClass
 
 # from pydantic2django.factory import DjangoModelFactoryCarrier # Old carrier, use ConversionCarrier
 # Dataclass specific imports
@@ -44,7 +44,7 @@ class DataclassDjangoModelGenerator(
         field_factory_instance: Optional[DataclassFieldFactory] = None,  # Add field factory param
         module_mappings: Optional[dict[str, str]] = None,
         # Default base class can be models.Model or a custom one
-        base_model_class: type[models.Model] = Pydantic2DjangoBaseClass,  # Use the imported base
+        base_model_class: type[models.Model] = Dataclass2DjangoBaseClass,  # Use the correct base for dataclasses
     ):
         # 1. Initialize Dataclass-specific discovery
         self.dataclass_discovery_instance = discovery_instance or DataclassDiscovery()
@@ -150,7 +150,8 @@ class DataclassDjangoModelGenerator(
             "is_dataclass_source": True,
             "is_pydantic_source": False,
             "has_context": False,  # Dataclasses likely don't generate separate context fields/classes
-            "field_definitions": carrier.django_field_definitions,  # Add the definitions dict
+            # Pass the field definitions dictionary from the carrier
+            "field_definitions": carrier.django_field_definitions,
             # Add other specific details if needed, ensuring they access carrier correctly
             # Example: "source_model_module": carrier.source_model.__module__ if carrier.source_model else ""
         }

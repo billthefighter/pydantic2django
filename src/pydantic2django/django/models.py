@@ -1,4 +1,5 @@
 """Base Django model class with Pydantic conversion capabilities."""
+import dataclasses  # Added import
 import importlib
 import uuid
 from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
@@ -13,50 +14,187 @@ from ..core.context import ModelContext
 from ..core.serialization import serialize_value
 
 # Type variable for BaseModel subclasses
-T = TypeVar("T", bound=BaseModel)
+PydanticT = TypeVar("PydanticT", bound=BaseModel)
+# Type variable for Dataclass instances
+DataclassT = TypeVar("DataclassT")
 
 
-class Pydantic2DjangoBase(models.Model):
+class CommonBaseModel(models.Model):
     """
-    Abstract base class for storing Pydantic objects in the database.
+    Abstract base class for storing serializable Python objects in the database.
 
-    This class provides common functionality for both storage approaches:
-    1. Storing the entire Pydantic object as JSON (Pydantic2DjangoStorePydanticObject)
-    2. Mapping Pydantic fields to Django model fields (Pydantic2DjangoBaseClass)
+    Provides common functionality for storing Pydantic models or dataclasses.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
-    object_type = ""  # Fully Qualified Name of the Pydantic model class
+    # Rename object_type to class_path for clarity
+    class_path = models.CharField(
+        max_length=255,
+        help_text="Fully qualified Python path of the stored object's class (e.g., my_module.MyClass)",
+        db_index=True,  # Add index for potential lookups
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    object_type_field = models.CharField(
-        max_length=255,
-        help_text="Fully qualified name of the Pydantic model class",
-    )
+    # Removed object_type_field as it's redundant with class_path
 
-    # Class-level cache for imported Pydantic classes
-    _pydantic_class_cache: ClassVar[dict] = {}
+    # Class-level cache for imported classes
+    _class_cache: ClassVar[dict[str, type]] = {}
+
+    class Meta:
+        abstract = True
+        # Add default ordering?
+        # ordering = ['name']
+
+    @classmethod
+    def _get_class_info(cls, obj: Any) -> tuple[type, str, str, str]:
+        """
+        Get information about the object's class.
+
+        Args:
+            obj: The Pydantic model or dataclass instance.
+
+        Returns:
+            Tuple of (obj_class, class_name, module_name, fully_qualified_name)
+        """
+        obj_class = obj.__class__
+        class_name = obj_class.__name__
+        module_name = obj_class.__module__
+        fully_qualified_name = f"{module_name}.{class_name}"
+        return obj_class, class_name, module_name, fully_qualified_name
+
+    @classmethod
+    def _derive_name(cls, obj: Any, name: str | None, class_name: str) -> str:
+        """
+        Derive a name for the Django model instance.
+
+        Args:
+            obj: The Pydantic model or dataclass instance.
+            name: Optional name provided by the caller.
+            class_name: The name of the object's class.
+
+        Returns:
+            The derived name.
+        """
+        if name is not None:
+            return name
+
+        # Try to get the name from the object if it has a 'name' attribute
+        obj_name = getattr(obj, "name", None)
+        if isinstance(obj_name, str) and obj_name:
+            return obj_name
+
+        # Fallback to the class name
+        return class_name
+
+    def _get_class(self) -> type:
+        """
+        Get the stored object's class (Pydantic model or dataclass) from its path.
+
+        Returns:
+            The class type.
+
+        Raises:
+            ValueError: If the class cannot be found or imported.
+        """
+        if not self.class_path:
+            raise ValueError("Cannot load class: 'class_path' field is empty.")
+
+        try:
+            # Check cache first
+            if self.class_path in self.__class__._class_cache:
+                return self.__class__._class_cache[self.class_path]
+
+            # Parse module and class name
+            module_path, class_name = self.class_path.rsplit(".", 1)
+            # Import the module and get the class
+            module = importlib.import_module(module_path)
+            loaded_class = getattr(module, class_name)
+
+            # Store in cache
+            self.__class__._class_cache[self.class_path] = loaded_class
+            return loaded_class
+        except (ImportError, AttributeError, ValueError) as e:
+            raise ValueError(f"Could not find or import class '{self.class_path}': {e}") from e
+
+    def _verify_object_type_match(self, obj: Any) -> str:
+        """
+        Verify that the provided object's type matches the stored class path.
+
+        Args:
+            obj: The Pydantic model or dataclass instance to check.
+
+        Returns:
+            The fully qualified name of the object's class.
+
+        Raises:
+            TypeError: If the object's type doesn't match the stored class path.
+        """
+        obj_class = obj.__class__
+        class_name = obj_class.__name__
+        module_name = obj_class.__module__
+        fully_qualified_name = f"{module_name}.{class_name}"
+
+        # Direct comparison of the fully qualified path
+        if self.class_path != fully_qualified_name:
+            raise TypeError(
+                f"Object type mismatch: Expected instance of '{self.class_path}', "
+                f"but got instance of '{fully_qualified_name}'."
+            )
+
+        return fully_qualified_name
+
+
+class Dataclass2DjangoBase(CommonBaseModel):
+    """
+    Abstract base class for storing Python Dataclass objects in the database.
+    Inherits common fields and methods from CommonBaseModel.
+    """
+
+    # Add specific attributes or methods for dataclasses if needed later
+    _expected_dataclass_type: ClassVar[Optional[type]] = None
 
     class Meta:
         abstract = True
 
     @classmethod
-    def _get_pydantic_class_info(cls, pydantic_obj: Any) -> tuple[Any, str, str, str]:
+    def _check_expected_type(cls, dc_obj: Any, class_name: str) -> None:
         """
-        Get information about the Pydantic class.
+        Check if the object is a dataclass and matches the expected type (if set).
 
         Args:
-            pydantic_obj: The Pydantic object
+            dc_obj: The object to check.
+            class_name: The name of the object's class (for error messages).
 
-        Returns:
-            Tuple of (pydantic_class, class_name, module_name, fully_qualified_name)
+        Raises:
+            TypeError: If the object is not a dataclass or doesn't match the expected type.
         """
-        pydantic_class = pydantic_obj.__class__
-        class_name = pydantic_class.__name__
-        module_name = pydantic_class.__module__
-        fully_qualified_name = f"{module_name}.{class_name}"
-        return pydantic_class, class_name, module_name, fully_qualified_name
+        if not dataclasses.is_dataclass(dc_obj):
+            raise TypeError(f"Object provided is not a dataclass: type={type(dc_obj)}")
+
+        expected_type = getattr(cls, "_expected_dataclass_type", None)
+        if expected_type is not None:
+            # Ensure expected_type is also a dataclass type for comparison
+            if not dataclasses.is_dataclass(expected_type):
+                # This indicates a configuration error in the subclass
+                raise TypeError(
+                    f"Internal configuration error: _expected_dataclass_type '{expected_type}' is not a dataclass."
+                )
+            if not isinstance(dc_obj, expected_type):
+                expected_name = getattr(expected_type, "__name__", str(expected_type))
+                raise TypeError(f"Expected dataclass object of type {expected_name}, but got {class_name}")
+
+
+class Pydantic2DjangoBase(CommonBaseModel):
+    """
+    Abstract base class for storing Pydantic objects in the database.
+    Inherits common fields and methods from CommonBaseModel.
+    """
+
+    _expected_pydantic_type: ClassVar[Optional[type[BaseModel]]] = None
+
+    class Meta:
+        abstract = True
 
     @classmethod
     def _check_expected_type(cls, pydantic_obj: Any, class_name: str) -> None:
@@ -64,108 +202,203 @@ class Pydantic2DjangoBase(models.Model):
         Check if the Pydantic object is of the expected type.
 
         Args:
-            pydantic_obj: The Pydantic object to check
-            class_name: The name of the Pydantic class
+            pydantic_obj: The Pydantic object to check.
+            class_name: The name of the Pydantic class (for error messages).
 
         Raises:
-            TypeError: If the Pydantic object is not of the expected type
+            TypeError: If the Pydantic object is not a Pydantic BaseModel or not of the expected type.
         """
+        if not isinstance(pydantic_obj, BaseModel):
+            raise TypeError(f"Object provided is not a Pydantic BaseModel: type={type(pydantic_obj)}")
+
         expected_type = getattr(cls, "_expected_pydantic_type", None)
         if expected_type is not None:
+            # Ensure expected_type is a BaseModel subclass for comparison
+            if not issubclass(expected_type, BaseModel):
+                # This indicates a configuration error in the subclass
+                raise TypeError(
+                    f"Internal configuration error: _expected_pydantic_type '{expected_type}' is not a Pydantic BaseModel."
+                )
             if not isinstance(pydantic_obj, expected_type):
                 expected_name = getattr(expected_type, "__name__", str(expected_type))
-                raise TypeError(f"Expected Pydantic object of type {expected_name}, " f"but got {class_name}")
+                raise TypeError(f"Expected Pydantic object of type {expected_name}, but got {class_name}")
+
+    # Methods previously here (_get_pydantic_class_info, _derive_name, _get_pydantic_class,
+    # _verify_object_type_match) are now generalized in CommonBaseModel.
+
+
+# --- Store Full Object as JSON ---
+
+
+class Dataclass2DjangoStoreDataclassObject(Dataclass2DjangoBase):
+    """
+    Class to store a Python Dataclass object in the database as JSON.
+
+    All data is stored in the 'data' field. Database fields matching dataclass
+    fields can be optionally synced.
+    """
+
+    data = models.JSONField(help_text="JSON representation of the dataclass object.")
+
+    class Meta:
+        abstract = True
+        verbose_name = "Stored Dataclass Object"
+        verbose_name_plural = "Stored Dataclass Objects"
 
     @classmethod
-    def _derive_name(cls, pydantic_obj: Any, name: str | None, class_name: str) -> str:
+    def from_dataclass(cls, dc_obj: Any, name: str | None = None) -> "Dataclass2DjangoStoreDataclassObject":
         """
-        Derive a name for the Django model instance.
+        Create a Django model instance from a Dataclass object.
 
         Args:
-            pydantic_obj: The Pydantic object
-            name: Optional name provided by the caller
-            class_name: The name of the Pydantic class
+            dc_obj: The Dataclass object to store.
+            name: Optional name for the Django model instance.
 
         Returns:
-            The derived name
-        """
-        if name is not None:
-            return name
-
-        # Try to get the name from the Pydantic object if it has a name attribute
-        try:
-            obj_name = getattr(pydantic_obj, "name", None)
-            if obj_name is not None:
-                return obj_name
-            return class_name
-        except (AttributeError, TypeError):
-            return class_name
-
-    def _get_pydantic_class(self) -> type[BaseModel]:
-        """
-        Get the Pydantic class for this Django model instance.
-
-        Returns:
-            The Pydantic class
+            A new instance of this Django model.
 
         Raises:
-            ValueError: If the Pydantic class cannot be found
+            TypeError: If the provided object is not a dataclass or not of the expected type.
         """
-        try:
-            # Check if the class is already in the cache
-            cache_key = self.object_type
-            if cache_key in self.__class__._pydantic_class_cache:
-                pydantic_class = self.__class__._pydantic_class_cache[cache_key]
-            else:
-                # Parse the module and class name from object_type
-                module_path, class_name = self.object_type.rsplit(".", 1)
-                # Import the appropriate class
-                module = importlib.import_module(module_path)
-                pydantic_class = getattr(module, class_name)
-                # Store in the cache
-                self.__class__._pydantic_class_cache[cache_key] = pydantic_class
-            return pydantic_class
-        except (ImportError, AttributeError, ValueError) as e:
-            raise ValueError(f"Could not find Pydantic class for {self.object_type}: {str(e)}") from e
+        # Get class info and check type
+        (
+            dc_class,
+            class_name,
+            module_name,
+            fully_qualified_name,
+        ) = cls._get_class_info(dc_obj)
+        cls._check_expected_type(dc_obj, class_name)  # Verifies it's a dataclass
 
-    def _verify_object_type_match(self, pydantic_obj: Any) -> str:
+        # Get data and serialize values
+        try:
+            data_dict = dataclasses.asdict(dc_obj)
+        except TypeError as e:
+            raise TypeError(f"Could not convert dataclass '{class_name}' to dict: {e}") from e
+
+        serialized_data = {key: serialize_value(value) for key, value in data_dict.items()}
+
+        # Derive name
+        derived_name = cls._derive_name(dc_obj, name, class_name)
+
+        instance = cls(
+            name=derived_name,
+            class_path=fully_qualified_name,
+            data=serialized_data,
+        )
+        # Optionally sync fields immediately after creation if desired
+        # instance.sync_db_fields_from_data(save=False)
+        return instance
+
+    def to_dataclass(self) -> Any:
         """
-        Verify that the Pydantic object type matches this Django model instance.
+        Convert the stored JSON data back to a Dataclass object.
+
+        Returns:
+            The reconstructed Dataclass object.
+
+        Raises:
+            ValueError: If the class cannot be loaded or instantiation fails.
+        """
+        dataclass_type = self._get_class()
+        if not dataclasses.is_dataclass(dataclass_type):
+            raise ValueError(f"Stored class path '{self.class_path}' does not point to a dataclass.")
+
+        # Use the stored JSON data
+        stored_data = self.data
+
+        # Basic reconstruction (does not handle complex types or context yet)
+        try:
+            # TODO: Add deserialization logic if serialize_value performs complex transformations
+            # For now, assume stored data is directly usable.
+            instance = dataclass_type(**stored_data)
+        except TypeError as e:
+            raise ValueError(
+                f"Failed to instantiate dataclass '{dataclass_type.__name__}' from stored data. "
+                f"Ensure stored data keys match dataclass fields. Error: {e}"
+            ) from e
+        except Exception as e:
+            raise ValueError(f"An unexpected error occurred during dataclass reconstruction: {e}") from e
+
+        return instance
+
+    def update_from_dataclass(self, dc_obj: Any) -> None:
+        """
+        Update this Django model instance with new data from a Dataclass object.
 
         Args:
-            pydantic_obj: The Pydantic object to check
-
-        Returns:
-            The fully qualified name of the Pydantic class
+            dc_obj: The Dataclass object with updated data.
 
         Raises:
-            TypeError: If the Pydantic object type doesn't match
+            TypeError: If the object type doesn't match or conversion fails.
         """
-        pydantic_class = pydantic_obj.__class__
-        class_name = pydantic_class.__name__
-        module_name = pydantic_class.__module__
-        fully_qualified_name = f"{module_name}.{class_name}"
+        # Verify the object type matches the stored path
+        fully_qualified_name = self._verify_object_type_match(dc_obj)
+        # Check if it's actually a dataclass (redundant if verify works, but safe)
+        if not dataclasses.is_dataclass(dc_obj):
+            raise TypeError("Provided object for update is not a dataclass.")
 
-        # Check if the object types match (ignoring module for backward compatibility)
-        if not self.object_type.endswith(class_name) and self.object_type != fully_qualified_name:
-            raise TypeError(
-                f"Expected Pydantic object of type matching {self.object_type}, " f"but got {fully_qualified_name}"
-            )
+        # Update class_path if somehow inconsistent (shouldn't happen if verify passed)
+        if self.class_path != fully_qualified_name:
+            self.class_path = fully_qualified_name  # Correctness check
 
-        return fully_qualified_name
+        # Get new data and serialize
+        try:
+            data_dict = dataclasses.asdict(dc_obj)
+        except TypeError as e:
+            raise TypeError(f"Could not convert dataclass '{dc_obj.__class__.__name__}' to dict for update: {e}") from e
+
+        self.data = {key: serialize_value(value) for key, value in data_dict.items()}
+        # Optionally sync fields before saving
+        # self.sync_db_fields_from_data(save=False)
+        self.save()
+
+    def sync_db_fields_from_data(self, save: bool = True) -> None:
+        """
+        Synchronize database fields from the JSON 'data' field.
+
+        Updates Django model fields (excluding common/meta fields) with values
+        from the JSON data if the field names match.
+
+        Args:
+            save: If True (default), saves the instance after updating fields.
+        """
+        if not isinstance(self.data, dict):
+            # Log or handle cases where data is not a dict
+            return
+
+        # Get model fields, excluding common ones and the data field itself
+        model_field_names = {
+            field.name
+            for field in self._meta.fields
+            if field.name not in ("id", "name", "class_path", "data", "created_at", "updated_at")
+        }
+
+        updated_fields = []
+        for field_name in model_field_names:
+            if field_name in self.data:
+                current_value = getattr(self, field_name)
+                new_value = self.data[field_name]
+                # Basic check to avoid unnecessary updates
+                # TODO: Consider type coercion or more robust comparison if needed
+                if current_value != new_value:
+                    setattr(self, field_name, new_value)
+                    updated_fields.append(field_name)
+
+        if updated_fields and save:
+            self.save(update_fields=updated_fields)
 
 
 class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
     """
-    Class to store a Pydantic object in the database.
-
-    Does not allow field access, all data is stored in the data field as a JSON object.
+    Class to store a Pydantic object in the database as JSON.
     """
 
-    data = models.JSONField()
+    data = models.JSONField(help_text="JSON representation of the Pydantic object.")
 
     class Meta:
         abstract = True
+        verbose_name = "Stored Pydantic Object"
+        verbose_name_plural = "Stored Pydantic Objects"
 
     @classmethod
     def from_pydantic(cls, pydantic_obj: Any, name: str | None = None) -> "Pydantic2DjangoStorePydanticObject":
@@ -188,24 +421,30 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
             class_name,
             module_name,
             fully_qualified_name,
-        ) = cls._get_pydantic_class_info(pydantic_obj)
+        ) = cls._get_class_info(pydantic_obj)
 
         # Check if this is a subclass with a specific expected type
         cls._check_expected_type(pydantic_obj, class_name)
 
         # Get data from the Pydantic object and serialize any nested objects
-        data = pydantic_obj.model_dump()
+        # Use model_dump for Pydantic v2+
+        try:
+            data = pydantic_obj.model_dump()
+        except AttributeError:  # Fallback for older Pydantic? Or raise error?
+            raise TypeError("Failed to dump Pydantic model. Ensure you are using Pydantic v2+ with model_dump().")
+
         serialized_data = {key: serialize_value(value) for key, value in data.items()}
 
         # Use class_name as name if not provided and if object has a name attribute
-        name = cls._derive_name(pydantic_obj, name, class_name)
+        derived_name = cls._derive_name(pydantic_obj, name, class_name)
 
         instance = cls(
-            name=name,
-            object_type=fully_qualified_name,
+            name=derived_name,
+            class_path=fully_qualified_name,  # Use renamed field
             data=serialized_data,
         )
-
+        # Optionally sync fields
+        # instance.sync_db_fields_from_data(save=False)
         return instance
 
     def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> Any:
@@ -219,52 +458,55 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
             The reconstructed Pydantic object
 
         Raises:
-            ValueError: If required context is missing for non-serializable fields
+            ValueError: If required context is missing for non-serializable fields or class load/instantiation fails.
         """
-        pydantic_class = self._get_pydantic_class()
+        pydantic_class = self._get_class()  # Use common method
+        if not issubclass(pydantic_class, BaseModel):
+            raise ValueError(f"Stored class path '{self.class_path}' does not point to a Pydantic BaseModel.")
 
-        # TODO: This should be implemented
-        model_context = None
-        if not model_context:
-            raise NotImplementedError("You should fix this")
-        # If we have context fields, validate the provided context
-        if model_context and model_context.required_context_keys:
-            if not context:
-                raise ValueError(
-                    f"This model has non-serializable fields that require context: "
-                    f"{', '.join(model_context.required_context_keys)}. "
-                    "Please provide the context dictionary when calling to_pydantic()."
-                )
-            model_context.validate_context(context)
+        # TODO: Integrate ModelContext logic properly if needed for this storage type
+        # This likely belongs more in the field-mapping approach.
+        # model_context = None
+        # if not model_context:
+        #     raise NotImplementedError("You should fix this")
+        # # If we have context fields, validate the provided context
+        # if model_context and model_context.required_context_keys:
+        #     if not context:
+        #         raise ValueError(
+        #             f"This model has non-serializable fields that require context: "
+        #             f"{', '.join(model_context.required_context_keys)}. "
+        #             "Please provide the context dictionary when calling to_pydantic()."
+        #         )
+        #     model_context.validate_context(context)
 
-        # Get data with database field overrides
-        data = self._get_data_with_db_overrides(pydantic_class)
+        # Use stored data directly
+        stored_data = self.data
 
-        # If we have context, update the data with context values
+        # If context is provided, overlay it (simple merge, context takes precedence)
+        final_data = stored_data.copy()
         if context:
-            data.update(context)
+            final_data.update(context)
 
-        # Reconstruct the object
-        return pydantic_class.model_validate(data)
+        # Reconstruct the object using model_validate for Pydantic v2+
+        try:
+            # TODO: Add deserialization logic if serialize_value performs complex transformations
+            instance = pydantic_class.model_validate(final_data)
+        except Exception as e:  # Catch Pydantic validation errors etc.
+            raise ValueError(
+                f"Failed to validate/instantiate Pydantic model '{pydantic_class.__name__}' from stored data: {e}"
+            ) from e
+
+        return instance
 
     def _get_data_with_db_overrides(self, pydantic_class: type[BaseModel]) -> dict:
-        """Get model data with any database field overrides applied."""
-        data = {}
-        for field in self._meta.fields:
-            field_name = field.name
-            if field_name == "id":
-                continue
-
-            value = getattr(self, field_name)
-
-            # Handle relationship fields
-            if getattr(field, "is_relationship", False):
-                # Skip if the value will come from context
-                continue
-
-            data[field_name] = value
-
-        return data
+        """
+        Get model data with any database field overrides applied.
+        (Primarily relevant for field-mapping, less so here, but kept for potential sync logic).
+        """
+        # This method seems less relevant when the primary source is `self.data`.
+        # Keeping it simple: return the stored data.
+        # If sync logic were more complex, this might need adjustment.
+        return self.data if isinstance(self.data, dict) else {}
 
     def update_from_pydantic(self, pydantic_obj: Any) -> None:
         """
@@ -275,305 +517,486 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         """
         # Verify the object type matches
         fully_qualified_name = self._verify_object_type_match(pydantic_obj)
+        # Check if it's a Pydantic model (redundant if verify works, but safe)
+        if not isinstance(pydantic_obj, BaseModel):
+            raise TypeError("Provided object for update is not a Pydantic BaseModel.")
 
-        # Update the object_type to the fully qualified name if it's not already
-        if self.object_type != fully_qualified_name:
-            self.object_type = fully_qualified_name
+        # Update the class_path if somehow inconsistent
+        if self.class_path != fully_qualified_name:
+            self.class_path = fully_qualified_name
 
-        self.data = pydantic_obj.model_dump()
+        # Use model_dump for Pydantic v2+
+        try:
+            data = pydantic_obj.model_dump()
+        except AttributeError:
+            raise TypeError(
+                "Failed to dump Pydantic model for update. Ensure you are using Pydantic v2+ with model_dump()."
+            )
+
+        self.data = {key: serialize_value(value) for key, value in data.items()}
+        # Optionally sync fields
+        # self.sync_db_fields_from_data(save=False)
         self.save()
 
-    def sync_db_fields_from_data(self) -> None:
+    def sync_db_fields_from_data(self, save: bool = True) -> None:
         """
-        Synchronize database fields from the JSON data.
+        Synchronize database fields from the JSON 'data' field.
 
-        This method updates the database fields with values from the JSON data
-        if the field names match.
+        Updates Django model fields (excluding common/meta fields) with values
+        from the JSON data if the field names match.
+
+        Args:
+            save: If True (default), saves the instance after updating fields.
         """
-        # Get all fields from the Django model
-        django_fields = {field.name: field for field in self._meta.fields}
+        if not isinstance(self.data, dict):
+            return
 
-        # Exclude these fields from consideration
-        exclude_fields = {
-            "id",
-            "name",
-            "object_type",
-            "data",
-            "created_at",
-            "updated_at",
+        # Get model fields, excluding common ones and the data field itself
+        model_field_names = {
+            field.name
+            for field in self._meta.fields
+            if field.name not in ("id", "name", "class_path", "data", "created_at", "updated_at")
         }
 
-        # Check each Django field to see if it matches a field in the JSON data
         updated_fields = []
-        for field_name, _ in django_fields.items():
-            if field_name in exclude_fields:
-                continue
-
-            # Check if this field exists in the JSON data
+        for field_name in model_field_names:
             if field_name in self.data:
-                # Get the value from the JSON data
-                value = self.data[field_name]
+                current_value = getattr(self, field_name)
+                new_value = self.data[field_name]
+                # Basic check to avoid unnecessary updates
+                if current_value != new_value:
+                    setattr(self, field_name, new_value)
+                    updated_fields.append(field_name)
 
-                # Set the Django field value
-                setattr(self, field_name, value)
-                updated_fields.append(field_name)
-
-        # Save the changes
-        if updated_fields:
+        if updated_fields and save:
             self.save(update_fields=updated_fields)
 
 
-class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[T]):
-    """
-    Base class for storing Pydantic objects in the database.
+# --- Map Object Fields to Database Fields ---
 
-    This model provides common functionality for serializing and deserializing
-    Pydantic objects, with proper type hints and IDE support.
+
+class Dataclass2DjangoBaseClass(Dataclass2DjangoBase, Generic[DataclassT]):
+    """
+    Base class for mapping Python Dataclass fields to Django model fields.
+
+    Inherits from Dataclass2DjangoBase and provides methods to convert
+    between the Dataclass instance and the Django model instance by matching field names.
     """
 
     class Meta:
         abstract = True
+        verbose_name = "Mapped Dataclass"
+        verbose_name_plural = "Mapped Dataclasses"
+
+    # __getattr__ is less likely needed/useful for standard dataclasses compared to Pydantic models
+    # which might have complex methods. Skip for now.
+
+    @classmethod
+    def from_dataclass(cls, dc_obj: DataclassT, name: str | None = None) -> "Dataclass2DjangoBaseClass[DataclassT]":
+        """
+        Create a Django model instance from a Dataclass object, mapping fields.
+
+        Args:
+            dc_obj: The Dataclass object to convert.
+            name: Optional name for the Django model instance.
+
+        Returns:
+            A new instance of this Django model subclass.
+
+        Raises:
+            TypeError: If the object is not a dataclass or not of the expected type.
+        """
+        # Get class info and check type
+        (
+            dc_class,
+            class_name,
+            module_name,
+            fully_qualified_name,
+        ) = cls._get_class_info(dc_obj)
+        cls._check_expected_type(dc_obj, class_name)  # Verifies it's a dataclass
+
+        # Derive name
+        derived_name = cls._derive_name(dc_obj, name, class_name)
+
+        # Create instance with basic fields
+        instance = cls(
+            name=derived_name,
+            class_path=fully_qualified_name,
+        )
+
+        # Update mapped fields
+        instance.update_fields_from_dataclass(dc_obj)
+
+        return instance
+
+    def update_fields_from_dataclass(self, dc_obj: DataclassT) -> None:
+        """
+        Update this Django model's fields from a Dataclass object's fields.
+
+        Args:
+            dc_obj: The Dataclass object containing source values.
+
+        Raises:
+            TypeError: If conversion to dict fails.
+        """
+        if (
+            not dataclasses.is_dataclass(dc_obj)
+            or dc_obj.__class__.__module__ != self._get_class().__module__
+            or dc_obj.__class__.__name__ != self._get_class().__name__
+        ):
+            # Check type consistency before proceeding
+            raise TypeError(
+                f"Provided object type {type(dc_obj)} does not match expected type {self.class_path} for update."
+            )
+
+        try:
+            dc_data = dataclasses.asdict(dc_obj)
+        except TypeError as e:
+            raise TypeError(f"Could not convert dataclass '{dc_obj.__class__.__name__}' to dict for update: {e}") from e
+
+        # Get Django model fields excluding common/meta ones
+        model_field_names = {
+            field.name
+            for field in self._meta.fields
+            if field.name not in ("id", "name", "class_path", "created_at", "updated_at")
+        }
+
+        for field_name in model_field_names:
+            if field_name in dc_data:
+                value = dc_data[field_name]
+                # Apply serialization (important for complex types like datetime, UUID, etc.)
+                serialized_value = serialize_value(value)
+                setattr(self, field_name, serialized_value)
+            # Else: Field exists on Django model but not on dataclass, leave it unchanged.
+
+    def to_dataclass(self) -> DataclassT:
+        """
+        Convert this Django model instance back to a Dataclass object.
+
+        Returns:
+            The reconstructed Dataclass object.
+
+        Raises:
+            ValueError: If the class cannot be loaded or instantiation fails.
+        """
+        dataclass_type = self._get_class()
+        if not dataclasses.is_dataclass(dataclass_type):
+            raise ValueError(f"Stored class path '{self.class_path}' does not point to a dataclass.")
+
+        # Get data from Django fields corresponding to dataclass fields
+        data_for_dc = self._get_data_for_dataclass(dataclass_type)
+
+        # Instantiate the dataclass
+        try:
+            # TODO: Add deserialization logic if needed
+            instance = dataclass_type(**data_for_dc)
+            # Cast to the generic type variable for type hinting
+            return cast(DataclassT, instance)
+        except TypeError as e:
+            raise ValueError(
+                f"Failed to instantiate dataclass '{dataclass_type.__name__}' from Django model fields. "
+                f"Ensure required fields exist and types are compatible. Error: {e}"
+            ) from e
+        except Exception as e:
+            raise ValueError(f"An unexpected error occurred during dataclass reconstruction: {e}") from e
+
+    def _get_data_for_dataclass(self, dataclass_type: type) -> dict[str, Any]:
+        """Get data from Django fields that correspond to the target dataclass fields."""
+        data = {}
+        try:
+            dc_field_names = {f.name for f in dataclasses.fields(dataclass_type)}
+        except TypeError:
+            # Should not happen if is_dataclass check passed, but handle defensively
+            raise ValueError(f"Could not get fields for non-dataclass type '{dataclass_type.__name__}'")
+
+        # Add DB fields that are part of the dataclass
+        for field in self._meta.fields:
+            if field.name in dc_field_names:
+                # TODO: Add potential deserialization based on target dataclass field type?
+                data[field.name] = getattr(self, field.name)
+
+        # Context handling is usually Pydantic-specific, skip for dataclasses unless needed
+        return data
+
+    def update_from_dataclass(self, dc_obj: DataclassT) -> None:
+        """
+        Update this Django model with new data from a Dataclass object and save.
+
+        Args:
+            dc_obj: The Dataclass object with updated data.
+        """
+        # Verify the object type matches first (includes check if it's a dataclass)
+        fully_qualified_name = self._verify_object_type_match(dc_obj)
+
+        # Update the class_path if somehow inconsistent
+        if self.class_path != fully_qualified_name:
+            self.class_path = fully_qualified_name
+
+        self.update_fields_from_dataclass(dc_obj)
+        self.save()
+
+    def save_as_dataclass(self) -> DataclassT:
+        """
+        Save the Django model and return the corresponding Dataclass object.
+
+        Returns:
+            The corresponding Dataclass object.
+        """
+        self.save()
+        return self.to_dataclass()
+
+
+class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
+    """
+    Base class for mapping Pydantic model fields to Django model fields.
+    """
+
+    class Meta:
+        abstract = True
+        verbose_name = "Mapped Pydantic Object"
+        verbose_name_plural = "Mapped Pydantic Objects"
 
     def __new__(cls, *args, **kwargs):
         """
         Override __new__ to ensure proper type checking.
-        This is needed because Django's model metaclass doesn't preserve Generic type parameters.
+        Needed because Django's model metaclass doesn't preserve Generic type parameters well.
         """
+        # The check itself might be complex. This placeholder ensures __new__ is considered.
+        # Proper generic handling might require metaclass adjustments beyond this scope.
         return super().__new__(cls)
 
     def __getattr__(self, name: str) -> Any:
         """
         Forward method calls to the Pydantic model implementation.
-        This enables proper type checking for methods defined in the Pydantic model.
+        Enables type checking and execution of methods defined on the Pydantic model.
         """
-        # Get the Pydantic model class from object_type, using the cache if available
+        # Get the Pydantic model class
         try:
-            pydantic_cls = self._get_pydantic_class()
+            pydantic_cls = self._get_class()  # Use common method
+            if not issubclass(pydantic_cls, BaseModel):
+                # This path shouldn't be hit if used correctly, but safeguard
+                raise AttributeError(f"Stored class '{self.class_path}' is not a Pydantic BaseModel.")
         except ValueError as e:
-            raise AttributeError(str(e)) from e
+            raise AttributeError(f"Cannot forward attribute '{name}': {e}") from e
 
         # Check if the attribute exists in the Pydantic model
         if hasattr(pydantic_cls, name):
-            # Get the attribute from the Pydantic model
             attr = getattr(pydantic_cls, name)
 
-            # If it's a method, wrap it to convert between Django and Pydantic models
+            # If it's a callable method (and not the type itself), wrap it
             if callable(attr) and not isinstance(attr, type):
-                # Create a wrapper function that converts self to a Pydantic instance
-                # and then calls the method on that instance
+
                 def wrapped_method(*args, **kwargs):
-                    # Convert Django model to Pydantic model
-                    pydantic_instance = self.to_pydantic()
+                    # Convert self (Django model) to Pydantic instance first
+                    try:
+                        pydantic_instance = self.to_pydantic()  # Assuming no context needed here
+                    except ValueError as e:
+                        # Handle potential errors during conversion (e.g., context missing)
+                        raise RuntimeError(
+                            f"Failed to convert Django model to Pydantic before calling '{name}': {e}"
+                        ) from e
+
                     # Call the method on the Pydantic instance
                     result = getattr(pydantic_instance, name)(*args, **kwargs)
-                    # Return the result
+                    # TODO: Handle potential need to update self from result? Unlikely for most methods.
                     return result
 
                 return wrapped_method
             else:
-                # For non-method attributes, just return the attribute
+                # For non-method attributes (like class vars), return directly
+                # This might need refinement depending on desired behavior for class vs instance attrs
                 return attr
 
-        # If the attribute doesn't exist in the Pydantic model, raise AttributeError
+        # If attribute doesn't exist on Pydantic model, raise standard AttributeError
         raise AttributeError(
-            f"'{self.__class__.__name__}' object has no attribute '{name}' "
-            f"and '{pydantic_cls.__name__}' has no attribute '{name}'"
+            f"'{self.__class__.__name__}' object has no attribute '{name}', "
+            f"and Pydantic model '{pydantic_cls.__name__}' has no attribute '{name}'."
         )
 
     @classmethod
-    def from_pydantic(cls, pydantic_obj: T, name: str | None = None) -> "Pydantic2DjangoBaseClass[T]":
+    def from_pydantic(cls, pydantic_obj: PydanticT, name: str | None = None) -> "Pydantic2DjangoBaseClass[PydanticT]":
         """
-        Create a Django model instance from a Pydantic object.
+        Create a Django model instance from a Pydantic object, mapping fields.
 
         Args:
-            pydantic_obj: The Pydantic object to convert
-            name: Optional name for the object (defaults to class name if available)
+            pydantic_obj: The Pydantic object to convert.
+            name: Optional name for the Django model instance.
 
         Returns:
-            A new instance of the appropriate Pydantic2DjangoBaseClass subclass
+            A new instance of this Django model subclass.
 
         Raises:
-            TypeError: If the Pydantic object is not of the correct type for this Django model
+            TypeError: If the object is not a Pydantic model or not of the expected type.
         """
-        # Get the Pydantic class and its fully qualified name
+        # Get class info and check type
         (
             pydantic_class,
             class_name,
             module_name,
             fully_qualified_name,
-        ) = cls._get_pydantic_class_info(pydantic_obj)
+        ) = cls._get_class_info(pydantic_obj)
+        cls._check_expected_type(pydantic_obj, class_name)  # Verifies it's a Pydantic model
 
-        # Check if this is a subclass with a specific expected type
-        cls._check_expected_type(pydantic_obj, class_name)
+        # Derive name
+        derived_name = cls._derive_name(pydantic_obj, name, class_name)
 
-        # Use class_name as name if not provided and if object has a name attribute
-        name = cls._derive_name(pydantic_obj, name, class_name)
-
-        # Create a new instance with basic fields
+        # Create instance with basic fields
         instance = cls(
-            name=name,
-            object_type=fully_qualified_name,
+            name=derived_name,
+            class_path=fully_qualified_name,  # Use renamed field
         )
 
-        # Update fields from the Pydantic object
+        # Update mapped fields
         instance.update_fields_from_pydantic(pydantic_obj)
 
         return instance
 
-    def update_fields_from_pydantic(self, pydantic_obj: T) -> None:
+    def update_fields_from_pydantic(self, pydantic_obj: PydanticT) -> None:
         """
-        Update this Django model's fields from a Pydantic object.
+        Update this Django model's fields from a Pydantic object's fields.
 
         Args:
-            pydantic_obj: The Pydantic object with field values
+            pydantic_obj: The Pydantic object containing source values.
         """
+        if (
+            not isinstance(pydantic_obj, BaseModel)
+            or pydantic_obj.__class__.__module__ != self._get_class().__module__
+            or pydantic_obj.__class__.__name__ != self._get_class().__name__
+        ):
+            # Check type consistency before proceeding
+            raise TypeError(
+                f"Provided object type {type(pydantic_obj)} does not match expected type {self.class_path} for update."
+            )
+
         # Get data from the Pydantic object
-        data = pydantic_obj.model_dump()
+        try:
+            pydantic_data = pydantic_obj.model_dump()
+        except AttributeError:
+            raise TypeError(
+                "Failed to dump Pydantic model for update. Ensure you are using Pydantic v2+ with model_dump()."
+            )
 
-        # Get all fields from the Django model
-        django_fields = {field.name: field for field in self._meta.fields}
-
-        # Exclude these fields from consideration
-        exclude_fields = {
-            "id",
-            "name",
-            "object_type",
-            "created_at",
-            "updated_at",
+        # Get Django model fields excluding common/meta ones
+        model_field_names = {
+            field.name
+            for field in self._meta.fields
+            if field.name not in ("id", "name", "class_path", "created_at", "updated_at")
         }
 
         # Update each Django field if it matches a field in the Pydantic data
-        for field_name, _ in django_fields.items():
-            if field_name in exclude_fields:
-                continue
-
-            # Check if this field exists in the Pydantic data
-            if field_name in data:
-                # Get the value from the Pydantic data and serialize it if needed
-                value = data[field_name]
+        for field_name in model_field_names:
+            if field_name in pydantic_data:
+                value = pydantic_data[field_name]
+                # Apply serialization (important for complex types)
                 serialized_value = serialize_value(value)
-
-                # Set the Django field value
                 setattr(self, field_name, serialized_value)
+            # Else: Field exists on Django model but not on Pydantic model, leave it unchanged.
 
-    def to_pydantic(self, context: Optional[ModelContext] = None) -> T:
+    def to_pydantic(self, context: Optional[ModelContext] = None) -> PydanticT:
         """
-        Convert this Django model to a Pydantic object.
+        Convert this Django model instance back to a Pydantic object.
 
         Args:
             context: Optional ModelContext instance containing values for non-serializable fields.
-                    Required if the model has any non-serializable fields.
 
         Returns:
-            The corresponding Pydantic object
+            The corresponding Pydantic object.
 
         Raises:
-            ValueError: If context is required but not provided, or if provided context
-                      is missing required fields.
+            ValueError: If context is required but not provided, or if class load/instantiation fails.
         """
-        pydantic_class = self._get_pydantic_class()
+        pydantic_class = self._get_class()  # Use common method
+        if not issubclass(pydantic_class, BaseModel):
+            raise ValueError(f"Stored class path '{self.class_path}' does not point to a Pydantic BaseModel.")
 
-        # Get data from Django fields
-        data = self._get_data_for_pydantic()
+        # Get data from Django fields corresponding to Pydantic fields
+        data = self._get_data_for_pydantic(pydantic_class)
 
-        # Check if we need context
-        required_context = self._get_required_context_fields()
-        if required_context:
+        # Handle context if required and provided
+        required_context_keys = self._get_required_context_fields()  # Check if context is needed
+        if required_context_keys:
             if not context:
                 raise ValueError(
-                    f"This model has non-serializable fields that require context: {', '.join(required_context)}. "
-                    "Please provide a context instance when calling to_pydantic()."
+                    f"Conversion to Pydantic model '{pydantic_class.__name__}' requires context "
+                    f"for fields: {', '.join(required_context_keys)}. Please provide a ModelContext instance."
                 )
+            # Validate and merge context data
+            context_dict = context.to_conversion_dict()
+            context.validate_context(context_dict)  # Validate required keys are present
+            data.update(context_dict)  # Merge context, potentially overwriting DB values if keys overlap
 
-            # Validate and use the context
-            context.validate_context(context.to_conversion_dict())
-            data.update(context.to_conversion_dict())
+        # Reconstruct the Pydantic object
+        try:
+            # TODO: Add potential deserialization logic here if needed before validation
+            instance = pydantic_class.model_validate(data)
+            # Cast to the generic type variable
+            return cast(PydanticT, instance)
+        except Exception as e:  # Catch Pydantic validation errors etc.
+            raise ValueError(
+                f"Failed to validate/instantiate Pydantic model '{pydantic_class.__name__}' from Django fields: {e}"
+            ) from e
 
-        # Reconstruct the object and cast to the correct type
-        result = pydantic_class.model_validate(data)
-        return cast(T, result)
-
-    def _get_data_for_pydantic(self) -> dict[str, Any]:
-        """Get model data suitable for passing to Pydantic validator."""
+    def _get_data_for_pydantic(self, pydantic_class: type[BaseModel]) -> dict[str, Any]:
+        """Get data from Django fields that correspond to the target Pydantic model fields."""
         data = {}
-        # Get the ModelContext associated with this instance or its generated class
-        model_context = getattr(self, "_model_context", None)
-
-        pydantic_fields = set(self._get_pydantic_class().model_fields.keys())
+        try:
+            pydantic_field_names = set(pydantic_class.model_fields.keys())
+        except AttributeError:
+            # Should not happen if issubclass(BaseModel) check passed
+            raise ValueError(f"Could not get fields for non-Pydantic type '{pydantic_class.__name__}'")
 
         # Add DB fields that are part of the Pydantic model
         for field in self._meta.fields:
-            if field.name in pydantic_fields:
+            if field.name in pydantic_field_names:
+                # TODO: Add potential deserialization based on target Pydantic field type?
                 data[field.name] = getattr(self, field.name)
 
-        # Add context field values if context exists
-        if model_context:
-            # Call the renamed method
-            context_values = model_context.to_conversion_dict()
-            data.update(context_values)
-
+        # Context values are merged in the calling `to_pydantic` method
         return data
 
     def _get_required_context_fields(self) -> set[str]:
         """
         Get the set of field names that require context when converting to Pydantic.
-
-        Returns:
-            Set of field names that require context
+        (Placeholder implementation - needs refinement based on how context is defined).
         """
+        # This requires a mechanism to identify which Django fields represent
+        # non-serializable data that must come from context.
+        # For now, assume no context is required by default for the base class.
+        # Subclasses might override this or a more sophisticated mechanism could be added.
+        # Example: Check for a custom field attribute like `is_context_field=True`
         required_fields = set()
+        # pydantic_class = self._get_class()
+        # pydantic_field_names = set(pydantic_class.model_fields.keys())
+        # for field in self._meta.fields:
+        #     if field.name in pydantic_field_names and getattr(field, 'is_context_field', False):
+        #         required_fields.add(field.name)
+        return required_fields  # Return empty set for now
 
-        # Get all fields from the Django model
-        django_fields = {field.name: field for field in self._meta.fields}
-
-        # Exclude these fields from consideration
-        exclude_fields = {
-            "id",
-            "name",
-            "object_type",
-            "created_at",
-            "updated_at",
-        }
-
-        # Check each field
-        for field_name, field in django_fields.items():
-            if field_name in exclude_fields:
-                continue
-
-            # Check if this is a context field (non-serializable)
-            # We use the is_relationship flag to indicate context fields
-            # This was set in _resolve_field_type
-            if isinstance(field, models.TextField) and getattr(field, "is_relationship", False):
-                required_fields.add(field_name)
-
-        return required_fields
-
-    def update_from_pydantic(self, pydantic_obj: T) -> None:
+    def update_from_pydantic(self, pydantic_obj: PydanticT) -> None:
         """
-        Update this Django model with new data from a Pydantic object.
+        Update this Django model with new data from a Pydantic object and save.
 
         Args:
-            pydantic_obj: The Pydantic object with updated data
+            pydantic_obj: The Pydantic object with updated data.
         """
-        # Verify the object type matches
+        # Verify the object type matches first (includes check if it's a BaseModel)
         fully_qualified_name = self._verify_object_type_match(pydantic_obj)
 
-        # Update the object_type to the fully qualified name if it's not already
-        if self.object_type != fully_qualified_name:
-            self.object_type = fully_qualified_name
+        # Update the class_path if somehow inconsistent
+        if self.class_path != fully_qualified_name:
+            self.class_path = fully_qualified_name
 
         self.update_fields_from_pydantic(pydantic_obj)
         self.save()
 
-    def save_as_pydantic(self) -> T:
+    def save_as_pydantic(self) -> PydanticT:
         """
-        Convert to a Pydantic object, save the Django model, and return the Pydantic object.
-
-        This is a convenience method for operations that need to save the Django model
-        and then continue working with the Pydantic representation.
+        Save the Django model and return the corresponding Pydantic object.
 
         Returns:
-            The corresponding Pydantic object
+            The corresponding Pydantic object.
         """
         self.save()
-        return self.to_pydantic()
+        # Pass None for context; assumes save_as doesn't need external context.
+        # If context might be needed, this method signature/logic needs adjustment.
+        return self.to_pydantic(context=None)  # Or handle context if necessary

@@ -10,6 +10,8 @@ from typing import Generic, Optional, TypeVar, cast
 import jinja2
 from django.db import models
 
+from ..django.utils.serialization import generate_field_definition_string  # Import needed function
+from ..pydantic.factory import PydanticModelFactory  # Import for casting
 from .discovery import BaseDiscovery  # Renamed to avoid clash
 from .factories import BaseModelFactory, ConversionCarrier
 from .imports import ImportHandler
@@ -31,7 +33,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self,
         output_path: str,
         app_label: str,
-        filter_function: Optional[Callable[[SourceModelType], bool]],
+        filter_function: Optional[Callable[[type[SourceModelType]], bool]],
         verbose: bool,
         discovery_instance: BaseDiscovery[SourceModelType],
         model_factory_instance: BaseModelFactory[SourceModelType, FieldInfoType],
@@ -172,7 +174,9 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
 
         # Corrected call matching BaseDiscovery signature
         self.discovery_instance.discover_models(
-            self.packages, app_label=self.app_label, user_filters=self.filter_function
+            self.packages or [],  # Pass empty list if None
+            app_label=self.app_label,
+            user_filters=self.filter_function,  # Keep as is for now
         )
 
         # Analyze dependencies after discovery
@@ -306,18 +310,66 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         # --- Get Subclass Specific Context ---
         extra_context = self._get_model_definition_extra_context(carrier)
 
-        # --- Render Template ---
-        template = self.jinja_env.get_template("model_definition.py.j2")
-        definition_str = template.render(
-            model_name=django_model_name,
-            pydantic_model_name=source_model_name,  # Keep for potential use in template
-            base_model_name=base_model_name,
-            fields=fields_info,
-            meta=meta_options,
-            app_label=self.app_label,
-            # Pass through extra context from subclass (should include field_definitions)
+        # --- Process Pending Multi-FK Unions and add to definitions dict ---
+        multi_fk_field_names = []  # Keep track for validation hint
+        validation_needed = False
+        if carrier.pending_multi_fk_unions:
+            validation_needed = True
+            for original_field_name, union_details in carrier.pending_multi_fk_unions:
+                pydantic_models = union_details.get("models", [])
+                for pydantic_model in pydantic_models:
+                    # Construct field name (e.g., original_name_relatedmodel)
+                    fk_field_name = f"{original_field_name}_{pydantic_model.__name__.lower()}"
+                    multi_fk_field_names.append(fk_field_name)
+                    # Get corresponding Django model
+                    pydantic_factory = cast(PydanticModelFactory, self.model_factory_instance)
+                    django_model_rel = pydantic_factory.relationship_accessor.get_django_model_for_pydantic(
+                        pydantic_model
+                    )
+                    if not django_model_rel:
+                        logger.error(
+                            f"Could not find Django model for Pydantic model {pydantic_model.__name__} referenced in multi-FK union for {original_field_name}. Skipping FK field."
+                        )
+                        continue
+                    # Use string for model ref in kwargs
+                    target_model_str = f"'{django_model_rel._meta.app_label}.{django_model_rel.__name__}'"
+                    # Add import for the related Django model
+                    self.import_handler._add_type_import(django_model_rel)
+
+                    # Define FK kwargs (always null=True, blank=True)
+                    # Use strings for values that need to be represented in code
+                    fk_kwargs = {
+                        "to": target_model_str,
+                        "on_delete": "models.SET_NULL",  # Use string for template
+                        "null": True,
+                        "blank": True,
+                        # Generate related_name to avoid clashes
+                        "related_name": f"'{carrier.django_model.__name__.lower()}_{fk_field_name}_set'",  # Ensure related_name is quoted string
+                    }
+                    # Generate the definition string
+                    fk_def_string = generate_field_definition_string(models.ForeignKey, fk_kwargs, self.app_label)
+                    # Add to the main definitions dictionary
+                    carrier.django_field_definitions[fk_field_name] = fk_def_string
+
+        # --- Prepare Final Context --- #
+        # Ensure the context uses the potentially updated definitions dict from the carrier
+        # Subclass _get_model_definition_extra_context should already provide this
+        # via `field_definitions=carrier.django_field_definitions`
+        template_context = {
+            "model_name": django_model_name,
+            "pydantic_model_name": source_model_name,
+            "base_model_name": base_model_name,
+            "meta": meta_options,
+            "app_label": self.app_label,
+            "multi_fk_field_names": multi_fk_field_names,  # Pass names for validation hint
+            "validation_needed": validation_needed,  # Signal if validation needed
+            # Include extra context from subclass (should include field_definitions)
             **extra_context,
-        )
+        }
+
+        # --- Render Template --- #
+        template = self.jinja_env.get_template("model_definition.py.j2")
+        definition_str = template.render(**template_context)
 
         # Add import for the original source model
         self._add_source_model_import(carrier)
