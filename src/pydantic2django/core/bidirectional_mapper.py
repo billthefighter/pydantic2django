@@ -672,7 +672,8 @@ class BidirectionalTypeMapper:
         is_choices = bool(dj_field.choices)
 
         # --- Find base unit (ignoring choices for now) ---
-        # _find_unit_for_django_field uses registry order and issubclass
+        # Find the mapping unit based on the specific Django field type MRO
+        # This gives us the correct underlying Python type (str, int, etc.)
         base_unit_cls = self._find_unit_for_django_field(dj_field_type)
 
         if not base_unit_cls:
@@ -681,57 +682,63 @@ class BidirectionalTypeMapper:
             return pydantic_type, {}
 
         base_instance_unit = base_unit_cls()
-        base_pydantic_type = base_instance_unit.python_type  # Get the base python type from the unit
+        # Get the base Pydantic type from this unit
+        final_pydantic_type = base_instance_unit.python_type
 
-        # --- Determine Final Pydantic Type (including choices, relationships, optionality) ---
-        final_pydantic_type = base_pydantic_type
+        # --- Determine Final Pydantic Type Adjustments --- #
+        # (Relationships, AutoPK, Optional wrapper)
 
-        # 1. Handle Choices -> Literal or Enum (Let generator handle Enum creation)
-        if is_choices:
-            # Keep the base python type (str/int). Kwargs will contain choices.
-            # The generator component should create Literal[values...] or an Enum.
-            logger.debug(f"Field '{dj_field.name}' has choices. Base Python type {final_pydantic_type} retained.")
-            pass  # Keep final_pydantic_type as base_pydantic_type
-
-        # 2. Handle Relationships
-        elif base_unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+        # 1. Handle Relationships first, as they determine the core type
+        if base_unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
             related_dj_model = getattr(dj_field, "related_model", None)
             if not related_dj_model:
                 raise MappingError(f"Cannot determine related Django model for field '{dj_field.name}'")
 
-            target_pydantic_model = self.relationship_accessor.get_pydantic_model_for_django(related_dj_model)
-            if not target_pydantic_model:
+            # Resolve 'self' reference
+            if related_dj_model == "self":
+                # We need the Django model class that dj_field belongs to.
+                # This info isn't directly passed, so this approach might be limited.
+                # Assuming self-reference points to the same type hierarchy for now.
+                # A better solution might need the model context passed down.
                 logger.warning(
-                    f"Cannot map relationship: No corresponding Pydantic model found for Django model "
-                    f"'{related_dj_model._meta.label if hasattr(related_dj_model, '_meta') else related_dj_model.__name__}'. "
-                    f"Using placeholder '{base_pydantic_type}'."
+                    f"Handling 'self' reference for field '{dj_field.name}'. Mapping might be incomplete without parent model context."
                 )
-                final_pydantic_type = base_pydantic_type  # Keep placeholder (e.g., Any)
+                # Attempt to get Pydantic model mapped to the field's owner model if possible (heuristically)
+                # This is complex and potentially fragile.
+                # For now, let's use a placeholder or raise an error if needed strictly.
+                # Sticking with the base type (e.g., Any or int for PK) might be safer without context.
+                target_pydantic_model = Any  # Safer fallback for 'self' without full context
+                logger.debug(f"Using Any as placeholder for 'self' reference '{dj_field.name}'")
+            else:
+                target_pydantic_model = self.relationship_accessor.get_pydantic_model_for_django(related_dj_model)
+
+            if not target_pydantic_model or target_pydantic_model is Any:
+                if related_dj_model != "self":  # Avoid redundant warning for self
+                    logger.warning(
+                        f"Cannot map relationship: No corresponding Pydantic model found for Django model "
+                        f"'{related_dj_model._meta.label if hasattr(related_dj_model, '_meta') else related_dj_model.__name__}'. "
+                        f"Using placeholder '{final_pydantic_type}'."
+                    )
+                # Keep final_pydantic_type as the base unit's python_type (e.g., int for FK)
             else:
                 if base_unit_cls == ManyToManyFieldMapping:
-                    # Use list[] directly for cleaner annotations if possible
                     final_pydantic_type = list[target_pydantic_model]
                 else:  # FK or O2O
                     final_pydantic_type = target_pydantic_model
                 logger.debug(f"Mapped relationship field '{dj_field.name}' to Pydantic type: {final_pydantic_type}")
 
-        # 3. AutoPK override (after relationship resolution)
+        # 2. AutoPK override (after relationship resolution)
         is_auto_pk = dj_field.primary_key and isinstance(
             dj_field, (models.AutoField, models.BigAutoField, models.SmallAutoField)
         )
         if is_auto_pk:
-            # Auto PKs map to Optional[int], even if null=False in DB
-            # Because they are not provided when creating new instances via Pydantic.
             final_pydantic_type = Optional[int]
             logger.debug(f"Mapped AutoPK field '{dj_field.name}' to {final_pydantic_type}")
-            # Ensure is_optional flag reflects this for FieldInfo kwargs logic below
-            is_optional = True
+            is_optional = True  # AutoPKs are always optional in Pydantic input
 
-        # 4. Apply Optional[...] wrapper if necessary
-        # Apply optionality AFTER relationship/Literal/AutoPK resolution
+        # 3. Apply Optional[...] wrapper if necessary (AFTER relationship/AutoPK)
         # Do not wrap M2M lists or already Optional AutoPKs in Optional[] again.
         if is_optional and not is_auto_pk and base_unit_cls != ManyToManyFieldMapping:
-            # Check if it's *already* Optional (e.g., from AutoPK override)
             origin = get_origin(final_pydantic_type)
             args = get_args(final_pydantic_type)
             is_already_optional = origin is Optional or origin is UnionType and type(None) in args
@@ -741,21 +748,24 @@ class BidirectionalTypeMapper:
                 logger.debug(f"Wrapped type for '{dj_field.name}' in Optional: {final_pydantic_type}")
 
         # --- Generate FieldInfo Kwargs --- #
-        # Use EnumFieldMapping logic for kwargs ONLY if choices exist, otherwise use base unit
+        # Use EnumFieldMapping logic for kwargs ONLY if choices exist,
+        # otherwise use the base unit determined earlier.
         kwargs_unit_cls = EnumFieldMapping if is_choices else base_unit_cls
-        if not kwargs_unit_cls:  # Should not happen if base_unit_cls was found
-            logger.error(f"Could not determine kwargs unit for {dj_field.name}")
-            instance_unit = base_instance_unit  # Fallback to base instance
-        else:
-            instance_unit = kwargs_unit_cls()
+        instance_unit = kwargs_unit_cls()  # Instantiate the correct unit for kwargs generation
 
         field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
 
-        # Clean up redundant `default=None` for Optional fields.
-        # Pydantic v2 implicitly handles `default=None` for `Optional[T]`
-        # Only pop default=None if the field is Optional and not an AutoPK
-        if is_optional and not is_auto_pk and field_info_kwargs.get("default") is None:
-            field_info_kwargs.pop("default", None)
-            logger.debug(f"Removed redundant default=None for Optional field '{dj_field.name}'")
+        # Clean up redundant `default=None` for Optional fields handled by Pydantic v2.
+        # Only pop default=None if the field is Optional (and not an AutoPK, though autoPK sets default=None anyway)
+        if is_optional and field_info_kwargs.get("default") is None:
+            # Check if it's already explicitly default=None from AutoPK handling
+            if not is_auto_pk:
+                field_info_kwargs.pop("default", None)
+                logger.debug(f"Removed redundant default=None for Optional field '{dj_field.name}'")
+            else:
+                logger.debug(f"Keeping explicit default=None for AutoPK field '{dj_field.name}'")
 
+        logger.debug(
+            f"Final Pydantic mapping for '{dj_field.name}': Type={final_pydantic_type}, Kwargs={field_info_kwargs}"
+        )
         return final_pydantic_type, field_info_kwargs

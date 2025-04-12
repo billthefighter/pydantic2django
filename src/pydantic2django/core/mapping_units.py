@@ -21,6 +21,9 @@ from pydantic.fields import FieldInfo
 from pydantic.types import StringConstraints
 from pydantic_core import PydanticUndefined
 
+# Import BidirectionalTypeMapper for internal use within EnumFieldMapping
+# from .bidirectional_mapper import BidirectionalTypeMapper
+
 logger = logging.getLogger(__name__)
 
 # Define relationship placeholders directly to avoid linter issues
@@ -187,17 +190,82 @@ class TypeMappingUnit:
             kwargs["frozen"] = True
             kwargs["default"] = None
 
-        # Handle choices and max_length
-        if dj_field.choices:
-            # Let specific units decide if they need choices in schema_extra
-            # Base unit doesn't add it by default
-            pass
+        # Handle choices (including processing labels and limiting)
+        if hasattr(dj_field, "choices") and dj_field.choices:
+            self.handle_choices(dj_field, kwargs)
+
+        # Handle non-choice max_length only if choices were NOT processed
         elif dj_field.max_length is not None:
             # Only add max_length if not choices - specific units can override
             kwargs["max_length"] = dj_field.max_length
 
         logger.debug(f"Base kwargs generated for '{field_name}': {kwargs}")
         return kwargs
+
+    def handle_choices(self, dj_field: models.Field, kwargs: dict[str, Any]) -> None:
+        """
+        Overrideable method to handle choices. If a unit needs specific choice handling,
+        override this method.
+        """
+        field_name = getattr(dj_field, "name", "unknown_field")  # Get field name for logging
+        processed_choices = []
+        # TODO: Make this limit configurable
+        MAX_CHOICES_IN_SCHEMA = 30
+        limited_choices = []
+        default_value = None
+        default_included = False
+
+        # Get default if it exists and is valid for comparison
+        if dj_field.has_default():
+            dj_default_raw = dj_field.get_default()
+            if dj_default_raw is not models.fields.NOT_PROVIDED:
+                # Use the potentially already processed default from kwargs
+                default_value = kwargs.get("default")
+
+        try:
+            # Provide an empty list if choices is None
+            all_choices = list(dj_field.choices or [])  # Materialize choices
+            for value, label in all_choices:
+                # Apply force_str defensively to label
+                processed_label = force_str(label)
+                processed_choices.append((value, processed_label))
+
+            # Limit choices if necessary
+            if len(processed_choices) > MAX_CHOICES_IN_SCHEMA:
+                logger.warning(
+                    f"Limiting choices for '{field_name}' from {len(processed_choices)} to {MAX_CHOICES_IN_SCHEMA}"
+                )
+                # Include default choice first if it exists and is valid
+                if default_value is not None:
+                    for val, lbl in processed_choices:
+                        # Compare default with the choice value (which might be str/int etc.)
+                        if val == default_value:
+                            limited_choices.append((val, lbl))
+                            default_included = True
+                            break
+                # Fill remaining slots
+                remaining_slots = MAX_CHOICES_IN_SCHEMA - len(limited_choices)
+                if remaining_slots > 0:
+                    for val, lbl in processed_choices:
+                        if len(limited_choices) >= MAX_CHOICES_IN_SCHEMA:
+                            break
+                        # Add if it's not the default (which might already be included)
+                        if not (default_included and val == default_value):
+                            limited_choices.append((val, lbl))
+                final_choices_list = limited_choices  # Use the limited list
+            else:
+                final_choices_list = processed_choices  # Use all processed choices
+
+            # Store final choices list in json_schema_extra
+            kwargs.setdefault("json_schema_extra", {})["choices"] = final_choices_list
+            # Remove max_length if choices are present, Pydantic infers from choices
+            kwargs.pop("max_length", None)
+            logger.debug(f"Base method added processed choices to json_schema_extra for '{field_name}'")
+
+        except Exception as e:
+            logger.error(f"Base method error processing choices for field '{field_name}': {e}")
+            # Fallback: Don't add choices if processing failed
+            kwargs.pop("json_schema_extra", None)
 
 
 # --- Specific Mapping Units --- #
@@ -868,18 +936,37 @@ class JsonFieldMapping(TypeMappingUnit):
 
 
 class EnumFieldMapping(TypeMappingUnit):
-    python_type = Enum  # Placeholder, actual enum type determined dynamically
-    django_field_type = models.CharField  # Default, could be IntegerField
+    """Handles fields with choices, mapping to Literal or Enum based on context.
+    Django Field: Any field with `choices` set.
+    Pydantic Type: Literal[...] or Enum.
+    """
+
+    # Use a generic Field as the base, as choices can be on various types
+    django_field_type = models.Field
+    # Base python type depends on the underlying field type (str, int, etc.)
+    # This will be overridden dynamically based on the actual field.
+    python_type = Any
 
     @classmethod
     def matches(cls, py_type: Any, field_info: Optional[FieldInfo] = None) -> float:
-        """Match Enums and Literals."""
+        # Check if it's a Literal type
         origin = get_origin(py_type)
         if origin is Literal:
-            return 1.2  # Strong match for Literal
+            return 2.0  # High score for direct Literal match
+        # Check if it's an Enum
         if inspect.isclass(py_type) and issubclass(py_type, Enum):
-            return 1.2  # Strong match for Enum subclasses
-        return 0.0  # Explicitly 0.0 if not Enum or Literal
+            return 1.9  # Slightly lower than Literal, but high
+        return 0.0  # Don't match other types directly
+
+    def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
+        """Generate FieldInfo kwargs, adding choices to json_schema_extra."""
+        # Start with base kwargs (title, description, default handling)
+        kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
+
+        # EnumFieldMapping specific logic (if any) could go here
+        # For now, just rely on the base method
+        logger.debug(f"EnumFieldMapping using base kwargs for '{dj_field.name}': {kwargs}")
+        return kwargs
 
     def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
         kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
@@ -927,20 +1014,6 @@ class EnumFieldMapping(TypeMappingUnit):
         # Add the hint to the kwargs to be used by the caller
         kwargs["_field_type_hint"] = field_type_hint
 
-        return kwargs
-
-    def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
-        kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
-        if dj_field.choices:
-            # Ensure json_schema_extra exists before adding choices
-            json_schema_extra = kwargs.setdefault("json_schema_extra", {})
-            # Convert choices for JSON schema - OpenAPI standard expects enum/oneOf
-            # Using a simple 'choices' extension for now
-            json_schema_extra["choices"] = list(dj_field.choices)
-
-            # Remove max_length if choices are present, as it's redundant
-            kwargs.pop("max_length", None)
-            logger.debug(f"EnumFieldMapping added choices for '{dj_field.name}': {kwargs}")
         return kwargs
 
 
