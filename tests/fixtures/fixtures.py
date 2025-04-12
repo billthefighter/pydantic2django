@@ -13,7 +13,6 @@ from django.db import models
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 import uuid
 from django.core.exceptions import ValidationError
-from django.utils.translation import gettext_lazy as _
 
 # Import helper classes needed by fixtures (e.g., for context_pydantic_model)
 # These are defined in the parent conftest.py
@@ -49,9 +48,6 @@ class AbstractModel(models.Model):
         app_label = "tests"
         abstract = True
 
-    def __str__(self):
-        return self.name
-
 
 # Define RelatedModel
 class RelatedModel(models.Model):
@@ -59,9 +55,6 @@ class RelatedModel(models.Model):
 
     class Meta:
         app_label = "tests"
-
-    def __str__(self):
-        return self.name
 
 
 # Define ConcreteModel inheriting from AbstractModel
@@ -74,9 +67,6 @@ class ConcreteModel(AbstractModel):
     class Meta:
         app_label = "tests"
         abstract = False
-
-    def __str__(self):
-        return self.name
 
 
 # Define AllFieldsModel (renamed from AllFieldsModelBase)
@@ -127,24 +117,40 @@ class AllFieldsModel(models.Model):
     )
     image_height = models.PositiveIntegerField(null=True, blank=True, editable=False)
     image_width = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    json_field = models.JSONField(null=True, blank=True)
-
-    # Relationships
+    # --- Relational Fields ---
     foreign_key_field = models.ForeignKey(
-        RelatedModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="all_fields_fk"
+        RelatedModel,
+        on_delete=models.SET_NULL,
+        related_name="all_fields_models_fk",  # Renamed related_name
+        # to_field="name", # Removed to simplify testing, requires name to be unique on RelatedModel
+        null=True,
+        blank=True,
     )
     one_to_one_field = models.OneToOneField(
-        RelatedModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="all_fields_o2o"
+        RelatedModel,
+        on_delete=models.CASCADE,
+        related_name="all_fields_model_o2o",
+        null=True,
+        blank=True,
     )
-    many_to_many_field = models.ManyToManyField(RelatedModel, through="Membership", related_name="all_fields_m2m")
+    many_to_many_field = models.ManyToManyField(
+        RelatedModel,
+        related_name="all_fields_models_m2m",
+        through="Membership",
+        through_fields=("all_fields_model", "related_model"),
+        blank=True,
+    )
+    # --- Other Fields ---
+    json_field = models.JSONField(null=True, blank=True, default=dict)  # Added default
 
     class Meta:
         app_label = "tests"
-        # db_table = "test_all_fields" # Explicit table name (optional)
+        db_table = "all_fields_comprehensive"
+        ordering = ["-datetime_field", "char_field"]
+        verbose_name = "Comprehensive Field Model"
+        verbose_name_plural = "Comprehensive Field Models"
+        # unique_together = (("char_field", "integer_field"),) # Removed for simplicity
         # index_together = [["char_field", "date_field"]] # Removed for simplicity
-
-    # def __str__(self):
-    #     return self.name
 
 
 # Define Membership linking AllFieldsModel and RelatedModel
@@ -167,9 +173,6 @@ class Product(models.Model):
     class Meta:
         app_label = "tests"
 
-    def __str__(self):
-        return self.name
-
 
 # Define User-related models (from user_django_model)
 class Address(models.Model):
@@ -180,9 +183,6 @@ class Address(models.Model):
     class Meta:
         app_label = "tests"
 
-    def __str__(self):
-        return f"{self.street}, {self.city}, {self.country}"
-
 
 class Profile(models.Model):
     bio = models.TextField()
@@ -191,18 +191,12 @@ class Profile(models.Model):
     class Meta:
         app_label = "tests"
 
-    def __str__(self):
-        return self.website
-
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
-
-    def __str__(self):
-        return self.name
 
 
 class User(models.Model):
@@ -213,9 +207,6 @@ class User(models.Model):
 
     class Meta:
         app_label = "tests"
-
-    def __str__(self):
-        return self.name
 
 
 # --- Pydantic Fixtures (Remain mostly unchanged) ---
@@ -566,88 +557,3 @@ def user_django_model():
     # The fixture still makes sense to return the main 'User' model,
     # but Address, Profile, Tag are now also available at module level if needed directly.
     return User
-
-
-# --- Lazy Reference Models --- #
-
-
-# @pytest.fixture(scope="session")
-# def lazy_ref_target_model():
-#     class LazyRefTarget(models.Model):
-#         id = models.AutoField(primary_key=True)
-#         name = models.CharField(max_length=50)
-#
-#         class Meta:
-#             app_label = "pydantic2django_testing"
-#             db_table = "test_lazy_ref_target"
-#
-#         def __str__(self):
-#             return self.name
-#
-#     return LazyRefTarget
-
-
-# @pytest.fixture(scope="session")
-# def lazy_ref_source_model(lazy_ref_target_model):
-#     LazyRefTarget = lazy_ref_target_model
-#
-#     class LazyRefSource(models.Model):
-#         id = models.AutoField(primary_key=True)
-#         name = models.CharField(max_length=50)
-#         # Lazy reference by string
-#         target = models.ForeignKey(
-#             "LazyRefTarget",  # String reference
-#             on_delete=models.CASCADE,
-#             related_name="sources",
-#             null=True,
-#             blank=True,
-#         )
-#         # Self-reference (also lazy)
-#         parent = models.ForeignKey(
-#             "self", on_delete=models.SET_NULL, related_name="children", null=True, blank=True
-#         )
-#
-#         class Meta:
-#             app_label = "pydantic2django_testing"
-#             db_table = "test_lazy_ref_source"
-#
-#         def __str__(self):
-#             return self.name
-#
-#     return LazyRefSource
-
-
-# Fixture to manually create tables for lazy ref models
-# @pytest.fixture(scope="function", autouse=True) # Changed scope to function
-# def setup_lazy_ref_tables(lazy_ref_target_model, lazy_ref_source_model):
-#     """Ensures DB tables for dynamically defined lazy ref models are created within test scope."""
-#     from django.db import connection
-#
-#     LazyRefTarget = lazy_ref_target_model
-#     LazyRefSource = lazy_ref_source_model
-#     target_table_name = LazyRefTarget._meta.db_table
-#     source_table_name = LazyRefSource._meta.db_table
-#
-#     # Use introspection to check if tables exist in the current transaction context
-#     table_names = connection.introspection.table_names(connection.cursor())
-#     target_exists = target_table_name in table_names
-#     source_exists = source_table_name in table_names
-#
-#     # Create tables only if they don't exist in this context
-#     if not target_exists or not source_exists:
-#         # print(f"\nCreating tables for lazy reference models ({target_table_name}, {source_table_name})...")
-#         with connection.schema_editor() as schema_editor:
-#             if not target_exists:
-#                 # print(f"Creating {target_table_name}...")
-#                 schema_editor.create_model(LazyRefTarget)
-#             if not source_exists:
-#                 # print(f"Creating {source_table_name}...")
-#                 schema_editor.create_model(LazyRefSource)
-#         # print("Lazy reference tables created for test.")
-#     # else:
-#         # print("\nLazy reference tables already exist in this context, skipping creation.")
-#
-#     # Tables will be torn down automatically by django_db transaction management
-
-
-# --- Abstract/Concrete Models --- #

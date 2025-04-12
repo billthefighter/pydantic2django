@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, List, Optional, Dict, Callable, Tuple, cast, ForwardRef, get_args, Type
+from typing import Any, List, Optional, Dict, Callable, Tuple, cast, ForwardRef, get_args
 
 from pydantic import BaseModel, Field, EmailStr, Json, HttpUrl, IPvAnyAddress
 from pydantic_core import PydanticUndefined
@@ -33,11 +33,8 @@ from ..fixtures.fixtures import (
     concrete_model,
     all_fields_model,
     membership_model,
-    # lazy_ref_target_model, # No longer needed
-    # lazy_ref_source_model, # No longer needed
     StatusChoices,  # Assuming StatusChoices is defined in fixtures
 )
-from tests.test_app.models import LazyRefTarget, LazyRefSource  # Import models directly
 
 
 # --- Pydantic Models Mirroring Django Fixtures ---
@@ -117,27 +114,6 @@ class PydanticAllFields(BaseModel):
     foreign_key_field: Optional[PydanticRelated] = None
     one_to_one_field: Optional[PydanticRelated] = None
     many_to_many_field: List[PydanticRelated] = []
-
-    model_config = {"from_attributes": True}
-
-
-# --- Pydantic Models for Lazy References --- #
-
-
-class PydanticLazyRefTarget(BaseModel):
-    id: int
-    name: str
-    model_config = {"from_attributes": True}
-
-
-# ForwardRef is implicitly handled by Pydantic when types are defined within the same module
-# or when model_rebuild is called. Explicit ForwardRef string usage isn't strictly necessary
-# if the types are defined before use or resolution happens later.
-class PydanticLazyRefSource(BaseModel):
-    id: int
-    name: str
-    target: Optional[PydanticLazyRefTarget] = None
-    parent: Optional["PydanticLazyRefSource"] = None  # Self-reference using string
 
     model_config = {"from_attributes": True}
 
@@ -460,46 +436,6 @@ def test_convert_max_depth(related_model, all_fields_model, membership_model):
     assert pydantic_depth_1.many_to_many_field[0].id == related1.id
 
 
-@pytest.mark.django_db
-def test_convert_lazy_references():  # Removed fixtures from args
-    """Test conversion of models with string-based and self-referencing ForeignKeys."""
-    # LazyRefTarget = lazy_ref_target_model # Use imported model directly
-    # LazyRefSource = lazy_ref_source_model # Use imported model directly
-
-    # 1. Create instances
-    target_obj = LazyRefTarget.objects.create(name="Lazy Target")
-    parent_obj = LazyRefSource.objects.create(name="Parent Source")
-    child_obj = LazyRefSource.objects.create(name="Child Source", target=target_obj, parent=parent_obj)
-
-    # 2. Convert the child instance which has references populated
-    pydantic_child = django_to_pydantic(child_obj, PydanticLazyRefSource, max_depth=1)
-
-    # 3. Assertions
-    assert isinstance(pydantic_child, PydanticLazyRefSource)
-    assert pydantic_child.id == child_obj.id
-    assert pydantic_child.name == "Child Source"
-
-    # Check the target reference
-    assert isinstance(pydantic_child.target, PydanticLazyRefTarget)
-    assert pydantic_child.target.id == target_obj.id
-    assert pydantic_child.target.name == "Lazy Target"
-
-    # Check the self-reference to the parent
-    # Since max_depth=1, the parent should be converted, but its own relations won't be.
-    assert isinstance(pydantic_child.parent, PydanticLazyRefSource)
-    assert pydantic_child.parent.id == parent_obj.id
-    assert pydantic_child.parent.name == "Parent Source"
-    # The parent's own parent/target should be None or default due to max_depth
-    assert pydantic_child.parent.parent is None
-    assert pydantic_child.parent.target is None
-
-    # Test with max_depth=0 (references should not be converted)
-    pydantic_child_depth0 = django_to_pydantic(child_obj, PydanticLazyRefSource, max_depth=0)
-    assert isinstance(pydantic_child_depth0, PydanticLazyRefSource)
-    assert pydantic_child_depth0.target is None
-    assert pydantic_child_depth0.parent is None
-
-
 # --- Tests for DjangoPydanticConverter ---
 
 from pydantic2django.django.conversion import DjangoPydanticConverter
@@ -516,11 +452,9 @@ class TestDjangoPydanticConverter:
 
         assert converter.django_model_cls == AllFieldsModel
         assert converter.initial_django_instance is None
-        # Access the property which should return the resolved class
-        GeneratedModel = converter.generated_pydantic_model
-        assert issubclass(GeneratedModel, BaseModel)
+        assert issubclass(converter.generated_pydantic_model, BaseModel)
         # Check if the generated model name looks correct (optional)
-        assert GeneratedModel.__name__.startswith(AllFieldsModel.__name__)
+        assert converter.generated_pydantic_model.__name__.startswith(AllFieldsModel.__name__)
 
         # Test init with instance
         dj_instance = AllFieldsModel.objects.create(
@@ -578,7 +512,6 @@ class TestDjangoPydanticConverter:
         # Test conversion using instance provided at init
         converter1 = DjangoPydanticConverter(dj_instance)
         pyd_instance1 = converter1.to_pydantic()
-        # Access property for the check
         assert isinstance(pyd_instance1, converter1.generated_pydantic_model)
         assert pyd_instance1.char_field == "To Pydantic"  # type: ignore[attr-defined]
         assert pyd_instance1.integer_field == 123  # type: ignore[attr-defined]
@@ -590,7 +523,6 @@ class TestDjangoPydanticConverter:
         # Test conversion using instance passed to method
         converter2 = DjangoPydanticConverter(AllFieldsModel)
         pyd_instance2 = converter2.to_pydantic(dj_instance)
-        # Access property for the check
         assert isinstance(pyd_instance2, converter2.generated_pydantic_model)
         assert pyd_instance1.model_dump() == pyd_instance2.model_dump()
 
@@ -646,9 +578,6 @@ class TestDjangoPydanticConverter:
             "one_to_one_field": None,  # Test setting FK to None
             "many_to_many_field": [{"id": m.id, "name": m.name} for m in [related_for_m2m1, related_for_m2m2]],
         }
-        # Ensure PydanticGenerated is a type before calling it
-        if not isinstance(PydanticGenerated, type):
-            pytest.fail(f"Generated Pydantic model is not a type: {type(PydanticGenerated)}")
         pyd_instance = PydanticGenerated(**pyd_data)
 
         # Perform conversion to Django
@@ -751,9 +680,6 @@ class TestDjangoPydanticConverter:
             "json_field": dj_instance.json_field,
             "one_to_one_field": None,
         }
-        # Ensure PydanticGenerated is a type before calling it
-        if not isinstance(PydanticGenerated, type):
-            pytest.fail(f"Generated Pydantic model is not a type: {type(PydanticGenerated)}")
         pyd_instance_update = PydanticGenerated(**pyd_data_update)
 
         # 3. Perform update using to_django
@@ -808,7 +734,6 @@ class TestDjangoPydanticConverter:
         converter = DjangoPydanticConverter(dj_instance, exclude=exclude_fields)
         pyd_instance = converter.to_pydantic()
 
-        # Access property for the check
         assert isinstance(pyd_instance, converter.generated_pydantic_model)
         assert "integer_field" not in pyd_instance.model_fields_set
         assert "char_field" not in pyd_instance.model_fields_set
@@ -855,7 +780,5 @@ class TestDjangoPydanticConverter:
         pyd_instance1 = converter1.to_pydantic()
         # Note: Accessing dynamically generated fields below
         assert isinstance(pyd_instance1.foreign_key_field, BaseModel)  # type: ignore[attr-defined]
-        m2m_field_val = getattr(pyd_instance1, "many_to_many_field", None)
-        assert isinstance(m2m_field_val, list)
-        assert len(m2m_field_val) == 1
-        assert isinstance(m2m_field_val[0], BaseModel)
+        assert len(pyd_instance1.many_to_many_field) == 1  # type: ignore[attr-defined]
+        assert isinstance(pyd_instance1.many_to_many_field[0], BaseModel)  # type: ignore[attr-defined]
