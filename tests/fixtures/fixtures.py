@@ -13,6 +13,7 @@ from django.db import models
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 import uuid
 from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
 
 # Import helper classes needed by fixtures (e.g., for context_pydantic_model)
 # These are defined in the parent conftest.py

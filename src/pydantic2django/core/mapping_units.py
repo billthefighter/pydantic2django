@@ -226,8 +226,16 @@ class TypeMappingUnit:
             # Provide an empty list if choices is None
             all_choices = list(dj_field.choices or [])  # Materialize choices
             for value, label in all_choices:
+                # Log type before processing
+                logger.debug(
+                    f"  Processing choice for '{field_name}': Value={value!r}, Label={label!r} (Type: {type(label)})"
+                )
                 # Apply force_str defensively to label
                 processed_label = force_str(label)
+                # Log type after processing
+                logger.debug(
+                    f"  Processed label for '{field_name}': Value={value!r}, Label={processed_label!r} (Type: {type(processed_label)})"
+                )
                 processed_choices.append((value, processed_label))
 
             # Limit choices if necessary

@@ -10,6 +10,8 @@ from typing import Any, List, Optional, Dict, Callable, Tuple, cast, ForwardRef,
 from pydantic import BaseModel, Field, EmailStr, Json, HttpUrl, IPvAnyAddress
 from pydantic_core import PydanticUndefined
 from django.db import models  # Import models for type hints in fixtures if needed
+from django.utils.functional import Promise  # Import Promise for type checking lazy objects
+from django.utils.translation import gettext_lazy as _
 
 # Configure logging FOR THE CONVERSION MODULE specifically
 conv_logger = logging.getLogger("pydantic2django.django.conversion")
@@ -21,6 +23,16 @@ if not conv_logger.handlers:
     handler.setFormatter(formatter)
     conv_logger.addHandler(handler)
     conv_logger.propagate = False  # Prevent duplication if root logger also has handlers
+
+# Configure logger for the test file itself
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    test_handler = logging.StreamHandler()
+    test_formatter = logging.Formatter("%(asctime)s - TEST - %(levelname)s - %(message)s")
+    test_handler.setFormatter(test_formatter)
+    logger.addHandler(test_handler)
+    logger.propagate = False
 
 # Import the function to test
 from pydantic2django.django.conversion import django_to_pydantic
@@ -452,9 +464,11 @@ class TestDjangoPydanticConverter:
 
         assert converter.django_model_cls == AllFieldsModel
         assert converter.initial_django_instance is None
-        assert issubclass(converter.generated_pydantic_model, BaseModel)
+        # Ensure the generated model is actually a BaseModel type, not ForwardRef for this test
+        GeneratedModel = converter.generated_pydantic_model
+        assert isinstance(GeneratedModel, type) and issubclass(GeneratedModel, BaseModel)
         # Check if the generated model name looks correct (optional)
-        assert converter.generated_pydantic_model.__name__.startswith(AllFieldsModel.__name__)
+        assert GeneratedModel.__name__.startswith(AllFieldsModel.__name__)
 
         # Test init with instance
         dj_instance = AllFieldsModel.objects.create(
@@ -512,7 +526,10 @@ class TestDjangoPydanticConverter:
         # Test conversion using instance provided at init
         converter1 = DjangoPydanticConverter(dj_instance)
         pyd_instance1 = converter1.to_pydantic()
-        assert isinstance(pyd_instance1, converter1.generated_pydantic_model)
+        # Ensure the model used for isinstance is the resolved type
+        GeneratedModel1 = converter1.generated_pydantic_model
+        assert isinstance(GeneratedModel1, type) and issubclass(GeneratedModel1, BaseModel)
+        assert isinstance(pyd_instance1, GeneratedModel1)
         assert pyd_instance1.char_field == "To Pydantic"  # type: ignore[attr-defined]
         assert pyd_instance1.integer_field == 123  # type: ignore[attr-defined]
         # Check that the foreign key field is a BaseModel and has the expected ID
@@ -523,7 +540,10 @@ class TestDjangoPydanticConverter:
         # Test conversion using instance passed to method
         converter2 = DjangoPydanticConverter(AllFieldsModel)
         pyd_instance2 = converter2.to_pydantic(dj_instance)
-        assert isinstance(pyd_instance2, converter2.generated_pydantic_model)
+        # Ensure the model used for isinstance is the resolved type
+        GeneratedModel2 = converter2.generated_pydantic_model
+        assert isinstance(GeneratedModel2, type) and issubclass(GeneratedModel2, BaseModel)
+        assert isinstance(pyd_instance2, GeneratedModel2)
         assert pyd_instance1.model_dump() == pyd_instance2.model_dump()
 
     def test_to_django_creation(self, related_model, all_fields_model, membership_model):
@@ -540,6 +560,8 @@ class TestDjangoPydanticConverter:
         # Create a Pydantic instance (use the generated type from converter)
         converter = DjangoPydanticConverter(AllFieldsModel)
         PydanticGenerated = converter.generated_pydantic_model
+        # Ensure the generated model is actually a BaseModel type before instantiation
+        assert isinstance(PydanticGenerated, type) and issubclass(PydanticGenerated, BaseModel)
 
         test_uuid = uuid.uuid4()
         pyd_data = {
@@ -578,6 +600,7 @@ class TestDjangoPydanticConverter:
             "one_to_one_field": None,  # Test setting FK to None
             "many_to_many_field": [{"id": m.id, "name": m.name} for m in [related_for_m2m1, related_for_m2m2]],
         }
+        # Now it's safe to instantiate
         pyd_instance = PydanticGenerated(**pyd_data)
 
         # Perform conversion to Django
@@ -642,6 +665,8 @@ class TestDjangoPydanticConverter:
         # 2. Create Pydantic instance with updated data (including PK)
         converter = DjangoPydanticConverter(AllFieldsModel)
         PydanticGenerated = converter.generated_pydantic_model
+        # Ensure the generated model is actually a BaseModel type before instantiation
+        assert isinstance(PydanticGenerated, type) and issubclass(PydanticGenerated, BaseModel)
 
         pyd_data_update = {
             "auto_field": initial_pk,  # Include PK for update identification
@@ -680,6 +705,7 @@ class TestDjangoPydanticConverter:
             "json_field": dj_instance.json_field,
             "one_to_one_field": None,
         }
+        # Now it's safe to instantiate
         pyd_instance_update = PydanticGenerated(**pyd_data_update)
 
         # 3. Perform update using to_django
@@ -734,7 +760,10 @@ class TestDjangoPydanticConverter:
         converter = DjangoPydanticConverter(dj_instance, exclude=exclude_fields)
         pyd_instance = converter.to_pydantic()
 
-        assert isinstance(pyd_instance, converter.generated_pydantic_model)
+        # Ensure the model used for isinstance is the resolved type
+        GeneratedModel = converter.generated_pydantic_model
+        assert isinstance(GeneratedModel, type) and issubclass(GeneratedModel, BaseModel)
+        assert isinstance(pyd_instance, GeneratedModel)
         assert "integer_field" not in pyd_instance.model_fields_set
         assert "char_field" not in pyd_instance.model_fields_set
         assert "email_field" in pyd_instance.model_fields_set  # Check others are present
@@ -772,13 +801,109 @@ class TestDjangoPydanticConverter:
         # Test depth 0
         converter0 = DjangoPydanticConverter(dj_instance, max_depth=0)
         pyd_instance0 = converter0.to_pydantic()
-        assert pyd_instance0.foreign_key_field is None
-        assert pyd_instance0.many_to_many_field == []  # type: ignore[attr-defined]
+        # We expect the generated model to be valid even with depth 0
+        GeneratedModel0 = converter0.generated_pydantic_model
+        assert isinstance(GeneratedModel0, type) and issubclass(GeneratedModel0, BaseModel)
+        assert isinstance(pyd_instance0, GeneratedModel0)
+        # Access attributes safely after checking type
+        assert getattr(pyd_instance0, "foreign_key_field", PydanticUndefined) is None
+        assert getattr(pyd_instance0, "many_to_many_field", PydanticUndefined) == []
 
         # Test depth 1
         converter1 = DjangoPydanticConverter(dj_instance, max_depth=1)
         pyd_instance1 = converter1.to_pydantic()
+        GeneratedModel1 = converter1.generated_pydantic_model
+        assert isinstance(GeneratedModel1, type) and issubclass(GeneratedModel1, BaseModel)
+        assert isinstance(pyd_instance1, GeneratedModel1)
         # Note: Accessing dynamically generated fields below
-        assert isinstance(pyd_instance1.foreign_key_field, BaseModel)  # type: ignore[attr-defined]
-        assert len(pyd_instance1.many_to_many_field) == 1  # type: ignore[attr-defined]
-        assert isinstance(pyd_instance1.many_to_many_field[0], BaseModel)  # type: ignore[attr-defined]
+        assert isinstance(getattr(pyd_instance1, "foreign_key_field", None), BaseModel)
+        m2m_field_val = getattr(pyd_instance1, "many_to_many_field", [])
+        assert isinstance(m2m_field_val, list) and len(m2m_field_val) == 1
+        assert isinstance(m2m_field_val[0], BaseModel)
+
+
+# --- Test for Lazy Choices Serialization ---
+
+
+@pytest.mark.django_db
+def test_lazy_choices_serialization_in_generated_schema(lazy_choice_model):
+    """
+    Tests that json_schema_extra in generated Pydantic models contains
+    resolved strings for lazy choice labels, not Django lazy proxies.
+    Also tests that the generated model's JSON schema can be created without error.
+    """
+    LazyChoiceModel = lazy_choice_model
+    converter = DjangoPydanticConverter(LazyChoiceModel)
+
+    # Get the generated model class (ensure it's resolved)
+    GeneratedModel = converter.generated_pydantic_model
+    assert isinstance(GeneratedModel, type) and issubclass(GeneratedModel, BaseModel)
+
+    # Inspect the 'lazy_choice_field'
+    lazy_field_info = GeneratedModel.model_fields.get("lazy_choice_field")
+    assert lazy_field_info is not None, "lazy_choice_field not found in generated model"
+
+    # Check json_schema_extra for 'choices'
+    schema_extra = lazy_field_info.json_schema_extra
+    assert isinstance(schema_extra, dict), "json_schema_extra should be a dict"
+    choices = schema_extra.get("choices")
+    assert isinstance(choices, list), "'choices' not found or not a list in json_schema_extra"
+    assert len(choices) == 2, "Expected 2 choices"
+
+    # Crucially, check that labels are strings, not lazy proxies
+    for choice_item in choices:
+        assert (
+            isinstance(choice_item, (list, tuple)) and len(choice_item) == 2
+        ), f"Choice item '{choice_item}' is not a list/tuple of length 2"
+        value, label = choice_item  # Unpack after verifying structure
+        # Log the label type for clarity during testing
+        logger.debug(f"Checking choice in test: Value={value!r}, Label={label!r} (Type: {type(label)})")
+        assert isinstance(
+            label, str
+        ), f"Choice label '{label}' for value '{value}' is not a string (type: {type(label)})"
+        assert not isinstance(label, Promise), f"Choice label '{label}' is still a lazy proxy!"
+
+    # Verify that the full JSON schema generation does not raise the serialization error
+    try:
+        schema = GeneratedModel.model_json_schema()
+        assert isinstance(schema, dict)
+        # Optionally, check the schema content for the choices enum/description
+        props = schema.get("properties", {})
+        lazy_choice_prop = props.get("lazy_choice_field")
+        assert lazy_choice_prop is not None
+        # Pydantic might represent choices as enum in the schema
+        assert "enum" in lazy_choice_prop or "anyOf" in lazy_choice_prop or "allOf" in lazy_choice_prop
+        # Check description if present might have resolved label text
+        # assert "Choice 1" in lazy_choice_prop.get("description", "")
+
+    except Exception as e:
+        pytest.fail(f"model_json_schema() raised an unexpected error: {e}")
+
+
+# (Add the lazy_choice_model fixture to conftest.py or fixtures.py)
+# Example fixture (place in appropriate fixtures file):
+# from django.db import models
+# from django.utils.translation import gettext_lazy as _
+# import pytest
+
+# @pytest.fixture(scope="session")
+# def lazy_choice_model():
+#     class LazyChoiceModel(models.Model):
+#         class Meta:
+#             app_label = "test_app" # Required for dynamic models
+
+#         class LazyChoices(models.TextChoices):
+#             CHOICE1 = "C1", _("Lazy Choice One")
+#             CHOICE2 = "C2", _("Lazy Choice Two")
+
+#         lazy_choice_field = models.CharField(
+#             max_length=2,
+#             choices=LazyChoices.choices,
+#             help_text=_("Field with lazy choices"),
+#             null=True,
+#             blank=True,
+#         )
+#         # Add a simple field to ensure model is valid
+#         name = models.CharField(max_length=50, default="Test")
+
+#     return LazyChoiceModel

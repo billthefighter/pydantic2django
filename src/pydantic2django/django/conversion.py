@@ -707,19 +707,61 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         # _django_metadata is no longer needed
 
         # Generate the Pydantic class definition immediately
-        self.pydantic_model_cls = self._generate_pydantic_class()
+        generated_cls_or_ref = self._generate_pydantic_class()
+
+        # --- Resolve ForwardRef if necessary --- #
+        resolved_cls: type[BaseModel]
+        if isinstance(generated_cls_or_ref, ForwardRef):
+            logger.warning(
+                f"Initial generation for {self.django_model_cls.__name__} resulted in a ForwardRef."
+                f" Attempting resolution via model_rebuild on potentially dependent models in cache."
+            )
+            # Try resolving by rebuilding all models in the cache that are actual classes
+            # This assumes dependencies were generated and cached correctly.
+            updated_refs = False
+            for name, model_or_ref in self._generation_cache.items():
+                if isinstance(model_or_ref, type) and issubclass(model_or_ref, BaseModel):
+                    try:
+                        model_or_ref.model_rebuild(force=True)
+                        # logger.debug(f"Rebuilt cached model {name} to potentially resolve ForwardRefs")
+                        updated_refs = True  # Mark that we attempted updates
+                    except Exception as e:
+                        logger.warning(f"Failed to rebuild cached model {name} during ForwardRef resolution: {e}")
+
+            # After attempting rebuilds, try accessing the resolved type from the cache again
+            final_cached_item = self._generation_cache.get(generated_cls_or_ref.__forward_arg__)
+            if isinstance(final_cached_item, type) and issubclass(final_cached_item, BaseModel):
+                logger.info(f"Successfully resolved ForwardRef for {generated_cls_or_ref.__forward_arg__}")
+                resolved_cls = final_cached_item
+            else:
+                # If still not resolved, raise an error as we cannot proceed
+                raise TypeError(
+                    f"Failed to resolve ForwardRef '{generated_cls_or_ref.__forward_arg__}' for the main model {self.django_model_cls.__name__} after generation and rebuild attempts."
+                )
+        elif isinstance(generated_cls_or_ref, type) and issubclass(generated_cls_or_ref, BaseModel):
+            # Already a valid class
+            resolved_cls = generated_cls_or_ref
+        else:
+            # Should not happen if _generate_pydantic_class works correctly
+            raise TypeError(
+                f"_generate_pydantic_class returned an unexpected type: {type(generated_cls_or_ref)} for {self.django_model_cls.__name__}"
+            )
+
+        # Assign the resolved class
+        self.pydantic_model_cls: type[BaseModel] = resolved_cls
 
         #          logger.debug(f"Skipping update_forward_refs for ForwardRef in cache: {item_name}")
 
         # Rebuild the main model AFTER resolving refs in the cache.
         # No need for _types_namespace if update_forward_refs worked.
+        # Now it should be safe to call rebuild on the resolved class
         try:
             self.pydantic_model_cls.model_rebuild(force=True)
-            logger.info(f"Rebuilt {self.pydantic_model_cls.__name__} after resolving ForwardRefs.")
+            logger.info(f"Rebuilt main model {self.pydantic_model_cls.__name__} after generation.")
         except Exception as e:
             # Log warning if final rebuild still fails
             logger.warning(
-                f"Failed to rebuild {self.pydantic_model_cls.__name__} even after update_forward_refs: {e}",
+                f"Failed to rebuild main model {self.pydantic_model_cls.__name__} after resolution: {e}",
                 exc_info=True,
             )
 
@@ -734,7 +776,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         # Add other PK types as needed
     }
 
-    def _generate_pydantic_class(self) -> type[BaseModel]:
+    def _generate_pydantic_class(self) -> Union[type[BaseModel], ForwardRef]:
         """Internal helper to generate or retrieve the Pydantic model class."""
         # Pass the stored exclude set during generation
         generated_cls: Union[type[BaseModel], ForwardRef] = generate_pydantic_class(
@@ -749,9 +791,25 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         )
 
         # Allow ForwardRef through, otherwise check for BaseModel subclass
-        if not isinstance(generated_cls, ForwardRef):
-            if not isinstance(generated_cls, type) or not issubclass(generated_cls, BaseModel):
-                raise TypeError(f"Generated type is not a valid {self.pydantic_base.__name__} or ForwardRef.")
+        # This check is good, but the type hint of the function needs to be updated
+        # if not isinstance(generated_cls, ForwardRef):
+        #     if not isinstance(generated_cls, type) or not issubclass(generated_cls, BaseModel):
+        #         raise TypeError(f"Generated type is not a valid {self.pydantic_base.__name__} or ForwardRef.")
+
+        # The return type must accommodate ForwardRef
+        # Cast here is less ideal than fixing the return type hint of _generate_pydantic_class
+        # However, casting here allows the rest of the __init__ to proceed assuming BaseModel
+        # We need to ensure the call site handles the ForwardRef possibility properly later.
+        # For now, we assume generation is successful for the main class.
+        # if isinstance(generated_cls, ForwardRef):
+        #     # This case should ideally not happen for the top-level model unless max_depth=0
+        #     # Or if there's an immediate self-reference issue not caught.
+        #     # Log a warning, but proceed. The rebuild step might resolve it.
+        #     logger.warning(f"_generate_pydantic_class returned a ForwardRef for the main model {self.django_model_cls.__name__}. Rebuild might be necessary.")
+        # We need a type[BaseModel] for the rest of the init. This is problematic.
+        # Let's rely on the rebuild step to fix this. If it fails, it will raise later.
+        # Return the ForwardRef for now, but the attribute type hint needs fixing.
+        # return generated_cls # TYPE HINT MISMATCH HERE
 
         return generated_cls
 
@@ -780,12 +838,11 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
             f"Converting {self.django_model_cls.__name__} instance (PK: {target_db_obj.pk}) to {self.pydantic_model_cls.__name__}"
         )
 
-        # Use the existing django_to_pydantic function
         # We know self.pydantic_model_cls is Type[BaseModel] from _generate_pydantic_class
         # Pass the pre-extracted metadata
         result = django_to_pydantic(
             target_db_obj,
-            self.pydantic_model_cls,
+            self.pydantic_model_cls,  # Now guaranteed to be type[BaseModel] by __init__
             exclude=self.exclude,
             max_depth=self.max_depth,
         )
@@ -1343,9 +1400,10 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
 
     # Add helper properties/methods?
     @property
-    def generated_pydantic_model(self) -> Union[type[BaseModel], ForwardRef]:
-        """Returns the generated Pydantic model class or a ForwardRef.
+    def generated_pydantic_model(self) -> type[BaseModel]:
+        """Returns the generated Pydantic model class.
 
-        Note: Callers need to handle the ForwardRef possibility.
+        This is guaranteed to be a resolved model class after successful initialization.
         """
-        return self.pydantic_model_cls
+        # This property should return the potentially ForwardRef attribute
+        return self.pydantic_model_cls  # Return the actual attribute

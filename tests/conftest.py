@@ -15,6 +15,9 @@ import pytest
 from django.conf import settings
 from django.db import models
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from django.utils.functional import lazy, Promise
+from django.utils.translation import gettext_lazy
+from django.utils.translation import gettext_lazy as _
 
 # Add the project root to the Python path
 project_root = Path(__file__).parent
@@ -89,3 +92,27 @@ class SerializableType(BaseModel):
 
 
 # --- End of conftest.py content ---
+
+
+# Define LazyChoiceModel here for discovery
+class LazyChoiceModel(models.Model):
+    class Meta:
+        app_label = "tests"
+
+    class LazyChoices(models.TextChoices):
+        CHOICE1 = "C1", _("Lazy Choice One")
+        CHOICE2 = "C2", _("Lazy Choice Two")
+
+    lazy_choice_field = models.CharField(
+        max_length=2,
+        choices=LazyChoices.choices,
+        help_text=_("Field with lazy choices"),
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=50, default="Test")
+
+
+@pytest.fixture(scope="session")
+def lazy_choice_model():
+    return LazyChoiceModel
