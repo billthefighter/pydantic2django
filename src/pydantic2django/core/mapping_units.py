@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Literal, Optional, TypeVar, get_args, get_origin
 from uuid import UUID
 
+# Import Django settings and translation
+from django.conf import settings
 from django.db import models
+from django.utils import translation
 from django.utils.encoding import force_str
 from pydantic import EmailStr, HttpUrl, IPvAnyAddress
 from pydantic.fields import FieldInfo
@@ -191,8 +194,19 @@ class TypeMappingUnit:
             kwargs["default"] = None
 
         # Handle choices (including processing labels and limiting)
+        # Log choices *before* calling handle_choices
         if hasattr(dj_field, "choices") and dj_field.choices:
+            try:
+                # Log the raw choices from the Django field
+                raw_choices_repr = repr(list(dj_field.choices))  # Materialize and get repr
+                logger.debug(f"Field '{field_name}': Raw choices before handle_choices: {raw_choices_repr}")
+            except Exception as log_err:
+                logger.warning(f"Field '{field_name}': Error logging raw choices: {log_err}")
+
             self.handle_choices(dj_field, kwargs)
+            # Log choices *after* handle_choices modified kwargs
+            processed_choices_repr = repr(kwargs.get("json_schema_extra", {}).get("choices"))
+            logger.debug(f"Field '{field_name}': Choices in kwargs after handle_choices: {processed_choices_repr}")
 
         # Handle non-choice max_length only if choices were NOT processed
         elif dj_field.max_length is not None:
@@ -204,76 +218,100 @@ class TypeMappingUnit:
 
     def handle_choices(self, dj_field: models.Field, kwargs: dict[str, Any]) -> None:
         """
-        Overrideable method to handle choices. If a unit needs specific choice handling,
-        override this method.
+        Handles Django field choices, ensuring lazy translation proxies are resolved.
+
+        It processes the choices, forces string conversion on labels within an
+        active translation context, limits the number of choices added to the schema,
+        and stores them in `json_schema_extra`.
         """
-        field_name = getattr(dj_field, "name", "unknown_field")  # Get field name for logging
+        field_name = getattr(dj_field, "name", "unknown_field")
         processed_choices = []
-        # TODO: Make this limit configurable
-        MAX_CHOICES_IN_SCHEMA = 30
+        MAX_CHOICES_IN_SCHEMA = 30  # TODO: Make configurable
         limited_choices = []
-        default_value = None
+        default_value = kwargs.get("default")  # Use potentially processed default
         default_included = False
 
-        # Get default if it exists and is valid for comparison
-        if dj_field.has_default():
-            dj_default_raw = dj_field.get_default()
-            if dj_default_raw is not models.fields.NOT_PROVIDED:
-                # Use the potentially already processed default from kwargs
-                default_value = kwargs.get("default")
+        # --- Ensure Translation Context --- #
+        active_translation = None
+        if translation:
+            try:
+                # Get the currently active language to restore later
+                current_language = translation.get_language()
+                # Activate the default language (or a specific one like 'en')
+                # This forces lazy objects to resolve using a consistent language.
+                # Using settings.LANGUAGE_CODE assumes it's set correctly.
+                default_language = getattr(settings, "LANGUAGE_CODE", "en")  # Fallback to 'en'
+                active_translation = translation.override(default_language)
+                logger.debug(
+                    f"Activated translation override ('{default_language}') for processing choices of '{field_name}'"
+                )
+                active_translation.__enter__()  # Manually enter context
+            except Exception as trans_err:
+                logger.warning(f"Failed to activate translation context for '{field_name}': {trans_err}")
+                active_translation = None  # Ensure it's None if activation failed
+        else:
+            logger.warning("Django translation module not available. Lazy choices might not resolve correctly.")
 
+        # --- Process Choices (within potential translation context) --- #
         try:
-            # Provide an empty list if choices is None
-            all_choices = list(dj_field.choices or [])  # Materialize choices
+            all_choices = list(dj_field.choices or [])
             for value, label in all_choices:
-                # Log type before processing
                 logger.debug(
                     f"  Processing choice for '{field_name}': Value={value!r}, Label={label!r} (Type: {type(label)})"
                 )
-                # Apply force_str defensively to label
-                processed_label = force_str(label)
-                # Log type after processing
-                logger.debug(
-                    f"  Processed label for '{field_name}': Value={value!r}, Label={processed_label!r} (Type: {type(processed_label)})"
-                )
+                try:
+                    # Apply force_str defensively; should resolve lazy proxies if context is active
+                    processed_label = force_str(label)
+                    logger.debug(
+                        f"  Processed label for '{field_name}': Value={value!r}, Label={processed_label!r} (Type: {type(processed_label)})"
+                    )
+                except Exception as force_str_err:
+                    logger.error(
+                        f"Error using force_str on label for '{field_name}' (value: {value!r}): {force_str_err}"
+                    )
+                    # Fallback: use repr or a placeholder if force_str fails completely
+                    processed_label = f"<unresolved: {repr(label)}>"
                 processed_choices.append((value, processed_label))
 
-            # Limit choices if necessary
+            # --- Limit Choices --- #
             if len(processed_choices) > MAX_CHOICES_IN_SCHEMA:
                 logger.warning(
                     f"Limiting choices for '{field_name}' from {len(processed_choices)} to {MAX_CHOICES_IN_SCHEMA}"
                 )
-                # Include default choice first if it exists and is valid
                 if default_value is not None:
                     for val, lbl in processed_choices:
-                        # Compare default with the choice value (which might be str/int etc.)
                         if val == default_value:
                             limited_choices.append((val, lbl))
                             default_included = True
                             break
-                # Fill remaining slots
                 remaining_slots = MAX_CHOICES_IN_SCHEMA - len(limited_choices)
                 if remaining_slots > 0:
                     for val, lbl in processed_choices:
                         if len(limited_choices) >= MAX_CHOICES_IN_SCHEMA:
                             break
-                        # Add if it's not the default (which might already be included)
                         if not (default_included and val == default_value):
                             limited_choices.append((val, lbl))
-                final_choices_list = limited_choices  # Use the limited list
+                final_choices_list = limited_choices
             else:
-                final_choices_list = processed_choices  # Use all processed choices
+                final_choices_list = processed_choices
 
-            # Store final choices list in json_schema_extra
+            # --- Store Choices --- #
             kwargs.setdefault("json_schema_extra", {})["choices"] = final_choices_list
-            # Remove max_length if choices are present, Pydantic infers from choices
-            kwargs.pop("max_length", None)
-            logger.debug(f"Base method added processed choices to json_schema_extra for '{field_name}'")
+            kwargs.pop("max_length", None)  # Remove max_length if choices are present
+            logger.debug(f"Stored final choices in json_schema_extra for '{field_name}'")
 
         except Exception as e:
-            logger.error(f"Base method error processing choices for field '{field_name}': {e}")
-            # Fallback: Don't add choices if processing failed
+            logger.error(f"Error processing or limiting choices for field '{field_name}': {e}", exc_info=True)
             kwargs.pop("json_schema_extra", None)
+
+        finally:
+            # --- Deactivate Translation Context --- #
+            if active_translation:
+                try:
+                    active_translation.__exit__(None, None, None)  # Manually exit context
+                    logger.debug(f"Deactivated translation override for '{field_name}'")
+                except Exception as trans_exit_err:
+                    logger.warning(f"Error deactivating translation context for '{field_name}': {trans_exit_err}")
 
 
 # --- Specific Mapping Units --- #

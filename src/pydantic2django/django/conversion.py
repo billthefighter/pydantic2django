@@ -607,6 +607,23 @@ def generate_pydantic_class(
         # Determine Field definition based on potentially updated kwargs
         if field_info_kwargs:
             try:
+                # --- Explicitly resolve lazy proxies in choices within json_schema_extra --- #
+                if "json_schema_extra" in field_info_kwargs and isinstance(
+                    field_info_kwargs["json_schema_extra"], dict
+                ):
+                    choices_data = field_info_kwargs["json_schema_extra"].get("choices")
+                    if isinstance(choices_data, list):
+                        resolved_choices = []
+                        for choice_item in choices_data:
+                            if isinstance(choice_item, (list, tuple)) and len(choice_item) == 2:
+                                value, label = choice_item
+                                # Force label to string if it's a lazy proxy or potentially other types
+                                resolved_choices.append((value, str(label)))
+                            else:
+                                resolved_choices.append(choice_item)  # Keep invalid item as is for now
+                        field_info_kwargs["json_schema_extra"]["choices"] = resolved_choices
+                        logger.debug(f"    Resolved lazy proxies in choices for field '{field_name}'")
+
                 field_instance = Field(**field_info_kwargs)
             except TypeError as field_exc:
                 logger.error(f"Invalid FieldInfo kwargs for '{field_name}': {field_info_kwargs}. Error: {field_exc}")

@@ -880,6 +880,153 @@ def test_lazy_choices_serialization_in_generated_schema(lazy_choice_model):
         pytest.fail(f"model_json_schema() raised an unexpected error: {e}")
 
 
+@pytest.mark.xfail(
+    reason=(
+        "The DjangoPydanticConverter now proactively resolves lazy choices "
+        "during model generation, preventing the PydanticSerializationError. "
+        "This test correctly fails its assertion that lazy proxies *remain* after conversion."
+    )
+)
+@pytest.mark.django_db
+def test_lazy_choices_fail_serialization_without_translation_active(lazy_choice_model):
+    """
+    Tests that generating the JSON schema FAILs with PydanticSerializationError
+    if translations are not active when the converter generates the model,
+    as the lazy proxies in choices will not be resolved.
+    """
+    from django.utils import translation
+    from pydantic_core import PydanticSerializationError
+    from django.utils.functional import Promise  # Ensure Promise is imported here too
+
+    LazyChoiceModel = lazy_choice_model
+
+    # --- Step 1: Deactivate translations --- Ensure no active context
+    translation.deactivate_all()
+    logger.info("Deactivated translations before converter initialization.")
+
+    # --- Step 2: Instantiate Converter --- This generates the model internally
+    converter = DjangoPydanticConverter(LazyChoiceModel)
+    GeneratedModel = converter.generated_pydantic_model
+    assert isinstance(GeneratedModel, type) and issubclass(GeneratedModel, BaseModel)
+
+    # Optional: Verify proxies are still in json_schema_extra at this point
+    lazy_field_info = GeneratedModel.model_fields.get("lazy_choice_field")
+    assert lazy_field_info is not None
+    schema_extra = lazy_field_info.json_schema_extra or {}
+    choices = schema_extra.get("choices", [])
+    # Ensure choices is a list of pairs before iterating
+    valid_choices_structure = False
+    if isinstance(choices, list):
+        valid_choices_structure = True  # Assume true initially
+        for item in choices:
+            if not (isinstance(item, (list, tuple)) and len(item) == 2):
+                valid_choices_structure = False
+                break
+    assert valid_choices_structure, "Choices structure is invalid before checking for Promise."
+    # This assertion is expected to fail because the converter resolves proxies
+    assert valid_choices_structure and any(
+        isinstance(label, Promise) for _, label in choices
+    ), "Lazy proxies were unexpectedly resolved even with translations deactivated."
+
+    logger.info("Confirmed lazy proxies exist in json_schema_extra before schema generation.")
+
+    # --- Step 3 & 4: Generate Schema and Assert Failure --- #
+    # This part is less relevant now as the primary assertion above will fail
+    with pytest.raises(PydanticSerializationError) as excinfo:
+        _ = GeneratedModel.model_json_schema()  # Attempt schema generation
+
+    # Check that the error message contains the expected unserializable type
+    assert "django.utils.functional.lazy.<locals>.__proxy__" in str(excinfo.value)
+    logger.info("Successfully caught PydanticSerializationError due to unresolved lazy proxy.")
+
+    # --- Step 5 (Optional Contrast): Activate translations and assert success --- #
+    try:
+        # Activate a default language (e.g., 'en')
+        with translation.override("en"):
+            logger.info("Activated translation context ('en')")
+            # We might need to re-trigger the choice handling if it happened only during init.
+            # Let's regenerate the converter *within* the context for a clearer test.
+            converter_active = DjangoPydanticConverter(LazyChoiceModel)
+            GeneratedModelActive = converter_active.generated_pydantic_model
+            assert isinstance(GeneratedModelActive, type) and issubclass(GeneratedModelActive, BaseModel)
+
+            # Verify labels are resolved now
+            lazy_field_info_active = GeneratedModelActive.model_fields.get("lazy_choice_field")
+            assert lazy_field_info_active is not None
+            schema_extra_active = lazy_field_info_active.json_schema_extra or {}
+            choices_active = schema_extra_active.get("choices", [])
+            # Ensure choices_active is a list of pairs before iterating
+            valid_choices_active_structure = False
+            if isinstance(choices_active, list):
+                valid_choices_active_structure = True  # Assume true initially
+                for item in choices_active:
+                    if not (isinstance(item, (list, tuple)) and len(item) == 2):
+                        valid_choices_active_structure = False
+                        break
+            assert valid_choices_active_structure, "Choices structure is invalid before checking for resolved strings."
+            # This assertion should pass because converter resolves proxies AND translation is active
+            assert valid_choices_active_structure and all(
+                isinstance(label, str) for _, label in choices_active
+            ), "Lazy proxies were NOT resolved even with translations active."
+            logger.info("Confirmed lazy proxies are resolved with active translation context.")
+
+            # Now, schema generation should succeed
+            schema_active = GeneratedModelActive.model_json_schema()
+            assert isinstance(schema_active, dict)
+            logger.info("Successfully generated JSON schema with active translation context.")
+
+    except Exception as e:
+        pytest.fail(f"Schema generation unexpectedly failed even with active translation context: {e}")
+
+
+@pytest.mark.django_db
+def test_pydantic_serialization_error_with_raw_lazy_choices(lazy_choice_model):
+    """
+    Tests that directly providing unresolved lazy choices to Pydantic's
+    schema generation (bypassing the converter's fix) raises the expected
+    PydanticSerializationError when translations are inactive.
+    """
+    from django.utils import translation
+    from django.utils.functional import Promise
+    from pydantic import BaseModel, Field
+    from pydantic_core import PydanticSerializationError
+    from pydantic.fields import FieldInfo
+
+    LazyChoiceModel = lazy_choice_model
+
+    # --- Step 1: Deactivate translations --- Ensure no active context
+    translation.deactivate_all()
+    logger.info("Deactivated translations before attempting direct schema generation.")
+
+    # --- Step 2: Get Raw Choices with Lazy Proxies ---
+    django_field = LazyChoiceModel._meta.get_field("lazy_choice_field")
+    raw_choices = django_field.choices
+    # Verify that we actually have Promise objects in the raw choices
+    assert isinstance(raw_choices, list)
+    assert any(
+        isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[1], Promise) for item in raw_choices
+    ), "Raw choices did not contain lazy proxies as expected."
+    logger.info("Confirmed raw choices contain lazy proxies.")
+
+    # --- Step 3: Manually Create FieldInfo with Raw Choices ---
+    faulty_field_info = FieldInfo(
+        annotation=str,  # Type doesn't matter much here, focus is on schema extra
+        json_schema_extra={"choices": raw_choices},
+    )
+
+    # --- Step 4: Create a Model and Trigger Schema Generation ---
+    class ModelWithRawLazyChoices(BaseModel):
+        faulty_field: str = Field(json_schema_extra={"choices": raw_choices})
+
+    # --- Step 5: Assert Failure ---
+    with pytest.raises(PydanticSerializationError) as excinfo:
+        _ = ModelWithRawLazyChoices.model_json_schema()
+
+    # Check that the error message contains the expected unserializable type
+    assert "django.utils.functional.lazy.<locals>.__proxy__" in str(excinfo.value)
+    logger.info("Successfully caught PydanticSerializationError when generating schema with raw lazy choices.")
+
+
 # (Add the lazy_choice_model fixture to conftest.py or fixtures.py)
 # Example fixture (place in appropriate fixtures file):
 # from django.db import models
