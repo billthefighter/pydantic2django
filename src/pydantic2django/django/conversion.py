@@ -429,9 +429,10 @@ def generate_pydantic_class(
         ValueError: If maximum recursion depth is exceeded or generation fails.
         TypeError: If a field type cannot be mapped.
     """
+    logger.info(f"*** Running generate_pydantic_class [v_lazy_fix] for {django_model_cls.__name__} ***")
+
     if cache is None:
         cache = {}
-        logger.debug(f"Initializing generation cache for {django_model_cls.__name__}")
 
     # Ensure exclude is a set
     exclude_set = exclude or set()
