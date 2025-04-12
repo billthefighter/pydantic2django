@@ -18,7 +18,7 @@ from django.db.models.fields.reverse_related import (
 )
 from django.db.models.query import QuerySet
 from django.utils.timezone import get_default_timezone, is_aware, make_aware
-from pydantic import BaseModel, Field, TypeAdapter, create_model, EmailStr, HttpUrl, IPvAnyAddress
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 from pydantic.types import Json
 
 # from .mapping import TypeMapper # Removed old import
@@ -405,7 +405,7 @@ def generate_pydantic_class(
     max_depth: int = 3,
     pydantic_base: Optional[type[BaseModel]] = None,
     exclude: Optional[set[str]] = None,
-) -> "Union[type[BaseModel], ForwardRef]":
+) -> Union[type[BaseModel], ForwardRef]:
     """
     Dynamically generates a Pydantic model class from a Django model class,
     using pre-extracted metadata if provided.
@@ -660,6 +660,9 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
     3. Converting a Pydantic model instance back to a saved Django model instance.
     """
 
+    # Add the resolved Pydantic model class attribute annotation
+    pydantic_model_cls: type[BaseModel]
+
     def __init__(
         self,
         django_model_or_instance: Union[type[DjangoModelT], DjangoModelT],
@@ -675,9 +678,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         Args:
             django_model_or_instance: Either the Django model class or an instance.
             max_depth: Maximum recursion depth for generating/converting related models.
-            exclude: Field names to exclude during conversion *to* Pydantic.
-                     Note: Exclusion during generation is not yet implemented here,
-                     but `generate_pydantic_class` could be adapted if needed.
+            exclude: Field names to exclude during conversion *to* Pydantic and generation.
             pydantic_base: Optional base for generated Pydantic model.
             model_name: Optional name for generated Pydantic model.
         """
@@ -685,9 +686,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
             self.django_model_cls: type[DjangoModelT] = django_model_or_instance.__class__
             self.initial_django_instance: Optional[DjangoModelT] = django_model_or_instance
         elif issubclass(django_model_or_instance, models.Model):
-            # Ensure the type checker understands self.django_model_cls is Type[DjangoModelT]
-            # where DjangoModelT is the specific type bound to the class instance.
-            self.django_model_cls: type[DjangoModelT] = django_model_or_instance  # Type should be consistent now
+            self.django_model_cls: type[DjangoModelT] = django_model_or_instance
             self.initial_django_instance = None
         else:
             raise TypeError("Input must be a Django Model class or instance.")
@@ -695,35 +694,84 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
         self.max_depth = max_depth
         self.exclude = exclude or set()
         self.pydantic_base = pydantic_base or BaseModel
-        self.model_name = model_name  # Store optional name
+        # Determine the target model name early
+        self.model_name = model_name or f"{self.django_model_cls.__name__}Pydantic"
+
         # Initialize dependencies
         self.relationship_accessor = RelationshipConversionAccessor()
         self.mapper = BidirectionalTypeMapper(self.relationship_accessor)
-        # Register the initial model with the accessor (if needed for self-refs immediately)
-        # self.relationship_accessor.map_relationship(source_model=???, django_model=self.django_model_cls) # Need Pydantic type?
 
         # Use the correctly defined cache type (name -> model/ref)
         self._generation_cache: GeneratedModelCache = {}
-        # _django_metadata is no longer needed
 
-        # Generate the Pydantic class definition immediately
-        self.pydantic_model_cls = self._generate_pydantic_class()
+        # --- Generate the Pydantic class definition(s) ---
+        # This call populates self._generation_cache
+        initial_generated_ref = self._generate_pydantic_class()
 
-        #          logger.debug(f"Skipping update_forward_refs for ForwardRef in cache: {item_name}")
+        # --- Resolve ForwardRefs using the generated cache ---
+        resolved_namespace = {
+            name: model
+            for name, model in self._generation_cache.items()
+            if isinstance(model, type) and issubclass(model, BaseModel)
+        }
+        logger.debug(f"Attempting to resolve ForwardRefs using namespace: {list(resolved_namespace.keys())}")
 
-        # Rebuild the main model AFTER resolving refs in the cache.
-        # No need for _types_namespace if update_forward_refs worked.
-        try:
-            self.pydantic_model_cls.model_rebuild(force=True)
-            logger.info(f"Rebuilt {self.pydantic_model_cls.__name__} after resolving ForwardRefs.")
-        except Exception as e:
-            # Log warning if final rebuild still fails
-            logger.warning(
-                f"Failed to rebuild {self.pydantic_model_cls.__name__} even after update_forward_refs: {e}",
-                exc_info=True,
+        rebuild_success = True
+        models_to_rebuild = [
+            model
+            for model in self._generation_cache.values()
+            if isinstance(model, type) and issubclass(model, BaseModel)
+        ]
+
+        if not models_to_rebuild:
+            logger.warning("No Pydantic models found in cache to rebuild.")
+            # This might happen if only a ForwardRef was returned due to max_depth on the top level
+            if isinstance(initial_generated_ref, ForwardRef):
+                raise TypeError(f"Could not resolve initial ForwardRef: {initial_generated_ref.__forward_arg__}")
+            else:
+                # Should not happen if generation worked, but raise error just in case
+                raise TypeError("Pydantic model generation failed silently.")
+
+        # Rebuild models potentially multiple times to resolve dependencies iteratively
+        # Simple approach: rebuild all models twice. More complex needs dependency graph.
+        for rebuild_pass in range(2):
+            logger.debug(f"Starting ForwardRef rebuild pass {rebuild_pass + 1}...")
+            pass_failed = False
+            for model_cls in models_to_rebuild:
+                try:
+                    model_cls.model_rebuild(_types_namespace=resolved_namespace, force=True)
+                    # Update namespace with potentially newly resolved model? Not needed if rebuild modifies in place.
+                    logger.debug(f"Rebuilt model {model_cls.__name__} in pass {rebuild_pass + 1}.")
+                except Exception as e:
+                    # Log specific error but don't stop the whole process immediately
+                    logger.warning(
+                        f"Failed to rebuild model {model_cls.__name__} in pass {rebuild_pass + 1}: {e}", exc_info=False
+                    )
+                    pass_failed = True  # Mark failure if any model fails in this pass
+            if not pass_failed:
+                logger.debug(f"Rebuild pass {rebuild_pass + 1} completed without errors.")
+                # If a pass completes without errors, refs might be resolved, break early?
+                # break # Let's run both passes to be safer for complex cases.
+
+        # --- Verify the main model is resolved ---
+        final_cls = self._generation_cache.get(self.model_name)
+
+        if isinstance(final_cls, ForwardRef):
+            logger.error(f"Failed to resolve main ForwardRef {final_cls.__forward_arg__} after rebuild attempts.")
+            raise TypeError(f"Could not resolve Pydantic model ForwardRef: {final_cls.__forward_arg__}")
+        elif not isinstance(final_cls, type) or not issubclass(final_cls, BaseModel):
+            logger.error(
+                f"Main generated model '{self.model_name}' is not a valid BaseModel subclass after rebuild. Found: {final_cls}"
             )
+            raise TypeError(f"Generated Pydantic model '{self.model_name}' is invalid after rebuild.")
+        else:
+            # --- Assign the *resolved* class ---
+            self.pydantic_model_cls = final_cls
+            logger.info(f"Successfully generated and resolved Pydantic model: {self.pydantic_model_cls.__name__}")
 
-    # Helper map for TypeAdapter in to_django
+        # Optional: Clean up cache if it's no longer needed
+        # self._generation_cache.clear()
+
     _INTERNAL_TYPE_TO_PYTHON_TYPE = {
         "AutoField": int,
         "BigAutoField": int,
@@ -1341,11 +1389,20 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
 
         return target_django_instance
 
-    # Add helper properties/methods?
     @property
-    def generated_pydantic_model(self) -> Union[type[BaseModel], ForwardRef]:
-        """Returns the generated Pydantic model class or a ForwardRef.
+    def generated_pydantic_model(self) -> type[BaseModel]:
+        """Returns the generated and resolved Pydantic model class.
 
-        Note: Callers need to handle the ForwardRef possibility.
+        Raises:
+            AttributeError: If the model class hasn't been successfully resolved.
         """
+        if not hasattr(self, "pydantic_model_cls") or not isinstance(self.pydantic_model_cls, type):
+            # This should not happen if __init__ completed successfully
+            raise AttributeError("Pydantic model class has not been successfully generated or resolved.")
         return self.pydantic_model_cls
+
+
+# --- Type Alias for generated Pydantic Model --- #
+# This type alias is tricky because the exact model depends on the Django input.
+# Using TypeVar bounded by BaseModel is the most accurate representation.
+# Example usage: PydanticOutput = TypeVar('PydanticOutput', bound=BaseModel)
