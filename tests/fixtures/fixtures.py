@@ -111,9 +111,9 @@ class AllFieldsModel(models.Model):
     # --- Binary Fields ---
     binary_field = models.BinaryField(editable=True)  # Make editable for testing assignment
     # --- File Fields ---
-    file_field = models.FileField(upload_to="uploads/%Y/%m/%d/", blank=True)
+    file_field = models.FileField(upload_to="uploads/%Y/%m/%d/", blank=True, null=True)
     image_field = models.ImageField(
-        upload_to="images/", height_field="image_height", width_field="image_width", blank=True
+        upload_to="images/", height_field="image_height", width_field="image_width", blank=True, null=True
     )
     image_height = models.PositiveIntegerField(null=True, blank=True, editable=False)
     image_width = models.PositiveIntegerField(null=True, blank=True, editable=False)

@@ -631,6 +631,7 @@ class FilePathFieldMapping(StrFieldMapping):
 
 class FileFieldMapping(StrFieldMapping):
     # Map File/Image fields to str (URL/path) by default in Pydantic
+    # Optionality should be determined by the field's null status, not the base mapping.
     python_type = str
     django_field_type = models.FileField
 

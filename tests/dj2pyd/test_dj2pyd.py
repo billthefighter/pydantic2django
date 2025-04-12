@@ -516,8 +516,9 @@ class TestDjangoPydanticConverter:
         assert pyd_instance1.char_field == "To Pydantic"  # type: ignore[attr-defined]
         assert pyd_instance1.integer_field == 123  # type: ignore[attr-defined]
         # Check that the foreign key field is a BaseModel and has the expected ID
-        assert isinstance(pyd_instance1.foreign_key_field, BaseModel)
-        assert pyd_instance1.foreign_key_field.id == related.id  # type: ignore[attr-defined]
+        fk_field_value = getattr(pyd_instance1, "foreign_key_field", None)
+        assert isinstance(fk_field_value, BaseModel)
+        assert getattr(fk_field_value, "id", None) == related.id
 
         # Test conversion using instance passed to method
         converter2 = DjangoPydanticConverter(AllFieldsModel)
@@ -567,8 +568,10 @@ class TestDjangoPydanticConverter:
             "time_field": time(14, 0, 0),
             "duration_field": timedelta(minutes=30),
             "binary_field": b"CREATED",
-            "file_field": None,  # Provide None for potentially missing fields
-            "image_field": None,  # Provide None for potentially missing fields
+            "file_field": None,  # Provide None as it's nullable
+            "image_field": None,  # Provide None as it's nullable
+            "image_height": None,  # Provide None as it's nullable
+            "image_width": None,  # Provide None as it's nullable
             "json_field": {"status": "new"},  # Assuming generated Pydantic handles dict for JSONField
             # Provide dicts for relationships matching nested Pydantic model structure
             "foreign_key_field": {"id": related_for_fk.id, "name": related_for_fk.name} if related_for_fk else None,
@@ -670,6 +673,10 @@ class TestDjangoPydanticConverter:
             "time_field": dj_instance.time_field,
             "duration_field": dj_instance.duration_field,
             "binary_field": dj_instance.binary_field,
+            "file_field": None,  # Provide None explicitly
+            "image_field": None,  # Provide None explicitly
+            "image_height": None,  # Provide None explicitly
+            "image_width": None,  # Provide None explicitly
             "json_field": dj_instance.json_field,
             "one_to_one_field": None,
         }
