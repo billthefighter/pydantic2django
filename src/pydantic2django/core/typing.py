@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import is_dataclass
 from types import UnionType
-from typing import Any, Literal, TypeVar, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, Optional, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -242,13 +242,13 @@ class TypeHandler:
     @staticmethod
     def process_field_type(field_type: Any) -> dict[str, Any]:
         """Process a field type to get name, flags, imports, and contained dataclasses."""
-        logger.debug(f"Received field_type: {field_type!r}, type: {type(field_type)}")
-        logger.debug(f"Processing field type: {field_type!r}")
+        logger.debug(f"[TypeHandler] Processing type: {field_type!r}")
         is_optional = False
         is_list = False
-        imports = {}
-        contained_dataclasses: set[type] = set()
-        simplified_type = field_type  # Start with the original
+        metadata: Optional[tuple[Any, ...]] = None  # Initialize metadata with type hint
+        imports = set()
+        contained_dataclasses = set()
+        current_type = field_type  # Keep track of the potentially unwrapped type
 
         # Helper function (remains the same)
         def _is_potential_dataclass(t: Any) -> bool:
@@ -273,69 +273,71 @@ class TypeHandler:
         processed = True
         while processed:
             processed = False
-            origin = get_origin(simplified_type)
-            args = get_args(simplified_type)
+            origin = get_origin(current_type)
+            args = get_args(current_type)
 
             # 0. Unwrap Annotated[T, ...]
             # Check if the origin exists and has the name 'Annotated'
             # This check is more robust than `origin is Annotated` across Python versions
-            if origin is not None and getattr(origin, "__name__", "") == "Annotated":
+            if origin is Annotated:
                 if args:
                     core_type = args[0]
                     metadata = args[1:]
-                    simplified_type = core_type
-                    logger.debug(f"  Unwrapped Annotated, current type: {simplified_type!r}, metadata: {metadata!r}")
+                    current_type = core_type
+                    logger.debug(f"  Unwrapped Annotated, current type: {current_type!r}, metadata: {metadata!r}")
                     processed = True
                     continue  # Restart loop with unwrapped type
                 else:
                     logger.warning("  Found Annotated without arguments? Treating as Any.")
-                    simplified_type = Any
+                    current_type = Any
                     processed = True
                     continue
 
             # 1. Unwrap Optional[T] (Union[T, NoneType])
-            if origin is Union and len(args) == 2 and type(None) in args:
+            if origin in (Union, UnionType) and type(None) in args:
                 is_optional = True  # Flag it
-                simplified_type = next(arg for arg in args if arg is not type(None))
-                logger.debug(f"  Unwrapped Optional, current type: {simplified_type!r}")
+                # Rebuild the Union without NoneType
+                non_none_args = tuple(arg for arg in args if arg is not type(None))
+                if len(non_none_args) == 1:
+                    current_type = non_none_args[0]  # Simplify Union[T, None] to T
+                elif len(non_none_args) > 1:
+                    # Use typing.Union to rebuild for consistency
+                    current_type = Union[non_none_args]
+                else:  # pragma: no cover
+                    # Should not happen if NoneType was in args
+                    current_type = Any
+                logger.debug(f"  Unwrapped Union with None, current type: {current_type!r}")
                 processed = True
-                continue  # Restart loop with unwrapped type
+                continue  # Restart loop with the non-optional type
 
             # 2. Unwrap List[T] or Sequence[T]
             if origin in (list, Sequence):
                 is_list = True  # Flag it
                 if args:
-                    simplified_type = args[0]
-                    logger.debug(f"  Unwrapped List/Sequence, current element type: {simplified_type!r}")
+                    current_type = args[0]
+                    logger.debug(f"  Unwrapped List/Sequence, current element type: {current_type!r}")
                 else:
-                    simplified_type = Any  # List without args -> List[Any]
+                    current_type = Any  # List without args -> List[Any]
                     logger.debug("  Unwrapped List/Sequence without args, assuming Any")
                 processed = True
                 continue  # Restart loop with unwrapped element type
 
             # 3. Unwrap Literal[...]
             if origin is Literal:
-                if args:
-                    simplified_type = type(args[0])  # Use type of the *value*
-                    logger.debug(f"  Unwrapped Literal, current type: {simplified_type!r}")
-                else:
-                    simplified_type = Any  # Literal without args?
-                    logger.debug("  Unwrapped Literal without args? Assuming Any")
-                processed = True
-                continue  # Restart loop with unwrapped type
+                # Keep the Literal origin, but simplify args if possible?
+                # No, the mapper needs the original Literal to extract choices.
+                # Just log and break the loop for Literal.
+                logger.debug("  Hit Literal origin, stopping simplification loop.")
+                break  # Stop simplification here, keep Literal type
 
         # --- Post-Loop Handling ---
-        # At this point, simplified_type should be the base type (int, str, datetime, Any, etc.)
+        # At this point, current_type should be the base type (int, str, datetime, Any, etc.)
         # or a complex type we don't simplify further (like a raw Union or a specific class)
-        base_type_obj = simplified_type
+        base_type_obj = current_type
 
-        # Final check: If it's still a complex Union, default to Any for mapping
-        origin = get_origin(base_type_obj)
-        if origin is Union:
-            logger.debug(f"  Final type is complex Union {base_type_obj!r}, defaulting base object to Any for mapping.")
-            base_type_obj = Any
         # Add check for Callable simplification
-        elif origin is Callable or (
+        origin = get_origin(base_type_obj)
+        if origin is Callable or (
             hasattr(base_type_obj, "__module__")
             and base_type_obj.__module__ == "collections.abc"
             and base_type_obj.__name__ == "Callable"
@@ -356,8 +358,9 @@ class TypeHandler:
             "is_list": is_list,
             "imports": imports,
             "contained_dataclasses": contained_dataclasses,
+            "metadata": metadata,
         }
-        logger.debug(f"  Processed type result: {result!r}")  # Use !r for clearer debug
+        logger.debug(f"[TypeHandler] Processed result: {result!r}")
         return result
 
     @staticmethod

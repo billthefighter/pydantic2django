@@ -10,6 +10,7 @@ from uuid import UUID
 
 import pytest
 from django.db import models
+from django.utils.translation import gettext_lazy as _
 from pydantic import BaseModel, EmailStr, Field, HttpUrl, IPvAnyAddress
 from pydantic.fields import FieldInfo
 
@@ -828,6 +829,8 @@ DJ_CHOICE_CHAR = models.CharField(max_length=1, choices=[("A", "Alpha"), ("B", "
 DJ_CHOICE_INT = models.IntegerField(choices=[(1, "One"), (2, "Two")], null=True)
 # Choice field specifically for Literal mapping test
 DJ_CHOICE_CHAR_FOR_LITERAL = models.CharField(max_length=5, choices=[("r", "Red"), ("g", "Green"), ("b", "Blue")])
+# Field with Lazy Proxies
+DJ_LAZY_FIELD = models.CharField(max_length=50, verbose_name=_("Lazy Name"), help_text=_("Lazy Help"))
 # Relationship Fields (get from TargetDjangoModel)
 DJ_FK = TargetDjangoModel._meta.get_field("related_fk")
 DJ_O2O = TargetDjangoModel._meta.get_field("related_o2o")
@@ -865,6 +868,13 @@ DJ_TO_PYD_SIMPLE_CASES = [
     DjToPydParams("image_to_str", DJ_IMAGEFIELD, str, {"json_schema_extra": {"format": "image"}}),
     DjToPydParams("json_to_any", DJ_JSONFIELD, Any, {"default_factory": dict}),
     DjToPydParams("binary_to_bytes", DJ_BINARYFIELD, bytes, {}),
+    # Test for lazy proxy conversion
+    DjToPydParams(
+        "lazy_proxy_conversion",
+        DJ_LAZY_FIELD,
+        str,
+        {"title": "Lazy name", "description": "Lazy Help", "max_length": 50},
+    ),
     # Positive fields
     DjToPydParams("posint_to_int_ge0", DJ_POS_INTFIELD, int, {"ge": 0}),
     DjToPydParams("possmallint_to_int_ge0", DJ_POS_SMALLINTFIELD, int, {"ge": 0}),

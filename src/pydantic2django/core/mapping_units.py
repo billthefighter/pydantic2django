@@ -15,6 +15,7 @@ from typing import Any, Literal, Optional, TypeVar, get_args, get_origin
 from uuid import UUID
 
 from django.db import models
+from django.utils.encoding import force_str
 from pydantic import EmailStr, HttpUrl, IPvAnyAddress
 from pydantic.fields import FieldInfo
 from pydantic.types import StringConstraints
@@ -113,7 +114,8 @@ class TypeMappingUnit:
         verbose_name = getattr(dj_field, "verbose_name", None)
         logger.debug(f"Processing field '{field_name}': verbose_name='{verbose_name}'")
         if verbose_name:
-            kwargs["title"] = str(verbose_name).capitalize()
+            # Ensure verbose_name is a string, handling lazy proxies
+            kwargs["title"] = force_str(verbose_name).capitalize()
         elif field_name != "unknown_field" and isinstance(field_name, str):
             # Generate title from name if verbose_name is missing and name is a string
             generated_title = field_name.replace("_", " ").capitalize()
@@ -123,7 +125,8 @@ class TypeMappingUnit:
 
         # Description
         if dj_field.help_text:
-            kwargs["description"] = str(dj_field.help_text)
+            # Ensure help_text is a string, handling lazy proxies
+            kwargs["description"] = force_str(dj_field.help_text)
 
         # Default value/factory handling
         if dj_field.has_default():
