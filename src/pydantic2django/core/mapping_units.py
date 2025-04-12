@@ -158,7 +158,26 @@ class TypeMappingUnit:
                     kwargs.pop("default", None)
                 elif dj_default is not None:
                     # Add non-None, non-callable, non-empty-collection defaults
-                    kwargs["default"] = dj_default
+                    logger.debug(
+                        f"Processing non-callable default for '{field_name}'. Type: {type(dj_default)}, Value: {dj_default!r}"
+                    )
+                    # Apply force_str ONLY if the default value's type suggests it might be a lazy proxy string.
+                    # A simple check is if 'proxy' is in the type name.
+                    processed_default = dj_default
+                    if "proxy" in type(dj_default).__name__:
+                        try:
+                            processed_default = force_str(dj_default)
+                            logger.debug(
+                                f"Applied force_str to potential lazy default for '{field_name}'. New value: {processed_default!r}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to apply force_str to default value for '{field_name}': {e}. Assigning raw default."
+                            )
+                            processed_default = dj_default  # Keep original on error
+
+                    kwargs["default"] = processed_default
+                    logger.debug(f"Assigned final default for '{field_name}': {kwargs.get('default')!r}")
 
         # Handle AutoField PKs -> frozen=True, default=None
         is_auto_pk = dj_field.primary_key and isinstance(

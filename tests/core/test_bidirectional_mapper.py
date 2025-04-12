@@ -831,6 +831,31 @@ DJ_CHOICE_INT = models.IntegerField(choices=[(1, "One"), (2, "Two")], null=True)
 DJ_CHOICE_CHAR_FOR_LITERAL = models.CharField(max_length=5, choices=[("r", "Red"), ("g", "Green"), ("b", "Blue")])
 # Field with Lazy Proxies
 DJ_LAZY_FIELD = models.CharField(max_length=50, verbose_name=_("Lazy Name"), help_text=_("Lazy Help"))
+DJ_LAZY_DEFAULT_FIELD = models.CharField(max_length=10, default=_("lazy_def"), verbose_name=_("Lazy Default Name"))
+
+# --- Test Data for Lazy Schema Generation ---
+
+
+class LazyDjangoModel(models.Model):
+    lazy_name_char = models.CharField(
+        max_length=50,
+        verbose_name=_("Lazy Name"),
+        help_text=_("Lazy Help"),
+        # choices=[("a", _("Choice A")), ("b", _("Choice B"))], # Choices with lazy strings add complexity
+    )
+    lazy_default_char = models.CharField(
+        max_length=20,
+        verbose_name=_("Lazy Default Field"),
+        default=_("lazy_default_value"),
+        null=True,
+        blank=True,
+    )
+    regular_int = models.IntegerField()
+
+    class Meta:
+        app_label = "test_app_lazy"
+
+
 # Relationship Fields (get from TargetDjangoModel)
 DJ_FK = TargetDjangoModel._meta.get_field("related_fk")
 DJ_O2O = TargetDjangoModel._meta.get_field("related_o2o")
@@ -868,12 +893,19 @@ DJ_TO_PYD_SIMPLE_CASES = [
     DjToPydParams("image_to_str", DJ_IMAGEFIELD, str, {"json_schema_extra": {"format": "image"}}),
     DjToPydParams("json_to_any", DJ_JSONFIELD, Any, {"default_factory": dict}),
     DjToPydParams("binary_to_bytes", DJ_BINARYFIELD, bytes, {}),
-    # Test for lazy proxy conversion
+    # Test for lazy proxy conversion for verbose_name/help_text
     DjToPydParams(
         "lazy_proxy_conversion",
         DJ_LAZY_FIELD,
         str,
         {"title": "Lazy name", "description": "Lazy Help", "max_length": 50},
+    ),
+    # Test for lazy proxy conversion for default value
+    DjToPydParams(
+        "lazy_default_conversion",
+        DJ_LAZY_DEFAULT_FIELD,
+        str,
+        {"title": "Lazy default name", "default": "lazy_def", "max_length": 10},
     ),
     # Positive fields
     DjToPydParams("posint_to_int_ge0", DJ_POS_INTFIELD, int, {"ge": 0}),
@@ -942,6 +974,79 @@ def test_get_pydantic_mapping_relationships(mapper: BidirectionalTypeMapper, par
     assert (
         field_info_kwargs == params.expected_field_info_kwargs
     ), f"Expected kwargs {params.expected_field_info_kwargs}, got {field_info_kwargs}"
+
+
+def test_pydantic_schema_generation_with_lazy_fields(mapper: BidirectionalTypeMapper):
+    """Tests generating a Pydantic model and its schema from a Django model with lazy fields."""
+    logger.info("Testing Pydantic schema generation with lazy Django fields...")
+
+    # 1. Generate Pydantic model class from LazyDjangoModel
+    # Requires RelationshipConversionAccessor to know the mapping
+    # We need to map LazyDjangoModel to *something* even if it's temporary
+    class LazyPydanticPlaceholder(BaseModel):
+        pass  # Placeholder
+
+    mapper.relationship_accessor.map_relationship(LazyPydanticPlaceholder, LazyDjangoModel)
+
+    pydantic_fields = {}
+    field_info_kwargs_all = {}
+    for field in LazyDjangoModel._meta.get_fields():
+        if not getattr(field, "concrete", False) or isinstance(field, models.AutoField):
+            continue  # Skip non-concrete and Auto PK
+        # Add assertion here for type checker
+        assert isinstance(field, models.Field), f"Expected models.Field, got {type(field)} for field '{field.name}'"
+        try:
+            py_type, field_info_kwargs = mapper.get_pydantic_mapping(field)
+            pydantic_fields[field.name] = (py_type, Field(**field_info_kwargs))
+            field_info_kwargs_all[field.name] = field_info_kwargs
+        except MappingError as e:
+            pytest.fail(f"Failed to get Pydantic mapping for field '{field.name}': {e}")
+        except Exception as e:
+            pytest.fail(f"Unexpected error getting Pydantic mapping for field '{field.name}': {e}")
+
+    # Log the generated field types and kwargs for debugging
+    logger.debug(f"Pydantic fields generated for {LazyDjangoModel.__name__}: {pydantic_fields}")
+    logger.debug(f"FieldInfo kwargs generated for {LazyDjangoModel.__name__}: {field_info_kwargs_all}")
+
+    # Assertions on generated kwargs (verify lazy values were processed)
+    lazy_name_char_kwargs = field_info_kwargs_all.get("lazy_name_char", {})
+    assert lazy_name_char_kwargs.get("title") == "Lazy name"
+    assert lazy_name_char_kwargs.get("description") == "Lazy Help"
+    # assert "choices" not in lazy_name_char_kwargs # Ensure choices aren't added directly
+    assert lazy_name_char_kwargs.get("max_length") == 50
+
+    lazy_default_char_kwargs = field_info_kwargs_all.get("lazy_default_char", {})
+    assert lazy_default_char_kwargs.get("title") == "Lazy default field"
+    assert lazy_default_char_kwargs.get("default") == "lazy_default_value"
+    assert lazy_default_char_kwargs.get("max_length") == 20
+
+    # Create the dynamic Pydantic model using pydantic.create_model
+    from pydantic import create_model
+
+    try:
+        LazyPydanticModel = create_model("LazyPydanticModel", **pydantic_fields)  # type: ignore
+    except Exception as e:
+        pytest.fail(f"Failed to create dynamic Pydantic model: {e}", pytrace=True)
+
+    # 2. Attempt to generate the JSON schema for the Pydantic model
+    try:
+        schema = LazyPydanticModel.model_json_schema()
+        logger.info(f"Successfully generated JSON schema for {LazyPydanticModel.__name__}:")
+        logger.info(schema)
+        # Basic schema validation
+        assert schema["title"] == "LazyPydanticModel"
+        assert "properties" in schema
+        assert "lazy_name_char" in schema["properties"]
+        assert "lazy_default_char" in schema["properties"]
+        assert "regular_int" in schema["properties"]
+        # Check processed lazy values in schema
+        assert schema["properties"]["lazy_name_char"]["title"] == "Lazy name"
+        assert schema["properties"]["lazy_name_char"]["description"] == "Lazy Help"
+        assert schema["properties"]["lazy_default_char"]["title"] == "Lazy default field"
+        assert schema["properties"]["lazy_default_char"]["default"] == "lazy_default_value"
+
+    except Exception as e:
+        pytest.fail(f"Failed to generate JSON schema for Pydantic model with lazy fields: {e}", pytrace=True)
 
 
 # TODO: Add tests for unmapped types / error conditions / edge cases
