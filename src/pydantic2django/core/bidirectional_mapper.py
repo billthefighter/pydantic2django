@@ -755,6 +755,15 @@ class BidirectionalTypeMapper:
 
         field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
 
+        # --- Explicitly cast title (verbose_name) and description (help_text) --- #
+        if field_info_kwargs.get("title") is not None:
+            field_info_kwargs["title"] = str(field_info_kwargs["title"])
+            logger.debug(f"Ensured title is str for '{dj_field.name}': {field_info_kwargs['title']}")
+        if field_info_kwargs.get("description") is not None:
+            field_info_kwargs["description"] = str(field_info_kwargs["description"])
+            logger.debug(f"Ensured description is str for '{dj_field.name}': {field_info_kwargs['description']}")
+        # --- End Casting --- #
+
         # Clean up redundant `default=None` for Optional fields handled by Pydantic v2.
         # Only pop default=None if the field is Optional (and not an AutoPK, though autoPK sets default=None anyway)
         if is_optional and field_info_kwargs.get("default") is None:
