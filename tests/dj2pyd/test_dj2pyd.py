@@ -46,7 +46,6 @@ from ..fixtures.fixtures import (
     all_fields_model,
     membership_model,
     StatusChoices,  # Assuming StatusChoices is defined in fixtures
-    lazy_choice_model,  # Ensure lazy_choice_model is imported
 )
 
 
@@ -212,7 +211,7 @@ def comprehensive_data(related_model, all_fields_model, membership_model):
     test_time = time(12, 30, 15)
     test_duration = timedelta(days=1, hours=2)
     test_json = {"key": "value", "number": 123}
-    test_binary = b"    "
+    test_binary = b""
 
     dj_instance = AllFieldsModel.objects.create(
         boolean_field=True,
@@ -926,7 +925,7 @@ def test_lazy_choices_fail_serialization_without_translation_active(lazy_choice_
     assert valid_choices_structure, "Choices structure is invalid before checking for Promise."
     # This assertion is expected to fail because the converter resolves proxies
     assert valid_choices_structure and any(
-        isinstance(label, Promise) for _, label in (choices if valid_choices_structure else [])
+        isinstance(label, Promise) for _, label in choices
     ), "Lazy proxies were unexpectedly resolved even with translations deactivated."
 
     logger.info("Confirmed lazy proxies exist in json_schema_extra before schema generation.")
@@ -967,7 +966,7 @@ def test_lazy_choices_fail_serialization_without_translation_active(lazy_choice_
             assert valid_choices_active_structure, "Choices structure is invalid before checking for resolved strings."
             # This assertion should pass because converter resolves proxies AND translation is active
             assert valid_choices_active_structure and all(
-                isinstance(label, str) for _, label in (choices_active if valid_choices_active_structure else [])
+                isinstance(label, str) for _, label in choices_active
             ), "Lazy proxies were NOT resolved even with translations active."
             logger.info("Confirmed lazy proxies are resolved with active translation context.")
 
@@ -1010,10 +1009,10 @@ def test_pydantic_serialization_error_with_raw_lazy_choices(lazy_choice_model):
     logger.info("Confirmed raw choices contain lazy proxies.")
 
     # --- Step 3: Manually Create FieldInfo with Raw Choices ---
-    # faulty_field_info = FieldInfo(
-    #     annotation=str,  # Type doesn't matter much here, focus is on schema extra
-    #     json_schema_extra={"choices": raw_choices},
-    # )
+    faulty_field_info = FieldInfo(
+        annotation=str,  # Type doesn't matter much here, focus is on schema extra
+        json_schema_extra={"choices": raw_choices},
+    )
 
     # --- Step 4: Create a Model and Trigger Schema Generation ---
     class ModelWithRawLazyChoices(BaseModel):

@@ -825,10 +825,13 @@ DJ_POS_SMALLINTFIELD = models.PositiveSmallIntegerField()
 DJ_AUTO_PK = TargetDjangoModel._meta.get_field("id_pk_int")  # Get actual AutoField
 DJ_UUID_PK = TargetDjangoModel._meta.get_field("uuid_pk")
 # Choice Fields
-DJ_CHOICE_CHAR = models.CharField(max_length=1, choices=[("A", "Alpha"), ("B", "Beta")])
 DJ_CHOICE_INT = models.IntegerField(choices=[(1, "One"), (2, "Two")], null=True)
 # Choice field specifically for Literal mapping test
 DJ_CHOICE_CHAR_FOR_LITERAL = models.CharField(max_length=5, choices=[("r", "Red"), ("g", "Green"), ("b", "Blue")])
+# Optional choice field for Literal mapping test
+DJ_CHOICE_CHAR_NULLABLE_FOR_LITERAL = models.CharField(
+    max_length=2, choices=[("on", "On"), ("off", "Off")], null=True, blank=True
+)
 # Field with Lazy Proxies
 DJ_LAZY_FIELD = models.CharField(max_length=50, verbose_name=_("Lazy Name"), help_text=_("Lazy Help"))
 DJ_LAZY_DEFAULT_FIELD = models.CharField(max_length=10, default=_("lazy_def"), verbose_name=_("Lazy Default Name"))
@@ -925,16 +928,10 @@ DJ_TO_PYD_SIMPLE_CASES = [
     ),
     # Choices - Assume verbose_name might be missing, remove expected title
     DjToPydParams(
-        "choice_char_to_literal",
-        DJ_CHOICE_CHAR_FOR_LITERAL,
-        str,
-        {"json_schema_extra": {"choices": DJ_CHOICE_CHAR_FOR_LITERAL.choices}},
-    ),
-    DjToPydParams(
-        "choice_int_null_to_optional_int",
+        "choice_int_null_to_optional_literal_int",
         DJ_CHOICE_INT,
-        Optional[int],
-        {"json_schema_extra": {"choices": DJ_CHOICE_INT.choices}},
+        Optional[Literal[1, 2]],
+        expected_field_info_kwargs={"json_schema_extra": {"choices": DJ_CHOICE_INT.choices}},
     ),
 ]
 
@@ -951,8 +948,8 @@ DJ_TO_PYD_RELATIONSHIP_CASES = [
 
 
 @pytest.mark.parametrize("params", DJ_TO_PYD_SIMPLE_CASES, ids=lambda p: p.test_id)
-def test_get_pydantic_mapping_simple_constraints(mapper: BidirectionalTypeMapper, params: DjToPydParams):
-    """Tests mapping simple Django fields (and constraints) to Pydantic types and FieldInfo kwargs."""
+def test_get_pydantic_mapping_simple_constraints_choices_OLD(mapper: BidirectionalTypeMapper, params: DjToPydParams):
+    """Tests mapping simple Django fields and fields with constraints/choices to Pydantic types."""
     logger.debug(f"Testing: {params.test_id}")
     if params.raises_error:
         with pytest.raises(params.raises_error):

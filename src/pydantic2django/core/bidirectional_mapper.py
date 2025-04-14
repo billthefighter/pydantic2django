@@ -688,6 +688,29 @@ class BidirectionalTypeMapper:
         # --- Determine Final Pydantic Type Adjustments --- #
         # (Relationships, AutoPK, Optional wrapper)
 
+        # Handle choices FIRST to determine the core type before Optional wrapping
+        if is_choices:
+            # Default to base type, override if valid choices found
+            final_pydantic_type = base_instance_unit.python_type
+            if dj_field.choices:  # Explicit check before iteration
+                try:
+                    choice_values = tuple(choice[0] for choice in dj_field.choices)
+                    if choice_values:  # Ensure the tuple is not empty
+                        final_pydantic_type = Literal[choice_values]  # type: ignore
+                        logger.debug(f"Mapped choices for '{dj_field.name}' to Pydantic type: {final_pydantic_type}")
+                    else:
+                        logger.warning(
+                            f"Field '{dj_field.name}' has choices defined, but extracted values are empty. Falling back."
+                        )
+                        # Keep final_pydantic_type as base type
+                except Exception as e:
+                    logger.warning(f"Failed to extract choices for field '{dj_field.name}'. Error: {e}. Falling back.")
+                    # Keep final_pydantic_type as base type
+            # If dj_field.choices was None/empty initially, final_pydantic_type remains the base type
+        else:
+            # Get the base Pydantic type from this unit if not choices
+            final_pydantic_type = base_instance_unit.python_type
+
         # 1. Handle Relationships first, as they determine the core type
         if base_unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
             related_dj_model = getattr(dj_field, "related_model", None)
@@ -707,7 +730,8 @@ class BidirectionalTypeMapper:
                 # This is complex and potentially fragile.
                 # For now, let's use a placeholder or raise an error if needed strictly.
                 # Sticking with the base type (e.g., Any or int for PK) might be safer without context.
-                target_pydantic_model = Any  # Safer fallback for 'self' without full context
+                # Use the base type (likely PK int/uuid) as the fallback type here
+                target_pydantic_model = base_instance_unit.python_type
                 logger.debug(f"Using Any as placeholder for 'self' reference '{dj_field.name}'")
             else:
                 target_pydantic_model = self.relationship_accessor.get_pydantic_model_for_django(related_dj_model)
@@ -724,7 +748,9 @@ class BidirectionalTypeMapper:
                 if base_unit_cls == ManyToManyFieldMapping:
                     final_pydantic_type = list[target_pydantic_model]
                 else:  # FK or O2O
-                    final_pydantic_type = target_pydantic_model
+                    # Keep the PK type (e.g., int) if target model not found,
+                    # otherwise use the target Pydantic model type.
+                    final_pydantic_type = target_pydantic_model  # This should now be the related model type
                 logger.debug(f"Mapped relationship field '{dj_field.name}' to Pydantic type: {final_pydantic_type}")
 
         # 2. AutoPK override (after relationship resolution)
@@ -738,7 +764,10 @@ class BidirectionalTypeMapper:
 
         # 3. Apply Optional[...] wrapper if necessary (AFTER relationship/AutoPK)
         # Do not wrap M2M lists or already Optional AutoPKs in Optional[] again.
-        if is_optional and not is_auto_pk and base_unit_cls != ManyToManyFieldMapping:
+        # Also, don't wrap if the type is already Literal (choices handled Optionality) - NO, wrap Literal too if null=True
+        if (
+            is_optional and not is_auto_pk and base_unit_cls != ManyToManyFieldMapping
+        ):  # Check if is_choices? No, optional applies to literal too.
             origin = get_origin(final_pydantic_type)
             args = get_args(final_pydantic_type)
             is_already_optional = origin is Optional or origin is UnionType and type(None) in args
@@ -749,9 +778,9 @@ class BidirectionalTypeMapper:
 
         # --- Generate FieldInfo Kwargs --- #
         # Use EnumFieldMapping logic for kwargs ONLY if choices exist,
-        # otherwise use the base unit determined earlier.
-        kwargs_unit_cls = EnumFieldMapping if is_choices else base_unit_cls
-        instance_unit = kwargs_unit_cls()  # Instantiate the correct unit for kwargs generation
+        # otherwise use the base unit determined earlier. # --> NO, always use base unit for kwargs now. Literal type handles choices.
+        # kwargs_unit_cls = EnumFieldMapping if is_choices else base_unit_cls # OLD logic
+        instance_unit = base_unit_cls()  # Use the base unit (e.g., StrFieldMapping) for base kwargs
 
         field_info_kwargs = instance_unit.django_to_pydantic_field_info_kwargs(dj_field)
 
@@ -763,6 +792,19 @@ class BidirectionalTypeMapper:
             field_info_kwargs["description"] = str(field_info_kwargs["description"])
             logger.debug(f"Ensured description is str for '{dj_field.name}': {field_info_kwargs['description']}")
         # --- End Casting --- #
+
+        # --- Keep choices in json_schema_extra even when using Literal ---
+        # This preserves the (value, label) mapping as metadata alongside the Literal type.
+        if (
+            is_choices
+            and "json_schema_extra" in field_info_kwargs
+            and "choices" in field_info_kwargs["json_schema_extra"]
+        ):
+            logger.debug(f"Kept choices in json_schema_extra for Literal field '{dj_field.name}'")
+        elif is_choices:
+            logger.debug(
+                f"Field '{dj_field.name}' has choices, but they weren't added to json_schema_extra by the mapping unit."
+            )
 
         # Clean up redundant `default=None` for Optional fields handled by Pydantic v2.
         # Only pop default=None if the field is Optional (and not an AutoPK, though autoPK sets default=None anyway)

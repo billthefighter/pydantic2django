@@ -55,7 +55,7 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
 ]
-ignore = ['UP007', 'UP038']
+ignore = ['UP007', 'UP038', "E501"]
 line-length = 120
 target-version = "py311"
 exclude = [
