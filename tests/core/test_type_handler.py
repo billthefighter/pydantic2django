@@ -194,7 +194,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type=List[str],
                     expected_output={
                         "type_str": "List[str]",
-                        "type_obj": str,
+                        "type_obj": List[str],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},
@@ -210,7 +210,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type=list[float],  # Use modern type hint if possible
                     expected_output={
                         "type_str": "List[float]",  # format_type_string prefers List
-                        "type_obj": float,
+                        "type_obj": List[float],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},  # Should still detect List needed
@@ -226,7 +226,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type=Optional[List[bool]],
                     expected_output={
                         "type_str": "Optional[List[bool]]",
-                        "type_obj": bool,
+                        "type_obj": Optional[List[bool]],
                         "is_optional": True,
                         "is_list": True,
                         "imports": {"typing": ["List", "Optional"]},
@@ -345,7 +345,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type="list_basic_dataclass",  # Map key
                     expected_output={
                         "type_str": "List[BasicDC]",
-                        "type_obj": lambda dc: dc,  # Expect the class itself
+                        "type_obj": lambda dc: List[dc],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {
@@ -365,7 +365,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type="optional_list_basic_dataclass",  # Map key
                     expected_output={
                         "type_str": "Optional[List[BasicDC]]",
-                        "type_obj": lambda dc: dc,  # Expect the class itself
+                        "type_obj": lambda dc: Optional[List[dc]],
                         "is_optional": True,
                         "is_list": True,
                         "imports": {

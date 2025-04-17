@@ -3,6 +3,7 @@ import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import is_dataclass
+from functools import reduce
 from types import UnionType
 from typing import Annotated, Any, Literal, Optional, TypeVar, Union, get_args, get_origin
 
@@ -302,7 +303,11 @@ class TypeHandler:
                     current_type = non_none_args[0]  # Simplify Union[T, None] to T
                 elif len(non_none_args) > 1:
                     # Use typing.Union to rebuild for consistency
-                    current_type = Union[non_none_args]
+                    # current_type = Union[non_none_args] # Original incorrect syntax
+                    # current_type = Union[tuple(non_none_args)] # Also incorrect
+                    # current_type = Union[*non_none_args] # Still incorrect for linter?
+                    # --- Attempt using UnionType with reduce --- #
+                    current_type = reduce(lambda x, y: x | y, non_none_args)
                 else:  # pragma: no cover
                     # Should not happen if NoneType was in args
                     current_type = Any
@@ -334,6 +339,43 @@ class TypeHandler:
         # At this point, current_type should be the base type (int, str, datetime, Any, etc.)
         # or a complex type we don't simplify further (like a raw Union or a specific class)
         base_type_obj = current_type
+
+        # --- FIX: If the original type was a list, ensure base_type_obj reflects the *List* --- #
+        # The simplification loop above sets current_type to the *inner* type of the list.
+        # We need the actual List type for the mapper logic.
+        if is_list:
+            # Determine the simplified inner type from the end of the loop
+            simplified_inner_type = base_type_obj
+
+            # Check if the original type involved Optional wrapping the list
+            # A simple check: was is_optional also flagged?
+            if is_optional:
+                # Reconstruct Optional[List[SimplifiedInner]]
+                reconstructed_type = Optional[list[simplified_inner_type]]
+                logger.debug(
+                    f"  Original was Optional[List-like]. Reconstructing Optional[List[...]] "
+                    f"around simplified inner type {simplified_inner_type!r} -> {reconstructed_type!r}"
+                )
+            else:
+                # Reconstruct List[SimplifiedInner]
+                reconstructed_type = list[simplified_inner_type]
+                logger.debug(
+                    f"  Original was List-like (non-optional). Reconstructing List[...] "
+                    f"around simplified inner type {simplified_inner_type!r} -> {reconstructed_type!r}"
+                )
+
+            # Check against original type structure (might be more robust but complex?)
+            # original_origin = get_origin(field_type)
+            # if original_origin is Optional and get_origin(get_args(field_type)[0]) in (list, Sequence):
+            #     # Handle Optional[List[...]] structure
+            # elif original_origin in (list, Sequence):
+            #     # Handle List[...] structure
+            # else:
+            #     # Handle complex cases like Annotated[Optional[List[...]]]
+
+            base_type_obj = reconstructed_type
+
+        # --- End FIX --- #
 
         # Add check for Callable simplification
         origin = get_origin(base_type_obj)
