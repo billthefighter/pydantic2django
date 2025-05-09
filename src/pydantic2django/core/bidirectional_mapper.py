@@ -26,6 +26,7 @@ from pydantic.fields import FieldInfo
 #     RelationshipConversionAccessor, PydanticRelatedFieldType, PydanticListOfRelated
 # )
 from pydantic2django.core.relationships import RelationshipConversionAccessor
+from pydantic2django.core.typing import TypeHandler
 
 from .mapping_units import (  # Import the mapping units
     AutoFieldMapping,
@@ -420,6 +421,302 @@ class BidirectionalTypeMapper:
         )
         self._django_cache[dj_field_type] = None
         return None
+
+    def get_django_mapping(
+        self,
+        python_type: Any,
+        field_info: Optional[FieldInfo] = None,
+        parent_pydantic_model: Optional[type[BaseModel]] = None,  # Add parent model for self-ref check
+    ) -> tuple[type[models.Field], dict[str, Any]]:
+        """Get the corresponding Django Field type and constructor kwargs for a Python type."""
+        processed_type_info = TypeHandler.process_field_type(python_type)
+        original_py_type = python_type
+        is_optional = processed_type_info["is_optional"]
+        is_list = processed_type_info["is_list"]
+
+        unit_cls = None  # Initialize unit_cls
+        base_py_type = original_py_type  # Start with original
+        union_details = None  # Store details if it's a Union[BaseModel,...]
+
+        # --- Check for M2M case FIRST ---
+        if is_list:
+            # Get the type inside the list, handling Optional[List[T]]
+            list_inner_type = original_py_type
+            if is_optional:
+                args_check = get_args(list_inner_type)
+                list_inner_type = next((arg for arg in args_check if arg is not type(None)), Any)
+
+            # Now get the type *inside* the list
+            list_args = get_args(list_inner_type)  # Should be List[T]
+            inner_type = list_args[0] if list_args else Any
+
+            # Is the inner type a known related BaseModel OR Dataclass?
+            if (
+                inspect.isclass(inner_type)
+                and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))  # Added dataclass check
+                and self.relationship_accessor.is_source_model_known(inner_type)
+            ):
+                unit_cls = ManyToManyFieldMapping
+                base_py_type = inner_type  # Set base_py_type for relationship handling below
+                logger.debug(f"Detected List[RelatedModel] ({inner_type.__name__}), mapping to ManyToManyField.")
+            # Else: If it's a list of non-models, let _find_unit_for_pydantic_type handle it (likely JsonFieldMapping)
+            # --- EDIT: Explicitly handle non-M2M lists --- #
+            else:
+                # If it's a list, but not List[KnownModel], map to JSONField
+                unit_cls = JsonFieldMapping
+                base_py_type = original_py_type  # Use the original List[T] type for JSON
+                logger.debug(f"Detected List of non-models ({original_py_type}), mapping directly to JSONField.")
+
+        # --- If not M2M, find unit for the base (non-list) type ---
+        # --- EDIT: Only run this if unit_cls wasn't already set by list handling ---
+        if unit_cls is None:
+            # --- Handle Union[BaseModel,...] Signaling FIRST --- #
+            # Use the simplified base type from TypeHandler which has already unwrapped Optional/Annotated
+            union_details = None  # Initialize here
+            simplified_base_type = processed_type_info["type_obj"]
+            simplified_origin = get_origin(simplified_base_type)
+            simplified_args = get_args(simplified_base_type)
+
+            logger.debug(
+                f"Checking simplified type for Union[Model,...]: {simplified_base_type!r} (Origin: {simplified_origin})"
+            )
+            # Log the is_optional flag determined by TypeHandler
+            logger.debug(f"TypeHandler returned is_optional: {is_optional} for original type: {original_py_type!r}")
+
+            # Check if the simplified origin is Union[...] or T | U
+            if simplified_origin in (Union, UnionType) and simplified_args:
+                union_models = []
+                other_types_in_union = []
+
+                for arg in simplified_args:
+                    # We already unwrapped Optional, so no need to check for NoneType here
+                    logger.debug(f"-- Checking simplified Union arg: {arg!r}")
+
+                    # Check if arg is a known BaseModel or Dataclass
+                    is_class = inspect.isclass(arg)
+                    # Need try-except for issubclass with non-class types
+                    is_pyd_model = False
+                    is_dc = False
+                    is_known_by_accessor = False
+                    if is_class:
+                        try:
+                            is_pyd_model = issubclass(arg, BaseModel)
+                            is_dc = dataclasses.is_dataclass(arg)
+                            # Only check accessor if it's a model type
+                            if is_pyd_model or is_dc:
+                                is_known_by_accessor = self.relationship_accessor.is_source_model_known(arg)
+                        except TypeError:
+                            # issubclass might fail if arg is not a class (e.g., a type alias)
+                            pass  # Keep flags as False
+
+                    logger.debug(
+                        f"    is_class: {is_class}, is_pyd_model: {is_pyd_model}, is_dc: {is_dc}, is_known_by_accessor: {is_known_by_accessor}"
+                    )
+
+                    is_known_model_or_dc = is_class and (is_pyd_model or is_dc) and is_known_by_accessor
+
+                    if is_known_model_or_dc:
+                        logger.debug(f"    -> Added {arg.__name__} to union_models")  # More specific logging
+                        union_models.append(arg)
+                    else:
+                        # Make sure we don't add NoneType here if Optional wasn't fully handled upstream somehow
+                        if arg is not type(None):
+                            logger.debug(f"    -> Added {arg!r} to other_types_in_union")  # More specific logging
+                            other_types_in_union.append(arg)
+
+                # --- EDIT: Only set union_details IF ONLY models were found ---
+                # Add logging just before the check
+                logger.debug(
+                    f"Finished Union arg loop. union_models: {[m.__name__ for m in union_models]}, other_types: {other_types_in_union}"
+                )
+                if union_models and not other_types_in_union:
+                    logger.debug(
+                        f"Detected Union containing ONLY known models: {union_models}. Generating _union_details signal."
+                    )
+                    union_details = {
+                        "type": "multi_fk",
+                        "models": union_models,
+                        "is_optional": is_optional,  # Use the flag determined earlier
+                    }
+                    # Log the created union_details
+                    logger.debug(f"Generated union_details: {union_details!r}")
+                    # DO NOT set unit_cls here. Let _find_unit_for_pydantic_type handle it.
+                    # It should find JsonFieldMapping for the Union anyway.
+                    # base_py_type = original_py_type # Let base_py_type be determined below
+                # else: If it contains non-models, handle as a regular type
+                #     pass # Let _find_unit_for_pydantic_type find the best match
+
+            # --- Now, find the unit for the (potentially complex) base type --- #
+            # Determine the type to use for finding the unit.
+            # If it was M2M or handled List, unit_cls is already set.
+            # Otherwise, use the processed type_obj which handles Optional/Annotated.
+            type_for_unit_finding = processed_type_info["type_obj"]
+            logger.debug(f"Type used for finding unit (after Union check): {type_for_unit_finding!r}")
+
+            # --- Call _find_unit_for_pydantic_type IF unit_cls is not already set --- #
+            if unit_cls is None:
+                # Use the simplified base type after processing Optional/Annotated
+                base_py_type = type_for_unit_finding
+                logger.debug(f"Finding unit for base type: {base_py_type!r} with field_info: {field_info}")
+                unit_cls = self._find_unit_for_pydantic_type(base_py_type, field_info)
+
+        # --- Check if a unit was found --- #
+        if not unit_cls:
+            # If _find_unit_for_pydantic_type returned None, fallback to JSON
+            logger.warning(
+                f"No mapping unit found by scoring for base type {base_py_type} "
+                f"(derived from {original_py_type}), falling back to JSONField."
+            )
+            unit_cls = JsonFieldMapping
+            # Consider raising MappingError if even JSON doesn't fit?
+            # raise MappingError(f"Could not find mapping unit for Python type: {base_py_type}")
+
+        # >> Add logging to check selected unit <<
+        logger.info(f"Selected Unit for {original_py_type}: {unit_cls.__name__ if unit_cls else 'None'}")
+
+        instance_unit = unit_cls()  # Instantiate to call methods
+
+        # --- Determine Django Field Type ---
+        # Start with the type defined on the selected unit class
+        django_field_type = instance_unit.django_field_type
+
+        # --- Get Kwargs (before potentially overriding field type for Enums) ---
+        kwargs = instance_unit.pydantic_to_django_kwargs(base_py_type, field_info)
+
+        # --- Add Union Details if applicable --- #
+        # Keep this log as INFO for verification
+        logger.info(f"Checking if union_details should be added. Value: {union_details!r}")
+        if union_details:
+            logger.info("Adding _union_details to kwargs.")  # Keep this as info for now
+            kwargs["_union_details"] = union_details
+            # Skip relationship handling below if we are doing multi-FK
+            logger.debug("Added _union_details to kwargs, skipping standard relationship handling.")
+        else:
+            logger.debug("union_details is None or empty, skipping addition to kwargs.")
+            # --- Special Handling for Enums/Literals (Only if not multi-FK union) --- #
+            if unit_cls is EnumFieldMapping:
+                # Check the hint returned by the kwargs method
+                field_type_hint = kwargs.pop("_field_type_hint", None)
+                if field_type_hint and isinstance(field_type_hint, type) and issubclass(field_type_hint, models.Field):
+                    # Directly use the hinted field type if valid
+                    logger.debug(
+                        f"Using hinted field type {field_type_hint.__name__} from EnumFieldMapping for {base_py_type}."
+                    )
+                    django_field_type = field_type_hint
+                    # Ensure max_length is removed if type becomes IntegerField
+                    if django_field_type == models.IntegerField:
+                        kwargs.pop("max_length", None)
+                else:
+                    logger.warning("EnumFieldMapping selected but failed to get valid field type hint from kwargs.")
+            # else:
+            # For non-enum units, the field type is determined by the class attribute
+            # django_field_type = instance_unit.django_field_type # Already assigned
+
+            # --- Handle Relationships (Only if not multi-FK union) --- #
+            # This section needs to run *after* unit selection but *before* final nullability checks
+            if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+                # Ensure base_py_type is the related model (set during M2M check or found by find_unit for FK/O2O)
+                related_py_model = base_py_type
+
+                # Check if it's a known Pydantic BaseModel OR a known Dataclass
+                is_pyd_or_dc = inspect.isclass(related_py_model) and (
+                    issubclass(related_py_model, BaseModel) or dataclasses.is_dataclass(related_py_model)
+                )
+                if not is_pyd_or_dc:
+                    raise MappingError(
+                        f"Relationship mapping unit {unit_cls.__name__} selected, but base type {related_py_model} is not a known Pydantic model or Dataclass."
+                    )
+
+                # Check for self-reference BEFORE trying to get the Django model
+                is_self_ref = parent_pydantic_model is not None and related_py_model == parent_pydantic_model
+
+                if is_self_ref:
+                    model_ref = "self"
+                    # Get the target Django model name for logging/consistency if possible, but use 'self'
+                    # Check if the related model is a Pydantic BaseModel or a dataclass
+                    if inspect.isclass(related_py_model) and issubclass(related_py_model, BaseModel):
+                        target_django_model = self.relationship_accessor.get_django_model_for_pydantic(
+                            cast(type[BaseModel], related_py_model)
+                        )
+                    elif dataclasses.is_dataclass(related_py_model):
+                        target_django_model = self.relationship_accessor.get_django_model_for_dataclass(
+                            related_py_model
+                        )
+                    else:
+                        # This case should ideally not be reached due to earlier checks, but handle defensively
+                        target_django_model = None
+                        logger.warning(
+                            f"Self-reference check: related_py_model '{related_py_model}' is neither BaseModel nor dataclass."
+                        )
+
+                    logger.debug(
+                        f"Detected self-reference for {related_py_model.__name__ if inspect.isclass(related_py_model) else related_py_model} "
+                        f"(Django: {getattr(target_django_model, '__name__', 'N/A')}), using 'self'."
+                    )
+                else:
+                    # Get target Django model based on source type (Pydantic or Dataclass)
+                    target_django_model = None
+                    # Ensure related_py_model is actually a type before issubclass check
+                    if inspect.isclass(related_py_model) and issubclass(related_py_model, BaseModel):
+                        # Cast to satisfy type checker, as we've confirmed it's a BaseModel subclass here
+                        target_django_model = self.relationship_accessor.get_django_model_for_pydantic(
+                            cast(type[BaseModel], related_py_model)
+                        )
+                    elif dataclasses.is_dataclass(related_py_model):
+                        target_django_model = self.relationship_accessor.get_django_model_for_dataclass(
+                            related_py_model
+                        )
+
+                    if not target_django_model:
+                        raise MappingError(
+                            f"Cannot map relationship: No corresponding Django model found for source model "
+                            f"{related_py_model.__name__} in RelationshipConversionAccessor."
+                        )
+                    # Use string representation (app_label.ModelName) if possible, else name
+                    model_ref = getattr(target_django_model._meta, "label_lower", target_django_model.__name__)
+
+                kwargs["to"] = model_ref
+                django_field_type = unit_cls.django_field_type  # Re-confirm M2MField, FK, O2O type
+                # Set on_delete for FK/O2O based on Optional status
+                if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping):
+                    # Default to CASCADE for non-optional, SET_NULL for optional (matching test expectation)
+                    kwargs["on_delete"] = (
+                        models.SET_NULL if is_optional else models.CASCADE
+                    )  # Changed PROTECT to CASCADE
+                # M2M blank=True is handled by ManyToManyFieldMapping.pydantic_to_django_kwargs
+
+        # --- Final Adjustments (Nullability, etc.) --- #
+        # >> DEBUGGING <<
+        logger.info(f"[DEBUG Optional] Final adjustments for {original_py_type=}. {is_optional=}, initial {kwargs=}")
+        # >> END DEBUGGING <<
+
+        # Apply nullability. M2M fields cannot be null in Django.
+        # Apply nullability BEFORE potentially overriding blank for multi-FK
+        if django_field_type != models.ManyToManyField:
+            kwargs["null"] = is_optional
+            # Explicitly set blank based on optionality.
+            # Simplified logic: Mirror the null assignment directly
+            kwargs["blank"] = is_optional
+
+        # If it's a multi-FK union, force null=True, blank=True regardless of Optional status
+        # because only one FK can be set.
+        if union_details and union_details.get("type") == "multi_fk":
+            kwargs["null"] = True
+            kwargs["blank"] = True
+            logger.debug("Forcing null=True, blank=True for multi-FK union placeholder.")
+
+        # --- Merge Union Details if present --- #
+        # This ensures the signal for multi-FK generation persists
+        if union_details:
+            logger.debug(f"Merging _union_details {union_details} into final kwargs {kwargs}")
+            kwargs["_union_details"] = union_details
+            # Note: This might overwrite something if the mapping unit also used _union_details
+            # but that shouldn't happen with current units.
+
+        logger.debug(
+            f"FINAL RETURN from get_django_mapping: Type={django_field_type}, Kwargs={kwargs}"
+        )  # Added final state logging
+        return django_field_type, kwargs
 
     def get_pydantic_mapping(self, dj_field: models.Field) -> tuple[Any, dict[str, Any]]:
         """Get the corresponding Pydantic type hint and FieldInfo kwargs for a Django Field."""
