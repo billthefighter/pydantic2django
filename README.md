@@ -12,6 +12,10 @@ Pydantic2Django allows you to:
 
 This is particularly useful when you have a codebase that uses Pydantic models or standard Python dataclasses for data validation and representation, and you want to persist those models in a Django database.
 
+## Alternativves
+
+Consider [django-pydantic-field](https://github.com/surenkov/django-pydantic-field) which has lots of cool features but not quite as much scope (and, commensurately, not as much complexity) as this library. 
+
 ## Installation
 
 ```bash
