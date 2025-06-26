@@ -1,6 +1,8 @@
 """Base Django model class with Pydantic conversion capabilities."""
-import dataclasses  # Added import
+import dataclasses
 import importlib
+import inspect
+import logging
 import uuid
 from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
 
@@ -13,10 +15,16 @@ from ..core.context import ModelContext
 # Corrected import path for serialization
 from ..core.serialization import serialize_value
 
+logger = logging.getLogger(__name__)  # Ensure logger is defined globally for the file
+
 # Type variable for BaseModel subclasses
 PydanticT = TypeVar("PydanticT", bound=BaseModel)
 # Type variable for Dataclass instances
 DataclassT = TypeVar("DataclassT")
+
+# --- TypedClass Base Functionality ---
+
+TypedClassT = TypeVar("TypedClassT")  # Generic type for TypedClass instances
 
 
 class CommonBaseModel(models.Model):
@@ -145,6 +153,311 @@ class CommonBaseModel(models.Model):
         return fully_qualified_name
 
 
+class TypedClass2DjangoBase(CommonBaseModel):
+    """
+    Abstract base class for storing generic Python class objects in the database.
+    Inherits common fields and methods from CommonBaseModel.
+    """
+
+    _expected_typedclass_type: ClassVar[Optional[type]] = None  # For type checking specific generic classes
+
+    class Meta(CommonBaseModel.Meta):
+        abstract = True
+
+    @classmethod
+    def _check_expected_type(cls, typed_obj: Any, class_name: str) -> None:
+        """
+        Check if the object matches the expected type (if set).
+        For generic classes, this might be a simple type check or more involved
+        if we introduce markers or specific base classes for discoverable typed classes.
+        """
+        # Basic check: is it an instance of the class itself?
+        # More advanced checks could be added, e.g., if it inherits from a specific
+        # user-defined base for conversion, or has a special attribute.
+
+        expected_type = getattr(cls, "_expected_typedclass_type", None)
+        if expected_type is not None:
+            if not isinstance(typed_obj, expected_type):
+                expected_name = getattr(expected_type, "__name__", str(expected_type))
+                raise TypeError(f"Expected object of type {expected_name}, but got {class_name}")
+        # Unlike Pydantic/Dataclass, there's no single inspectable "is_generic_class" function.
+        # The discovery mechanism should handle identifying suitable classes.
+
+
+# --- Store Full TypedClass Object as JSON ---
+
+
+class TypedClass2DjangoStoreTypedClassObject(TypedClass2DjangoBase, Generic[TypedClassT]):
+    """
+    Class to store a generic Python class object in the database as JSON.
+    All data is stored in the 'data' field.
+    """
+
+    data = models.JSONField(help_text="JSON representation of the typed class object.")
+
+    class Meta(TypedClass2DjangoBase.Meta):
+        abstract = True
+        verbose_name = "Stored Typed Class Object"
+        verbose_name_plural = "Stored Typed Class Objects"
+
+    @classmethod
+    def _extract_data_from_typedclass(cls, typed_obj: TypedClassT) -> dict[str, Any]:
+        """
+        Helper to extract data from a generic class instance for serialization.
+        This is a key challenge and might need to be configurable.
+        Initial approach: inspect __init__ params and class vars with type hints.
+        More advanced: __dict__, __slots__, or a user-defined method.
+        """
+        data_dict = {}
+        # Attempt 1: Inspect __init__ parameters if they correspond to attributes
+        try:
+            sig = inspect.signature(typed_obj.__class__.__init__)
+            for param_name in sig.parameters:
+                if param_name == "self":
+                    continue
+                if hasattr(typed_obj, param_name):
+                    data_dict[param_name] = getattr(typed_obj, param_name)
+        except (TypeError, ValueError):  # Non-inspectable __init__
+            pass  # Fallback to __dict__ or other methods
+
+        # Attempt 2: Use __dict__ if available and not already covered (simplistic)
+        if hasattr(typed_obj, "__dict__") and not data_dict:  # Prioritize __init__ if it yielded something
+            data_dict.update(typed_obj.__dict__)
+
+        # Attempt 3: Iterate over class annotations if available (for class vars not in __init__ / __dict__)
+        # This part requires careful handling to avoid unintended data or methods.
+        # For now, a basic __dict__ or __init__ based extraction is safer.
+        # Consider a __slots__ check as well if present.
+
+        if not data_dict:
+            logger.warning(
+                f"Could not automatically extract data from {typed_obj.__class__.__name__}. "
+                f"Consider implementing a 'to_dict()' method or using __slots__."
+            )
+
+        return {key: serialize_value(value) for key, value in data_dict.items() if not key.startswith("_")}
+
+    @classmethod
+    def from_typedclass(
+        cls, typed_obj: TypedClassT, name: str | None = None
+    ) -> "TypedClass2DjangoStoreTypedClassObject[TypedClassT]":
+        """
+        Create a Django model instance from a generic class object.
+        """
+        obj_class, class_name, module_name, fqn = cls._get_class_info(typed_obj)
+        cls._check_expected_type(typed_obj, class_name)
+
+        data_dict = cls._extract_data_from_typedclass(typed_obj)
+        derived_name = cls._derive_name(typed_obj, name, class_name)
+
+        instance = cls(
+            name=derived_name,
+            class_path=fqn,
+            data=data_dict,
+        )
+        return instance
+
+    def to_typedclass(self) -> TypedClassT:
+        """
+        Convert the stored JSON data back to a generic class object.
+        This is highly challenging and relies on the class having a suitable __init__.
+        """
+        target_class = self._get_class()
+        stored_data = self.data if isinstance(self.data, dict) else {}
+
+        # Attempt to instantiate using stored_data.
+        # This assumes keys in stored_data match __init__ parameters.
+        # Deserialization of complex nested values from serialize_value needs to be handled.
+        # For now, assume stored data is directly usable or simple types.
+        # TODO: Implement robust deserialization matching serialize_value
+        deserialized_data = {}
+        for key, value in stored_data.items():
+            # Placeholder: a proper deserialization function is needed here.
+            # For example, if serialize_value converted datetimes to ISO strings,
+            # this would need to parse them back.
+            deserialized_data[key] = value
+
+        try:
+            # Filter data to only include parameters expected by __init__
+            init_sig = inspect.signature(target_class.__init__)
+            valid_params = {k: v for k, v in deserialized_data.items() if k in init_sig.parameters}
+
+            instance = target_class(**valid_params)
+            # For attributes not in __init__ but in stored_data (e.g. from __dict__),
+            # attempt to setattr them if they are not private.
+            for key, value in deserialized_data.items():
+                if key not in valid_params and hasattr(instance, key) and not key.startswith("_"):
+                    try:
+                        setattr(instance, key, value)
+                    except AttributeError:  # Read-only property, etc.
+                        logger.debug(
+                            f"Could not setattr {key} on {target_class.__name__} during to_typedclass reconstruction."
+                        )
+            return cast(TypedClassT, instance)
+
+        except TypeError as e:
+            raise ValueError(
+                f"Failed to instantiate typed class '{target_class.__name__}' from stored data. "
+                f"Ensure stored data keys match __init__ parameters or class attributes. Error: {e}"
+            ) from e
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during typed class reconstruction: {e}", exc_info=True)
+            raise ValueError(f"An unexpected error occurred during typed class reconstruction: {e}") from e
+
+    def update_from_typedclass(self, typed_obj: TypedClassT) -> None:
+        """
+        Update this Django model instance with new data from a generic class object.
+        """
+        fqn = self._verify_object_type_match(typed_obj)
+        if self.class_path != fqn:
+            self.class_path = fqn
+
+        self.data = self._extract_data_from_typedclass(typed_obj)
+        self.save()
+
+
+# --- Map TypedClass Object Fields to Database Fields ---
+
+
+class TypedClass2DjangoBaseClass(TypedClass2DjangoBase, Generic[TypedClassT]):
+    """
+    Base class for mapping generic Python class fields to Django model fields.
+    """
+
+    class Meta(TypedClass2DjangoBase.Meta):
+        abstract = True
+        verbose_name = "Mapped Typed Class"
+        verbose_name_plural = "Mapped Typed Classes"
+
+    @classmethod
+    def from_typedclass(
+        cls, typed_obj: TypedClassT, name: str | None = None
+    ) -> "TypedClass2DjangoBaseClass[TypedClassT]":
+        """
+        Create a Django model instance from a generic class object, mapping fields.
+        """
+        obj_class, class_name, module_name, fqn = cls._get_class_info(typed_obj)
+        cls._check_expected_type(typed_obj, class_name)
+        derived_name = cls._derive_name(typed_obj, name, class_name)
+
+        instance = cls(
+            name=derived_name,
+            class_path=fqn,
+        )
+        instance.update_fields_from_typedclass(typed_obj)
+        return instance
+
+    def update_fields_from_typedclass(self, typed_obj: TypedClassT) -> None:
+        """
+        Update this Django model's fields from a generic class object's fields.
+        """
+        if (
+            typed_obj.__class__.__module__ != self._get_class().__module__
+            or typed_obj.__class__.__name__ != self._get_class().__name__
+        ):
+            raise TypeError(
+                f"Provided object type {type(typed_obj)} does not match expected type {self.class_path} for update."
+            )
+
+        # Extract data. For mapped fields, we prefer __init__ params or direct attrs.
+        # Using __dict__ might be too broad here if not all dict items are mapped fields.
+        # Let's assume attributes corresponding to Django fields are directly accessible.
+
+        model_field_names = {
+            field.name
+            for field in self._meta.fields
+            if field.name not in ("id", "name", "class_path", "created_at", "updated_at")
+        }
+
+        for field_name in model_field_names:
+            if hasattr(typed_obj, field_name):
+                value = getattr(typed_obj, field_name)
+                setattr(self, field_name, serialize_value(value))
+            # Else: Field on Django model, not on typed_obj. Leave as is or handle.
+
+    def to_typedclass(self) -> TypedClassT:
+        """
+        Convert this Django model instance back to a generic class object.
+        """
+        target_class = self._get_class()
+        data_for_typedclass = self._get_data_for_typedclass(target_class)
+
+        try:
+            # This assumes target_class can be instantiated with these parameters.
+            # Deserialization from serialize_value needs to be considered for complex types.
+            # TODO: Implement robust deserialization
+            deserialized_data = dict(data_for_typedclass.items())  # Placeholder
+
+            init_sig = inspect.signature(target_class.__init__)
+            valid_params = {k: v for k, v in deserialized_data.items() if k in init_sig.parameters}
+
+            instance = target_class(**valid_params)
+
+            # For attributes not in __init__ but set on Django model, try to setattr
+            for key, value in deserialized_data.items():
+                if key not in valid_params and hasattr(instance, key) and not key.startswith("_"):
+                    try:
+                        setattr(instance, key, value)  # value is already deserialized_data[key]
+                    except AttributeError:
+                        logger.debug(
+                            f"Could not setattr {key} on {target_class.__name__} during to_typedclass reconstruction."
+                        )
+
+            return cast(TypedClassT, instance)
+        except TypeError as e:
+            raise ValueError(
+                f"Failed to instantiate typed class '{target_class.__name__}' from Django fields. Error: {e}"
+            ) from e
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during typed class reconstruction: {e}", exc_info=True)
+            raise ValueError(f"An unexpected error occurred during typed class reconstruction: {e}") from e
+
+    def _get_data_for_typedclass(self, target_class: type) -> dict[str, Any]:
+        """Get data from Django fields that correspond to the target class's likely attributes."""
+        data = {}
+        # Heuristic: get attributes from __init__ signature and class annotations
+        # This is a simplified version. A robust solution might need to align with TypedClassFieldFactory's discovery.
+
+        # Potential attributes: from __init__
+        potential_attrs = set()
+        try:
+            init_sig = inspect.signature(target_class.__init__)
+            potential_attrs.update(p for p in init_sig.parameters if p != "self")
+        except (TypeError, ValueError):
+            pass
+
+        # Potential attributes: from class annotations (less reliable for instance data if not in __init__)
+        # try:
+        #     annotations = inspect.get_annotations(target_class)
+        #     potential_attrs.update(annotations.keys())
+        # except Exception:
+        #     pass
+
+        for field in self._meta.fields:
+            if field.name in potential_attrs or hasattr(target_class, field.name):  # Check if it's a likely attribute
+                # TODO: Add deserialization logic based on target_class's type hint for field.name
+                data[field.name] = getattr(self, field.name)
+        return data
+
+    def update_from_typedclass(self, typed_obj: TypedClassT) -> None:
+        """
+        Update this Django model with new data from a generic class object and save.
+        """
+        fqn = self._verify_object_type_match(typed_obj)
+        if self.class_path != fqn:
+            self.class_path = fqn
+
+        self.update_fields_from_typedclass(typed_obj)
+        self.save()
+
+    def save_as_typedclass(self) -> TypedClassT:
+        """
+        Save the Django model and return the corresponding generic class object.
+        """
+        self.save()
+        return self.to_typedclass()
+
+
 class Dataclass2DjangoBase(CommonBaseModel):
     """
     Abstract base class for storing Python Dataclass objects in the database.
@@ -154,7 +467,7 @@ class Dataclass2DjangoBase(CommonBaseModel):
     # Add specific attributes or methods for dataclasses if needed later
     _expected_dataclass_type: ClassVar[Optional[type]] = None
 
-    class Meta:
+    class Meta(CommonBaseModel.Meta):
         abstract = True
 
     @classmethod
@@ -193,7 +506,7 @@ class Pydantic2DjangoBase(CommonBaseModel):
 
     _expected_pydantic_type: ClassVar[Optional[type[BaseModel]]] = None
 
-    class Meta:
+    class Meta(CommonBaseModel.Meta):
         abstract = True
 
     @classmethod
@@ -240,7 +553,7 @@ class Dataclass2DjangoStoreDataclassObject(Dataclass2DjangoBase):
 
     data = models.JSONField(help_text="JSON representation of the dataclass object.")
 
-    class Meta:
+    class Meta(Dataclass2DjangoBase.Meta):
         abstract = True
         verbose_name = "Stored Dataclass Object"
         verbose_name_plural = "Stored Dataclass Objects"
@@ -317,6 +630,7 @@ class Dataclass2DjangoStoreDataclassObject(Dataclass2DjangoBase):
                 f"Ensure stored data keys match dataclass fields. Error: {e}"
             ) from e
         except Exception as e:
+            logger.error(f"An unexpected error occurred during dataclass reconstruction: {e}", exc_info=True)
             raise ValueError(f"An unexpected error occurred during dataclass reconstruction: {e}") from e
 
         return instance
@@ -395,7 +709,7 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
 
     data = models.JSONField(help_text="JSON representation of the Pydantic object.")
 
-    class Meta:
+    class Meta(Pydantic2DjangoBase.Meta):
         abstract = True
         verbose_name = "Stored Pydantic Object"
         verbose_name_plural = "Stored Pydantic Objects"
@@ -415,37 +729,23 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         Raises:
             TypeError: If the Pydantic object is not of the correct type for this Django model
         """
-        # Get the Pydantic class and its fully qualified name
-        (
-            pydantic_class,
-            class_name,
-            module_name,
-            fully_qualified_name,
-        ) = cls._get_class_info(pydantic_obj)
-
-        # Check if this is a subclass with a specific expected type
-        cls._check_expected_type(pydantic_obj, class_name)
-
-        # Get data from the Pydantic object and serialize any nested objects
-        # Use model_dump for Pydantic v2+
         try:
-            data = pydantic_obj.model_dump()
-        except AttributeError:  # Fallback for older Pydantic? Or raise error?
-            raise TypeError("Failed to dump Pydantic model. Ensure you are using Pydantic v2+ with model_dump().")
+            obj_class, class_name, module_name, fqn = cls._get_class_info(pydantic_obj)
+            cls._check_expected_type(pydantic_obj, class_name)
 
-        serialized_data = {key: serialize_value(value) for key, value in data.items()}
+            data_dict = pydantic_obj.model_dump(mode="json")
+            derived_name = cls._derive_name(pydantic_obj, name, class_name)
 
-        # Use class_name as name if not provided and if object has a name attribute
-        derived_name = cls._derive_name(pydantic_obj, name, class_name)
+            instance = cls(name=derived_name, class_path=fqn, data=data_dict)
+            instance.sync_db_fields_from_data(save=False)
+            return instance
 
-        instance = cls(
-            name=derived_name,
-            class_path=fully_qualified_name,  # Use renamed field
-            data=serialized_data,
-        )
-        # Optionally sync fields
-        # instance.sync_db_fields_from_data(save=False)
-        return instance
+        except TypeError:
+            raise  # Re-raise TypeError as it's a specific, meaningful exception here
+        except Exception as e:
+            # Catch any other unexpected error during Pydantic object creation
+            logger.error(f"An unexpected error occurred creating Django model for '{class_name}': {e}", exc_info=True)
+            raise ValueError(f"Unexpected error creating Django model for '{class_name}'") from e
 
     def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> Any:
         """
@@ -491,10 +791,15 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         try:
             # TODO: Add deserialization logic if serialize_value performs complex transformations
             instance = pydantic_class.model_validate(final_data)
-        except Exception as e:  # Catch Pydantic validation errors etc.
-            raise ValueError(
-                f"Failed to validate/instantiate Pydantic model '{pydantic_class.__name__}' from stored data: {e}"
-            ) from e
+        except TypeError:
+            raise  # Re-raise TypeError as it's a specific, meaningful exception here
+        except Exception as e:
+            # Catch any other unexpected error during Pydantic object creation
+            logger.error(
+                f"An unexpected error occurred creating Pydantic model for '{pydantic_class.__name__}': {e}",
+                exc_info=True,
+            )
+            raise ValueError(f"Unexpected error creating Pydantic model for '{pydantic_class.__name__}'") from e
 
         return instance
 
@@ -528,10 +833,10 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
         # Use model_dump for Pydantic v2+
         try:
             data = pydantic_obj.model_dump()
-        except AttributeError:
+        except AttributeError as err:
             raise TypeError(
                 "Failed to dump Pydantic model for update. Ensure you are using Pydantic v2+ with model_dump()."
-            )
+            ) from err
 
         self.data = {key: serialize_value(value) for key, value in data.items()}
         # Optionally sync fields
@@ -583,7 +888,7 @@ class Dataclass2DjangoBaseClass(Dataclass2DjangoBase, Generic[DataclassT]):
     between the Dataclass instance and the Django model instance by matching field names.
     """
 
-    class Meta:
+    class Meta(Dataclass2DjangoBase.Meta):
         abstract = True
         verbose_name = "Mapped Dataclass"
         verbose_name_plural = "Mapped Dataclasses"
@@ -698,6 +1003,7 @@ class Dataclass2DjangoBaseClass(Dataclass2DjangoBase, Generic[DataclassT]):
                 f"Ensure required fields exist and types are compatible. Error: {e}"
             ) from e
         except Exception as e:
+            logger.error(f"An unexpected error occurred during dataclass reconstruction: {e}", exc_info=True)
             raise ValueError(f"An unexpected error occurred during dataclass reconstruction: {e}") from e
 
     def _get_data_for_dataclass(self, dataclass_type: type) -> dict[str, Any]:
@@ -705,9 +1011,9 @@ class Dataclass2DjangoBaseClass(Dataclass2DjangoBase, Generic[DataclassT]):
         data = {}
         try:
             dc_field_names = {f.name for f in dataclasses.fields(dataclass_type)}
-        except TypeError:
+        except TypeError as err:
             # Should not happen if is_dataclass check passed, but handle defensively
-            raise ValueError(f"Could not get fields for non-dataclass type '{dataclass_type.__name__}'")
+            raise ValueError(f"Could not get fields for non-dataclass type '{dataclass_type.__name__}'") from err
 
         # Add DB fields that are part of the dataclass
         for field in self._meta.fields:
@@ -751,7 +1057,7 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
     Base class for mapping Pydantic model fields to Django model fields.
     """
 
-    class Meta:
+    class Meta(Pydantic2DjangoBase.Meta):
         abstract = True
         verbose_name = "Mapped Pydantic Object"
         verbose_name_plural = "Mapped Pydantic Objects"
@@ -871,10 +1177,10 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
         # Get data from the Pydantic object
         try:
             pydantic_data = pydantic_obj.model_dump()
-        except AttributeError:
+        except AttributeError as err:
             raise TypeError(
                 "Failed to dump Pydantic model for update. Ensure you are using Pydantic v2+ with model_dump()."
-            )
+            ) from err
 
         # Get Django model fields excluding common/meta ones
         model_field_names = {
@@ -931,19 +1237,24 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
             instance = pydantic_class.model_validate(data)
             # Cast to the generic type variable
             return cast(PydanticT, instance)
-        except Exception as e:  # Catch Pydantic validation errors etc.
-            raise ValueError(
-                f"Failed to validate/instantiate Pydantic model '{pydantic_class.__name__}' from Django fields: {e}"
-            ) from e
+        except TypeError:
+            raise  # Re-raise TypeError as it's a specific, meaningful exception here
+        except Exception as e:
+            # Catch any other unexpected error during Pydantic object creation
+            logger.error(
+                f"An unexpected error occurred creating Pydantic model for '{pydantic_class.__name__}': {e}",
+                exc_info=True,
+            )
+            raise ValueError(f"Unexpected error creating Pydantic model for '{pydantic_class.__name__}'") from e
 
     def _get_data_for_pydantic(self, pydantic_class: type[BaseModel]) -> dict[str, Any]:
         """Get data from Django fields that correspond to the target Pydantic model fields."""
         data = {}
         try:
             pydantic_field_names = set(pydantic_class.model_fields.keys())
-        except AttributeError:
+        except AttributeError as err:
             # Should not happen if issubclass(BaseModel) check passed
-            raise ValueError(f"Could not get fields for non-Pydantic type '{pydantic_class.__name__}'")
+            raise ValueError(f"Could not get fields for non-Pydantic type '{pydantic_class.__name__}'") from err
 
         # Add DB fields that are part of the Pydantic model
         for field in self._meta.fields:
@@ -997,6 +1308,4 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
             The corresponding Pydantic object.
         """
         self.save()
-        # Pass None for context; assumes save_as doesn't need external context.
-        # If context might be needed, this method signature/logic needs adjustment.
-        return self.to_pydantic(context=None)  # Or handle context if necessary
+        return self.to_pydantic(context=None)

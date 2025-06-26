@@ -4,6 +4,7 @@ Functional tests for Django model generation from Python dataclasses.
 
 import pytest
 from dataclasses import dataclass
+import dataclasses
 import re  # Import re for more advanced checks
 from django.db import models
 
@@ -284,6 +285,54 @@ def test_generate_advanced_types_dataclass_model(advanced_types_dataclass):
 
     for name, type_str, kwargs in expected_fields:
         assert_field_definition(generated_code, name, type_str, kwargs, model_name=django_model_name)
+
+
+# --- Test for Callable Default Bug --- #
+
+
+@dataclass
+class ModelWithCallableDefault:
+    """A model with a lambda function as a default value for regression testing."""
+
+    field_with_lambda: dict = dataclasses.field(default_factory=lambda: {"key": "value"})
+    another_field: dict = dataclasses.field(default_factory=dict)
+    # The problematic field from the original issue
+    diff_checker: callable = dataclasses.field(default=lambda a, b: a == b)
+
+
+def test_callable_default_is_serialized_to_none():
+    """
+    Verify that a field with a callable `default` is correctly handled by serializing
+    the default value to `None` in the generated Django model. This prevents a
+    SyntaxError during generation.
+    """
+    generator = DataclassDjangoModelGenerator(
+        output_path="dummy_output.py",
+        app_label="tests",
+        filter_function=None,
+        verbose=False,
+    )
+    model_name = ModelWithCallableDefault.__name__
+    django_model_name = f"Django{model_name}"
+
+    # Generate the model definition
+    carrier = generator.setup_django_model(ModelWithCallableDefault)
+    if not carrier or not carrier.django_model:
+        pytest.fail(f"Failed to setup Django model carrier for {model_name}")
+
+    generated_code = generator.generate_model_definition(carrier)
+
+    # Assert that the problematic field is generated with the lambda source as its default
+    assert_field_definition(
+        generated_code,
+        "diff_checker",
+        "JSONField",  # Fallback mapping
+        {"default": "lambda a, b: a == b"},
+        model_name=django_model_name,
+    )
+
+    # Also check that the raw, invalid string is not present
+    assert "<function" not in generated_code
 
 
 # TODO: Add tests for metadata_dataclass if metadata['django'] overrides are implemented

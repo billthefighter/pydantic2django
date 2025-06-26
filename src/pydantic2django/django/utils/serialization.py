@@ -10,6 +10,16 @@ from .naming import get_related_model_name, sanitize_related_name
 logger = logging.getLogger(__name__)
 
 
+class RawCode:
+    """A wrapper to inject raw code strings into the generated output."""
+
+    def __init__(self, code: str):
+        self.code = code
+
+    def __repr__(self):
+        return self.code
+
+
 class FieldSerializer:
     """
     Handles extraction and processing of field attributes into string form
@@ -220,6 +230,11 @@ def generate_field_definition_string(
     sorted_kwargs = sorted(field_kwargs.items())
 
     for key, value in sorted_kwargs:
+        # Special handling for values that should be raw code
+        if isinstance(value, RawCode):
+            param_parts.append(f"{key}={value.code}")
+            continue
+
         # Special handling for relationship 'to' and 'through' fields
         if key == "to" or key == "through":
             model_name_str = None

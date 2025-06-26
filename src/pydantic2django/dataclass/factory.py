@@ -1,4 +1,5 @@
 import dataclasses
+import inspect  # Import inspect for introspection
 import logging
 import sys
 from typing import Optional, TypeVar, Union, get_args, get_origin, get_type_hints
@@ -22,7 +23,11 @@ from ..core.relationships import RelationshipConversionAccessor  # Assuming this
 # Remove old TypeMapper import
 # from ..django.mapping import TypeMapper, TypeMappingDefinition
 from ..django.utils.naming import sanitize_related_name  # Import naming utils
-from ..django.utils.serialization import FieldSerializer, generate_field_definition_string  # Import serialization utils
+from ..django.utils.serialization import (
+    FieldSerializer,
+    RawCode,
+    generate_field_definition_string,
+)
 
 # Dataclass utils? (If needed, TBD)
 # from .utils import ...
@@ -122,20 +127,48 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
             constructor_kwargs.update(django_meta_options)
 
             # --- Apply Dataclass Defaults --- #
-            # Apply default only if not already set by metadata or mapper logic
+            # This logic now handles both `default` and `default_factory`.
             if "default" not in constructor_kwargs:
-                if field_info.default is not dataclasses.MISSING:
-                    if not isinstance(field_info.default, (list, dict, set)):  # Avoid mutable defaults
-                        constructor_kwargs["default"] = field_info.default
+                default_value = field_info.default
+                if default_value is dataclasses.MISSING and field_info.default_factory is not dataclasses.MISSING:
+                    default_value = field_info.default_factory
+
+                if default_value is not dataclasses.MISSING:
+                    if callable(default_value):
+                        try:
+                            # Handle regular importable functions
+                            if (
+                                hasattr(default_value, "__module__")
+                                and hasattr(default_value, "__name__")
+                                and not default_value.__name__ == "<lambda>"
+                            ):
+                                module_name = default_value.__module__
+                                func_name = default_value.__name__
+                                # Avoid importing builtins
+                                if module_name != "builtins":
+                                    result.add_import(module_name, func_name)
+                                constructor_kwargs["default"] = func_name
+                            # Handle lambdas
+                            else:
+                                source = inspect.getsource(default_value).strip()
+                                # Remove comma if it's trailing in a lambda definition in a list/dict
+                                if source.endswith(","):
+                                    source = source[:-1]
+                                constructor_kwargs["default"] = RawCode(source)
+                        except (TypeError, OSError) as e:
+                            logger.warning(
+                                f"Could not introspect callable default for '{model_name}.{field_name}': {e}. "
+                                "Falling back to `None`."
+                            )
+                            constructor_kwargs["default"] = None
+                            constructor_kwargs["null"] = True
+                            constructor_kwargs["blank"] = True
+                    elif not isinstance(default_value, (list, dict, set)):
+                        constructor_kwargs["default"] = default_value
                     else:
                         logger.warning(
-                            f"Field {model_name}.{field_name} has mutable default {field_info.default}. Skipping Django default."
+                            f"Field {model_name}.{field_name} has mutable default {default_value}. Skipping Django default."
                         )
-                elif field_info.default_factory is not dataclasses.MISSING:
-                    # Django doesn't directly use default_factory, warn user
-                    logger.warning(
-                        f"Field {model_name}.{field_name} uses default_factory. Set Django default via metadata['django'] if needed."
-                    )
 
             # --- Handle Relationships Specifically (Adjust Kwargs) --- #
             is_relationship = issubclass(
@@ -341,7 +374,6 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
             source_module = sys.modules.get(source_model.__module__)
             globalns = getattr(source_module, "__dict__", None)
             # Revert: Use only globals, assuming types are resolvable in module scope
-            localns = None
 
             # resolved_types = get_type_hints(source_model, globalns=globalns, localns=localns)
             # logger.debug(f"Resolved types for {source_model.__name__} using {globalns=}, {localns=}: {resolved_types}")

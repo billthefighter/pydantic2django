@@ -90,3 +90,19 @@ addopts = [
 [tool.mypy]
 mypy_path = "src"
 ignore_missing_imports = true # Add this initially to handle potential stub issues
+
+# ==== BasedPyright ====
+[tool.basedpyright]
+reportUnannotatedClassAttribute = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportPossiblyUnboundVariable = "none"
+reportImplicitStringConcatenation = "none"
+reportUnusedCallResult = "none"
+reportMissingTypeArgument = "none"
+reportOptionalMemberAccess = "none"
+reportUnreachable = "error"
+reportUnusedVariable = "error"
+reportAny = "none"
+reportDeprecated = "error"
