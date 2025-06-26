@@ -15,7 +15,7 @@ import dataclasses
 import inspect
 import logging
 from types import UnionType
-from typing import Any, Literal, Optional, Union, cast, get_args, get_origin
+from typing import Any, Literal, Optional, Union, get_args, get_origin
 
 from django.db import models
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ from pydantic.fields import FieldInfo
 #     RelationshipConversionAccessor, PydanticRelatedFieldType, PydanticListOfRelated
 # )
 from pydantic2django.core.relationships import RelationshipConversionAccessor
+from pydantic2django.core.typing import TypeHandler
 
 from .mapping_units import (  # Import the mapping units
     AutoFieldMapping,
@@ -62,7 +63,6 @@ from .mapping_units import (  # Import the mapping units
     URLFieldMapping,
     UUIDFieldMapping,
 )
-from .typing import TypeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -200,35 +200,66 @@ class BidirectionalTypeMapper:
 
         # --- Prioritize Collection Types -> JSON --- #
         # Use the unwrapped origin for this check
-        unwrapped_origin = get_origin(type_to_match)
-        if unwrapped_origin in (list, dict, set, tuple):
-            logger.debug(f"Type {type_to_match} is a collection. Selecting JsonFieldMapping directly.")
-            best_unit = JsonFieldMapping
-            self._pydantic_cache[cache_key] = best_unit
-            return best_unit
+        # unwrapped_origin = get_origin(type_to_match)
+        # if unwrapped_origin in (list, dict, set, tuple):
+        #     logger.debug(f"Type {type_to_match} is a collection. Selecting JsonFieldMapping directly.")
+        #     best_unit = JsonFieldMapping
+        #     self._pydantic_cache[cache_key] = best_unit
+        #     return best_unit
 
         # --- Initialization --- #
         best_unit: Optional[type[TypeMappingUnit]] = None
         highest_score = 0.0
         scores: dict[str, float | str] = {}  # Store scores for debugging
 
-        # --- Relationship Check (Specific Model Types) BEFORE Scoring --- #
+        # --- Relationship Check (Specific Model Types and Lists of Models) BEFORE Scoring --- #
+        # Check if the type_to_match itself is a known model
         try:
-            is_known_model = (
+            is_direct_known_model = (
                 inspect.isclass(type_to_match)
                 and (issubclass(type_to_match, BaseModel) or dataclasses.is_dataclass(type_to_match))
                 and self.relationship_accessor.is_source_model_known(type_to_match)
             )
         except TypeError:
-            is_known_model = False
+            is_direct_known_model = False
 
-        if is_known_model:
+        if is_direct_known_model:
             logger.debug(
                 f"Type {type_to_match.__name__} is a known related model. Selecting ForeignKeyMapping directly."
             )
             best_unit = ForeignKeyMapping
             self._pydantic_cache[cache_key] = best_unit
             return best_unit
+
+        # Check if it's a list/set of known models (potential M2M)
+        unwrapped_origin = get_origin(type_to_match)
+        unwrapped_args = get_args(type_to_match)
+        if unwrapped_origin in (list, set) and unwrapped_args:  # Check for list or set
+            inner_type = unwrapped_args[0]
+            try:
+                is_list_of_known_models = (
+                    inspect.isclass(inner_type)
+                    and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))
+                    and self.relationship_accessor.is_source_model_known(inner_type)
+                )
+            except TypeError:
+                is_list_of_known_models = False
+                logger.error(f"TypeError checking if {inner_type} is a known model list item.", exc_info=True)
+
+            logger.debug(
+                f"Checking list/set: unwrapped_origin={unwrapped_origin}, inner_type={inner_type}, is_list_of_known_models={is_list_of_known_models}"
+            )
+            if is_list_of_known_models:
+                logger.debug(
+                    f"Type {type_to_match} is a list/set of known models ({inner_type.__name__}). Selecting ManyToManyFieldMapping directly."
+                )
+                best_unit = ManyToManyFieldMapping
+                self._pydantic_cache[cache_key] = best_unit
+                return best_unit
+            else:
+                logger.debug(
+                    f"Type {type_to_match} is a list/set, but inner type {inner_type} is not a known model. Proceeding."
+                )
 
         # --- Specific Union Handling BEFORE Scoring --- #
         unwrapped_args = get_args(type_to_match)
@@ -310,10 +341,32 @@ class BidirectionalTypeMapper:
             unwrapped_origin = get_origin(type_to_match)
             unwrapped_args = get_args(type_to_match)
 
-            # 1. Check standard collections first
+            # 1. Check standard collections first (MOVED FROM TOP)
             if unwrapped_origin in (dict, list, set, tuple) or type_to_match in (dict, list, set, tuple):
-                logger.debug(f"Type {type_to_match} is a standard collection, selecting JsonFieldMapping.")
-                best_unit = JsonFieldMapping
+                # Re-check list/set here to ensure it wasn't a list of known models handled above
+                if unwrapped_origin in (list, set) and unwrapped_args:
+                    inner_type = unwrapped_args[0]
+                    try:
+                        is_list_of_known_models_fallback = (
+                            inspect.isclass(inner_type)
+                            and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))
+                            and self.relationship_accessor.is_source_model_known(inner_type)
+                        )
+                    except TypeError:
+                        is_list_of_known_models_fallback = False
+
+                    if not is_list_of_known_models_fallback:
+                        logger.debug(f"Type {type_to_match} is a non-model collection, selecting JsonFieldMapping.")
+                        best_unit = JsonFieldMapping
+                    # else: It was a list of known models, should have been handled earlier. Log warning?
+                    else:
+                        logger.warning(f"List of known models {type_to_match} reached fallback logic unexpectedly.")
+                        # Default to M2M as a safe bet?
+                        best_unit = ManyToManyFieldMapping
+                # Handle dict/tuple
+                elif unwrapped_origin in (dict, tuple) or type_to_match in (dict, tuple):
+                    logger.debug(f"Type {type_to_match} is a dict/tuple collection, selecting JsonFieldMapping.")
+                    best_unit = JsonFieldMapping
             # 2. Check for Any
             elif type_to_match is Any:
                 logger.debug("Type is Any, selecting JsonFieldMapping.")
@@ -765,9 +818,7 @@ class BidirectionalTypeMapper:
         # 3. Apply Optional[...] wrapper if necessary (AFTER relationship/AutoPK)
         # Do not wrap M2M lists or already Optional AutoPKs in Optional[] again.
         # Also, don't wrap if the type is already Literal (choices handled Optionality) - NO, wrap Literal too if null=True
-        if (
-            is_optional and not is_auto_pk and base_unit_cls != ManyToManyFieldMapping
-        ):  # Check if is_choices? No, optional applies to literal too.
+        if is_optional and not is_auto_pk:  # Check if is_choices? No, optional applies to literal too.
             origin = get_origin(final_pydantic_type)
             args = get_args(final_pydantic_type)
             is_already_optional = origin is Optional or origin is UnionType and type(None) in args

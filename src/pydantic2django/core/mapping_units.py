@@ -1130,3 +1130,57 @@ class ManyToManyFieldMapping(TypeMappingUnit):
         kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
         kwargs["default_factory"] = list  # Ensure default is an empty list
         return kwargs
+
+
+# --- Generic Foreign Key Placeholder --- #
+
+
+class GenericForeignKeyMappingUnit(TypeMappingUnit):
+    """Represents a Generic Foreign Key relationship concept.
+
+    This unit doesn't map directly to a single Django field type on the parent
+    model or a single Pydantic type in the traditional sense. It's identified
+    structurally (e.g., List[Union[ModelA, ModelB]]) by the BidirectionalTypeMapper,
+    which signals the generator to create the necessary intermediate model and GFK fields
+    (ContentType FK, object_id, parent FK).
+    """
+
+    # Use placeholders that are unlikely to be matched directly
+    python_type = list[Any]  # Conceptual representation (List[Union[...]])
+    django_field_type = models.Field  # Placeholder, not directly used
+
+    @classmethod
+    def matches(cls, py_type: Any, field_info: Optional[FieldInfo] = None) -> float:
+        """GFK relationships are typically detected structurally, not via simple type matching.
+        This unit should generally not be selected via scoring.
+        """
+        return 0.0  # Do not participate in standard scoring selection
+
+    def pydantic_to_django_kwargs(self, py_type: Any, field_info: Optional[FieldInfo] = None) -> dict[str, Any]:
+        """Returns base kwargs. GFK details are signaled separately.
+        Actual GFK fields (ContentType, object_id) are handled by the generator.
+        """
+        # Return base attributes like verbose_name/help_text if applicable
+        kwargs = super().pydantic_to_django_kwargs(py_type, field_info)
+        # Remove attributes not relevant to the GFK *placeholder* on the parent
+        kwargs.pop("default", None)
+        kwargs.pop("max_length", None)
+        kwargs.pop("choices", None)
+        return kwargs
+
+    def django_to_pydantic_field_info_kwargs(self, dj_field: models.Field) -> dict[str, Any]:
+        """Mapping *from* a GFK conceptual field back to Pydantic is complex.
+        Typically results in a List[Union[...]]. Return base kwargs.
+        """
+        kwargs = super().django_to_pydantic_field_info_kwargs(dj_field)
+        # Represent as a list, likely defaulting to an empty list
+        kwargs["default_factory"] = list
+        # Remove attributes not relevant to the Pydantic List[Union[...]] representation
+        kwargs.pop("max_length", None)
+        kwargs.pop("max_digits", None)
+        kwargs.pop("decimal_places", None)
+        kwargs.pop("ge", None)
+        kwargs.pop("le", None)
+        # Choices might be relevant if the Union members have constraints, but complex to map here.
+        # Keep title/description if they exist.
+        return kwargs

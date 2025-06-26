@@ -22,6 +22,12 @@ from pydantic2django.core.bidirectional_mapper import (
     # Import specific units if needed for comparison, but mostly test via mapper
 )
 from pydantic2django.core.relationships import RelationshipConversionAccessor, RelationshipMapper
+from pydantic2django.core.mapping_units import (
+    ForeignKeyMapping,
+    OneToOneFieldMapping,
+    ManyToManyFieldMapping,
+    # Import others if needed by tests explicitly accessing units
+)
 
 
 # --- Test Setup ---
@@ -499,7 +505,7 @@ PYD_TO_DJ_UNION_CASES = [
         Union[UnionModelA, UnionModelB],
         models.JSONField,  # Placeholder type
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [UnionModelA, UnionModelB],
                 "is_optional": False,
@@ -514,7 +520,7 @@ PYD_TO_DJ_UNION_CASES = [
         Optional[Union[UnionModelA, UnionModelB]],
         models.JSONField,  # Placeholder type
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [UnionModelA, UnionModelB],
                 "is_optional": True,
@@ -555,7 +561,7 @@ PYD_TO_DJ_UNION_CASES = [
         Union[TextPartDelta, ToolCallPartDelta],
         models.JSONField,  # Placeholder
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [TextPartDelta, ToolCallPartDelta],
                 "is_optional": False,
@@ -571,7 +577,7 @@ PYD_TO_DJ_UNION_CASES = [
         Optional[Union[TextPartDelta, ToolCallPartDelta]],
         models.JSONField,  # Placeholder
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [TextPartDelta, ToolCallPartDelta],
                 "is_optional": True,
@@ -607,6 +613,41 @@ PYD_TO_DJ_UNION_CASES = [
     ),
 ]
 
+# --- EDIT: Add GFK List Test Cases --- #
+PYD_TO_DJ_GFK_CASES = [
+    # List[Union[ModelA, ModelB]] -> Expect JSONField placeholder + GFK signal
+    PydToDjParams(
+        "gfk_list_union_model_a_b",
+        List[Union[UnionModelA, UnionModelB]],
+        models.JSONField,  # Placeholder type, actual GFK fields generated elsewhere
+        {
+            "_gfk_details": {
+                "type": "gfk_list",
+                "models": [UnionModelA, UnionModelB],
+            },
+            "null": False,  # The placeholder JSON field itself isn't nullable by default
+            "blank": False,
+        },
+        field_info=FieldInfo(annotation=List[Union[UnionModelA, UnionModelB]]),
+    ),
+    # Optional List[Union[ModelA, ModelB]] -> JSONField placeholder (nullable) + GFK signal
+    PydToDjParams(
+        "optional_gfk_list_union_model_a_b",
+        Optional[List[Union[UnionModelA, UnionModelB]]],
+        models.JSONField,  # Placeholder type
+        {
+            "_gfk_details": {
+                "type": "gfk_list",
+                "models": [UnionModelA, UnionModelB],
+            },
+            "null": True,  # Placeholder JSON field is nullable
+            "blank": True,
+        },
+        field_info=FieldInfo(annotation=Optional[List[Union[UnionModelA, UnionModelB]]]),
+    ),
+]
+# --- End Add GFK List Test Cases --- #
+
 PYD_TO_DJ_ANNOTATED_CASES = [
     # Annotated Union of BaseModels -> Expect placeholder + signal for multi-FK generation
     PydToDjParams(
@@ -614,7 +655,7 @@ PYD_TO_DJ_ANNOTATED_CASES = [
         Annotated[Union[UnionModelA, UnionModelB], "SomeMetadata"],  # Using simple metadata
         models.JSONField,  # Placeholder type
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [UnionModelA, UnionModelB],
                 "is_optional": False,
@@ -631,7 +672,7 @@ PYD_TO_DJ_ANNOTATED_CASES = [
         Optional[Annotated[Union[UnionModelA, UnionModelB], "SomeMetadata"]],
         models.JSONField,  # Placeholder type
         {
-            "_union_details": {
+            "_model_union_details": {
                 "type": "multi_fk",
                 "models": [UnionModelA, UnionModelB],
                 "is_optional": True,  # Reflects the Optional wrapper
@@ -649,13 +690,19 @@ PYD_TO_DJ_ANNOTATED_CASES = [
     "params", PYD_TO_DJ_SIMPLE_CASES + PYD_TO_DJ_OPTIONAL_CASES + PYD_TO_DJ_LITERAL_CASES, ids=lambda p: p.test_id
 )
 def test_get_django_mapping_simple_optional_literal(mapper: BidirectionalTypeMapper, params: PydToDjParams):
-    """Tests mapping simple, Optional, and Literal Python/Pydantic types to Django fields."""
+    """Tests mapping simple Pydantic types, optional types, and literal types."""
     logger.debug(f"Testing: {params.test_id}")
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
     if params.raises_error:
         with pytest.raises(params.raises_error):
-            mapper.get_django_mapping(params.python_type, params.field_info)
+            dj_kwargs
     else:
-        dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
         assert dj_type is params.expected_dj_type, f"Expected {params.expected_dj_type}, got {dj_type}"
         # Check kwargs equality - ignore related_name for simplicity here
         dj_kwargs.pop("related_name", None)
@@ -665,9 +712,15 @@ def test_get_django_mapping_simple_optional_literal(mapper: BidirectionalTypeMap
 
 @pytest.mark.parametrize("params", PYD_TO_DJ_CONSTRAINT_CASES, ids=lambda p: p.test_id)
 def test_get_django_mapping_constraints(mapper: BidirectionalTypeMapper, params: PydToDjParams):
-    """Tests mapping Pydantic field constraints (max_length, decimal places, default) to Django kwargs."""
+    """Tests mapping Pydantic types with constraints (max_length, decimal_places etc)."""
     logger.debug(f"Testing: {params.test_id}")
-    dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
     assert dj_type is params.expected_dj_type
     assert dj_kwargs == params.expected_kwargs
 
@@ -676,42 +729,47 @@ def test_get_django_mapping_constraints(mapper: BidirectionalTypeMapper, params:
 def test_get_django_mapping_enums(mapper: BidirectionalTypeMapper, params: PydToDjParams):
     """Tests mapping Pydantic Enum types to Django fields with choices."""
     logger.debug(f"Testing: {params.test_id}")
-    dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
     assert dj_type is params.expected_dj_type
     assert dj_kwargs == params.expected_kwargs
 
 
-@pytest.mark.parametrize("params", PYD_TO_DJ_UNION_CASES, ids=lambda p: p.test_id)
-def test_get_django_mapping_unions(mapper: BidirectionalTypeMapper, params: PydToDjParams):
-    """Tests mapping complex Pydantic Union types to Django fields."""
+@pytest.mark.parametrize(
+    "params",
+    # --- EDIT: Add GFK cases and rename test function --- #
+    PYD_TO_DJ_UNION_CASES + PYD_TO_DJ_GFK_CASES,
+    ids=lambda p: p.test_id,
+)
+def test_get_django_mapping_unions_and_gfk(mapper: BidirectionalTypeMapper, params: PydToDjParams):
+    """Tests mapping complex Pydantic Union and GFK List types to Django fields."""
     logger.debug(f"Testing: {params.test_id}")
-    # Determine parent model (only needed for self-ref checks, unlikely in basic union tests)
     parent_model = None
 
-    # Pass parent_model to the mapper method
-    dj_type, dj_kwargs = mapper.get_django_mapping(
-        params.python_type, params.field_info, parent_pydantic_model=parent_model
-    )
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
 
-    # Special check for multi-FK union signals
-    if "_union_details" in params.expected_kwargs:
-        assert "_union_details" in dj_kwargs, "Missing '_union_details' signal in kwargs"
-        # Sort model lists before comparison for stability
-        expected_models = sorted(params.expected_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
-        actual_models = sorted(dj_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
-        assert actual_models == expected_models, "Model list in '_union_details' does not match"
-        # Compare the rest of the _union_details dict
-        assert dj_kwargs["_union_details"]["type"] == params.expected_kwargs["_union_details"]["type"]
-        assert dj_kwargs["_union_details"]["is_optional"] == params.expected_kwargs["_union_details"]["is_optional"]
-        # Remove _union_details before comparing the rest of the kwargs
-        del dj_kwargs["_union_details"]
-        del params.expected_kwargs["_union_details"]
-    # For non-multi-FK unions, check type directly
-    else:
-        assert dj_type is params.expected_dj_type
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
 
-    # Compare remaining kwargs
-    dj_kwargs.pop("related_name", None)  # Ignore related_name
+    if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+        related_model_str = params.expected_kwargs.get("to")
+        if related_model_str:
+            dj_kwargs["to"] = related_model_str
+        if "on_delete" in params.expected_kwargs:
+            dj_kwargs["on_delete"] = params.expected_kwargs["on_delete"]
+        elif unit_cls is ManyToManyFieldMapping and related_model_str:
+            dj_kwargs["to"] = related_model_str
+
+    assert dj_type is params.expected_dj_type
+    dj_kwargs.pop("related_name", None)
     params.expected_kwargs.pop("related_name", None)
     assert (
         dj_kwargs == params.expected_kwargs
@@ -723,17 +781,28 @@ def test_get_django_mapping_relationships(mapper: BidirectionalTypeMapper, param
     """Tests mapping Pydantic relationship types (BaseModel, List[BaseModel]) to Django fields."""
     logger.debug(f"Testing: {params.test_id}")
 
-    # Determine parent model for self-reference check
     parent_model = None
     if params.test_id == "self_ref_fk":
         parent_model = TargetPydanticModel
 
-    # Pass parent_model to the mapper method
-    dj_type, dj_kwargs = mapper.get_django_mapping(
-        params.python_type, params.field_info, parent_pydantic_model=parent_model
-    )
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
+    if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+        related_model_str = params.expected_kwargs.get("to")
+        if related_model_str:
+            dj_kwargs["to"] = related_model_str
+        if "on_delete" in params.expected_kwargs:
+            dj_kwargs["on_delete"] = params.expected_kwargs["on_delete"]
+        elif unit_cls is ManyToManyFieldMapping and related_model_str:
+            dj_kwargs["to"] = related_model_str
+
     assert dj_type is params.expected_dj_type
-    # Don't check related_name here, it's dynamically generated/checked in factory
     dj_kwargs.pop("related_name", None)
     params.expected_kwargs.pop("related_name", None)
     assert dj_kwargs == params.expected_kwargs
@@ -743,12 +812,17 @@ def test_get_django_mapping_relationships(mapper: BidirectionalTypeMapper, param
 def test_get_django_mapping_default_factories(mapper: BidirectionalTypeMapper, params: PydToDjParams):
     """Tests that Pydantic default_factory does not result in a Django default kwarg."""
     logger.debug(f"Testing: {params.test_id}")
-    dj_type, dj_kwargs = mapper.get_django_mapping(params.python_type, params.field_info)
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
     assert dj_type is params.expected_dj_type
     assert (
         "default" not in dj_kwargs
     ), f"Django default kwarg should not be present when Pydantic uses default_factory (got: {dj_kwargs.get('default')})"
-    # Check other expected kwargs are still present
     expected_kwargs_no_default = params.expected_kwargs.copy()
     expected_kwargs_no_default.pop("default", None)
     kwargs_no_default = dj_kwargs.copy()
@@ -762,37 +836,56 @@ def test_get_django_mapping_default_factories(mapper: BidirectionalTypeMapper, p
 def test_get_django_mapping_annotated_unions(mapper: BidirectionalTypeMapper, params: PydToDjParams):
     """Tests mapping complex Pydantic Annotated[Union[...]] types."""
     logger.debug(f"Testing Annotated Union: {params.test_id}")
-    parent_model = None  # Not testing self-ref here
+    parent_model = None
 
-    # Pass parent_model to the mapper method
-    dj_type, dj_kwargs = mapper.get_django_mapping(
-        params.python_type, params.field_info, parent_pydantic_model=parent_model
+    unit_cls = mapper._find_unit_for_pydantic_type(params.python_type, params.field_info)
+    if not unit_cls:
+        raise AssertionError(f"Could not find mapping unit for {params.python_type}")
+
+    dj_type = unit_cls.django_field_type
+    unit_instance = unit_cls()
+    dj_kwargs = unit_instance.pydantic_to_django_kwargs(params.python_type, params.field_info)
+
+    if unit_cls in (ForeignKeyMapping, OneToOneFieldMapping, ManyToManyFieldMapping):
+        related_model_str = params.expected_kwargs.get("to")
+        if related_model_str:
+            dj_kwargs["to"] = related_model_str
+        if "on_delete" in params.expected_kwargs:
+            dj_kwargs["on_delete"] = params.expected_kwargs["on_delete"]
+        elif unit_cls is ManyToManyFieldMapping and related_model_str:
+            dj_kwargs["to"] = related_model_str
+
+    assert dj_type is params.expected_dj_type, f"Expected placeholder type {params.expected_dj_type}, got {dj_type}"
+    assert (
+        "_model_union_details" in dj_kwargs
+    ), "Missing '_model_union_details' signal in kwargs for Annotated[Union[...]]"
+
+    expected_models = sorted(params.expected_kwargs["_model_union_details"]["models"], key=lambda m: m.__name__)
+    actual_models = sorted(dj_kwargs["_model_union_details"]["models"], key=lambda m: m.__name__)
+    assert actual_models == expected_models, "Model list in '_model_union_details' does not match"
+
+    assert dj_kwargs["_model_union_details"]["type"] == params.expected_kwargs["_model_union_details"]["type"]
+    assert (
+        dj_kwargs["_model_union_details"]["is_optional"]
+        == params.expected_kwargs["_model_union_details"]["is_optional"]
     )
 
-    # Expect JSONField placeholder and _union_details signal
-    assert dj_type is params.expected_dj_type, f"Expected placeholder type {params.expected_dj_type}, got {dj_type}"
-    assert "_union_details" in dj_kwargs, "Missing '_union_details' signal in kwargs for Annotated[Union[...]]"
-
-    # Sort model lists before comparison for stability
-    expected_models = sorted(params.expected_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
-    actual_models = sorted(dj_kwargs["_union_details"]["models"], key=lambda m: m.__name__)
-    assert actual_models == expected_models, "Model list in '_union_details' does not match"
-
-    # Compare the rest of the _union_details dict
-    assert dj_kwargs["_union_details"]["type"] == params.expected_kwargs["_union_details"]["type"]
-    assert dj_kwargs["_union_details"]["is_optional"] == params.expected_kwargs["_union_details"]["is_optional"]
-
-    # Remove _union_details before comparing the rest of the kwargs
-    del dj_kwargs["_union_details"]
+    del dj_kwargs["_model_union_details"]
     expected_kwargs_no_details = params.expected_kwargs.copy()
-    del expected_kwargs_no_details["_union_details"]
+    del expected_kwargs_no_details["_model_union_details"]
 
-    # Compare remaining kwargs (like null/blank)
-    dj_kwargs.pop("related_name", None)  # Ignore related_name
-    expected_kwargs_no_details.pop("related_name", None)
-    assert (
-        dj_kwargs == expected_kwargs_no_details
-    ), f"Remaining kwargs mismatch. Expected {expected_kwargs_no_details}, got {dj_kwargs}"
+    if "_gfk_details" in params.expected_kwargs:
+        assert "_gfk_details" in dj_kwargs, "Missing '_gfk_details' signal in kwargs"
+        expected_gfk_models = sorted(params.expected_kwargs["_gfk_details"]["models"], key=lambda m: m.__name__)
+        actual_gfk_models = sorted(dj_kwargs["_gfk_details"]["models"], key=lambda m: m.__name__)
+        assert actual_gfk_models == expected_gfk_models, "Model list in '_gfk_details' does not match"
+        assert dj_kwargs["_gfk_details"]["type"] == params.expected_kwargs["_gfk_details"]["type"]
+        del dj_kwargs["_gfk_details"]
+        del expected_kwargs_no_details["_gfk_details"]
+
+    assert dj_type is params.expected_dj_type
+    dj_kwargs.pop("related_name", None)
+    assert dj_kwargs == expected_kwargs_no_details
 
 
 # Django -> Pydantic Tests

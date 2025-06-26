@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 import datetime
 from decimal import Decimal
+from pydantic import BaseModel
 
 # Import the necessary classes from your project
 from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper, MappingError
@@ -136,6 +137,11 @@ SELECTION_TEST_CASES = [
     SelectionTestCase("collection_tuple_bool", Tuple[bool, ...], None, JsonFieldMapping),
     SelectionTestCase("collection_bare_list", list, None, JsonFieldMapping),
     SelectionTestCase("collection_bare_dict", dict, None, JsonFieldMapping),
+    # Test List[Union[ModelA, ModelB]] -> Expect JSON based on current selection logic
+    # Need dummy models for this test - Assume UnionModelA/B are defined globally or imported
+    # SelectionTestCase("collection_list_union_models", List[Union[UnionModelA, UnionModelB]], None, JsonFieldMapping),
+    # Optional List[Union[ModelA, ModelB]]
+    # SelectionTestCase("optional_collection_list_union_models", Optional[List[Union[UnionModelA, UnionModelB]]], None, JsonFieldMapping),
     # --- Optional Types (Selection should ignore Optional wrapper) ---
     SelectionTestCase("optional_int", Optional[int], None, IntFieldMapping),
     SelectionTestCase("optional_str_no_info", Optional[str], None, TextFieldMapping),
@@ -151,6 +157,35 @@ SELECTION_TEST_CASES = [
     SelectionTestCase("file_field_str", str, Field(json_schema_extra={"format": "binary"}), FileFieldMapping),
     SelectionTestCase("image_field_str", str, Field(json_schema_extra={"format": "image"}), ImageFieldMapping),
 ]
+
+
+# --- Need Dummy Models Available for Selection Tests Involving Unions ---
+# Define them here or ensure they are imported correctly
+class UnionModelA(BaseModel):
+    name: str
+    value_a: int
+
+
+class UnionModelB(BaseModel):
+    name: str
+    value_b: bool
+
+
+# --- Re-enable and Add List[Union[Model...]] Tests --- #
+SELECTION_TEST_CASES.extend(
+    [
+        SelectionTestCase(
+            "collection_list_union_models", List[Union[UnionModelA, UnionModelB]], None, JsonFieldMapping
+        ),
+        SelectionTestCase(
+            "optional_collection_list_union_models",
+            Optional[List[Union[UnionModelA, UnionModelB]]],
+            None,
+            JsonFieldMapping,
+        ),
+    ]
+)
+# --- End Add --- #
 
 
 @pytest.mark.parametrize("params", SELECTION_TEST_CASES, ids=[c.test_id for c in SELECTION_TEST_CASES])
