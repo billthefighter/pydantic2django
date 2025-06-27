@@ -15,7 +15,7 @@ import dataclasses
 import inspect
 import logging
 from types import UnionType
-from typing import Any, Literal, Optional, Union, get_args, get_origin
+from typing import Any, Literal, Optional, Union, cast, get_args, get_origin
 
 from django.db import models
 from pydantic import BaseModel
@@ -371,13 +371,6 @@ class BidirectionalTypeMapper:
             elif type_to_match is Any:
                 logger.debug("Type is Any, selecting JsonFieldMapping.")
                 best_unit = JsonFieldMapping
-            # 3. Check for Union types specifically
-            # --- EDIT: This specific Union fallback logic is now handled BEFORE scoring --- #
-            # Remove the UnionType check from here, as it's handled earlier or by general scoring.
-            # elif unwrapped_origin is UnionType and unwrapped_args:
-            #    ...
-            else:
-                logger.debug(f"Type {type_to_match} did not match any specific fallback rules.")
 
         # Final Logging
         if best_unit is None:
@@ -437,6 +430,7 @@ class BidirectionalTypeMapper:
         unit_cls = None  # Initialize unit_cls
         base_py_type = original_py_type  # Start with original
         union_details = None  # Store details if it's a Union[BaseModel,...]
+        gfk_details = None
 
         # --- Check for M2M case FIRST ---
         if is_list:
@@ -450,29 +444,51 @@ class BidirectionalTypeMapper:
             list_args = get_args(list_inner_type)  # Should be List[T]
             inner_type = list_args[0] if list_args else Any
 
-            # Is the inner type a known related BaseModel OR Dataclass?
-            if (
-                inspect.isclass(inner_type)
-                and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))  # Added dataclass check
-                and self.relationship_accessor.is_source_model_known(inner_type)
-            ):
-                unit_cls = ManyToManyFieldMapping
-                base_py_type = inner_type  # Set base_py_type for relationship handling below
-                logger.debug(f"Detected List[RelatedModel] ({inner_type.__name__}), mapping to ManyToManyField.")
-            # Else: If it's a list of non-models, let _find_unit_for_pydantic_type handle it (likely JsonFieldMapping)
-            # --- EDIT: Explicitly handle non-M2M lists --- #
-            else:
-                # If it's a list, but not List[KnownModel], map to JSONField
-                unit_cls = JsonFieldMapping
-                base_py_type = original_py_type  # Use the original List[T] type for JSON
-                logger.debug(f"Detected List of non-models ({original_py_type}), mapping directly to JSONField.")
+            # --- GFK Check: Is the inner type a Union of known models? ---
+            inner_origin = get_origin(inner_type)
+            inner_args = get_args(inner_type)
+            if inner_origin in (Union, UnionType) and inner_args:
+                union_models = []
+                other_types = [
+                    arg
+                    for arg in inner_args
+                    if not (
+                        inspect.isclass(arg)
+                        and (issubclass(arg, BaseModel) or dataclasses.is_dataclass(arg))
+                        and self.relationship_accessor.is_source_model_known(arg)
+                    )
+                ]
+                union_models = [arg for arg in inner_args if arg not in other_types]
 
-        # --- If not M2M, find unit for the base (non-list) type ---
-        # --- EDIT: Only run this if unit_cls wasn't already set by list handling ---
+                if union_models and not other_types:
+                    logger.debug(f"Detected GFK List[Union[...]] with models: {union_models}")
+                    gfk_details = {
+                        "type": "gfk",
+                        "models": union_models,
+                        "is_optional": is_optional,
+                    }
+                    unit_cls = JsonFieldMapping
+                    base_py_type = original_py_type
+
+            if unit_cls is None:
+                # --- M2M Check: Is the inner type a known related BaseModel OR Dataclass? ---
+                if (
+                    inspect.isclass(inner_type)
+                    and (issubclass(inner_type, BaseModel) or dataclasses.is_dataclass(inner_type))
+                    and self.relationship_accessor.is_source_model_known(inner_type)
+                ):
+                    unit_cls = ManyToManyFieldMapping
+                    base_py_type = inner_type
+                    logger.debug(f"Detected List[RelatedModel] ({inner_type.__name__}), mapping to ManyToManyField.")
+                else:
+                    # --- Fallback for other lists ---
+                    unit_cls = JsonFieldMapping
+                    base_py_type = original_py_type
+                    logger.debug(f"Detected List of non-models ({original_py_type}), mapping directly to JSONField.")
+
+        # --- If not a list, find unit for the base (non-list) type ---
         if unit_cls is None:
             # --- Handle Union[BaseModel,...] Signaling FIRST --- #
-            # Use the simplified base type from TypeHandler which has already unwrapped Optional/Annotated
-            union_details = None  # Initialize here
             simplified_base_type = processed_type_info["type_obj"]
             simplified_origin = get_origin(simplified_base_type)
             simplified_args = get_args(simplified_base_type)
@@ -540,21 +556,20 @@ class BidirectionalTypeMapper:
                     }
                     # Log the created union_details
                     logger.debug(f"Generated union_details: {union_details!r}")
-                    # DO NOT set unit_cls here. Let _find_unit_for_pydantic_type handle it.
-                    # It should find JsonFieldMapping for the Union anyway.
-                    # base_py_type = original_py_type # Let base_py_type be determined below
-                # else: If it contains non-models, handle as a regular type
-                #     pass # Let _find_unit_for_pydantic_type find the best match
+                    # Set unit_cls to JsonFieldMapping for model unions
+                    unit_cls = JsonFieldMapping
+                    base_py_type = original_py_type
+                    logger.debug("Setting unit_cls to JsonFieldMapping for model union")
 
             # --- Now, find the unit for the (potentially complex) base type --- #
-            # Determine the type to use for finding the unit.
-            # If it was M2M or handled List, unit_cls is already set.
-            # Otherwise, use the processed type_obj which handles Optional/Annotated.
-            type_for_unit_finding = processed_type_info["type_obj"]
-            logger.debug(f"Type used for finding unit (after Union check): {type_for_unit_finding!r}")
-
-            # --- Call _find_unit_for_pydantic_type IF unit_cls is not already set --- #
+            # Only find unit if not already set (e.g. by model union handling)
             if unit_cls is None:
+                # Determine the type to use for finding the unit.
+                # If it was M2M or handled List, unit_cls is already set.
+                # Otherwise, use the processed type_obj which handles Optional/Annotated.
+                type_for_unit_finding = processed_type_info["type_obj"]
+                logger.debug(f"Type used for finding unit (after Union check): {type_for_unit_finding!r}")
+
                 # Use the simplified base type after processing Optional/Annotated
                 base_py_type = type_for_unit_finding
                 logger.debug(f"Finding unit for base type: {base_py_type!r} with field_info: {field_info}")
@@ -583,19 +598,22 @@ class BidirectionalTypeMapper:
         # --- Get Kwargs (before potentially overriding field type for Enums) ---
         kwargs = instance_unit.pydantic_to_django_kwargs(base_py_type, field_info)
 
-        # --- Add Union Details if applicable --- #
-        # Keep this log as INFO for verification
-        logger.info(f"Checking if union_details should be added. Value: {union_details!r}")
+        # --- Add Union or GFK Details if applicable --- #
         if union_details:
-            logger.info("Adding _union_details to kwargs.")  # Keep this as info for now
+            logger.info("Adding _union_details to kwargs.")
             kwargs["_union_details"] = union_details
-            # Skip relationship handling below if we are doing multi-FK
-            logger.debug("Added _union_details to kwargs, skipping standard relationship handling.")
+            kwargs["null"] = union_details.get("is_optional", False)
+            kwargs["blank"] = union_details.get("is_optional", False)
+        elif gfk_details:
+            logger.info("Adding _gfk_details to kwargs.")
+            kwargs["_gfk_details"] = gfk_details
+            # GFK fields are placeholder JSONFields, nullability is based on Optional status
+            kwargs["null"] = is_optional
+            kwargs["blank"] = is_optional
         else:
-            logger.debug("union_details is None or empty, skipping addition to kwargs.")
-            # --- Special Handling for Enums/Literals (Only if not multi-FK union) --- #
+            logger.debug("union_details and gfk_details are None, skipping addition to kwargs.")
+            # --- Special Handling for Enums/Literals (Only if not multi-FK/GFK union) --- #
             if unit_cls is EnumFieldMapping:
-                # Check the hint returned by the kwargs method
                 field_type_hint = kwargs.pop("_field_type_hint", None)
                 if field_type_hint and isinstance(field_type_hint, type) and issubclass(field_type_hint, models.Field):
                     # Directly use the hinted field type if valid
@@ -608,9 +626,6 @@ class BidirectionalTypeMapper:
                         kwargs.pop("max_length", None)
                 else:
                     logger.warning("EnumFieldMapping selected but failed to get valid field type hint from kwargs.")
-            # else:
-            # For non-enum units, the field type is determined by the class attribute
-            # django_field_type = instance_unit.django_field_type # Already assigned
 
             # --- Handle Relationships (Only if not multi-FK union) --- #
             # This section needs to run *after* unit selection but *before* final nullability checks
@@ -683,35 +698,15 @@ class BidirectionalTypeMapper:
                     kwargs["on_delete"] = (
                         models.SET_NULL if is_optional else models.CASCADE
                     )  # Changed PROTECT to CASCADE
-                # M2M blank=True is handled by ManyToManyFieldMapping.pydantic_to_django_kwargs
 
         # --- Final Adjustments (Nullability, etc.) --- #
-        # >> DEBUGGING <<
-        logger.info(f"[DEBUG Optional] Final adjustments for {original_py_type=}. {is_optional=}, initial {kwargs=}")
-        # >> END DEBUGGING <<
-
         # Apply nullability. M2M fields cannot be null in Django.
-        # Apply nullability BEFORE potentially overriding blank for multi-FK
-        if django_field_type != models.ManyToManyField:
+        # Do not override nullability if it was already forced by a multi-FK union
+        if django_field_type != models.ManyToManyField and not union_details:
             kwargs["null"] = is_optional
             # Explicitly set blank based on optionality.
             # Simplified logic: Mirror the null assignment directly
             kwargs["blank"] = is_optional
-
-        # If it's a multi-FK union, force null=True, blank=True regardless of Optional status
-        # because only one FK can be set.
-        if union_details and union_details.get("type") == "multi_fk":
-            kwargs["null"] = True
-            kwargs["blank"] = True
-            logger.debug("Forcing null=True, blank=True for multi-FK union placeholder.")
-
-        # --- Merge Union Details if present --- #
-        # This ensures the signal for multi-FK generation persists
-        if union_details:
-            logger.debug(f"Merging _union_details {union_details} into final kwargs {kwargs}")
-            kwargs["_union_details"] = union_details
-            # Note: This might overwrite something if the mapping unit also used _union_details
-            # but that shouldn't happen with current units.
 
         logger.debug(
             f"FINAL RETURN from get_django_mapping: Type={django_field_type}, Kwargs={kwargs}"
