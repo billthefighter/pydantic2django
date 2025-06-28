@@ -3,7 +3,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from collections.abc import Callable as CollectionsCallable
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Generic, Set
+from typing import Any, Callable, TypeVar, Generic
 
 # Corrected import path for fixtures
 from tests.fixtures.fixtures import basic_dataclass, optional_dataclass, nested_dataclass
@@ -33,7 +33,7 @@ def is_valid_callable(type_str: str) -> bool:
         return False
 
     # Extract parameters and return type
-    inner_part = type_str[len("Callable[") : -1]
+    # inner_part = type_str[len("Callable[") : -1]
 
     # Properly formed Callable should have parameters and return type
     # or at least have a well-formed structure
@@ -124,7 +124,7 @@ def validate_callable_structure(type_str: str) -> bool:
     return open_brackets == close_brackets
 
 
-def imports_contain(imports: List[str], module: str, symbol: str) -> bool:
+def imports_contain(imports: list[str], module: str, symbol: str) -> bool:
     """Check if the imports list contains a specific module and symbol import."""
     for imp in imports:
         if f"from {module} import {symbol}" in imp or (module == "typing" and f"from typing import {symbol}" in imp):
@@ -143,7 +143,7 @@ class TypeHandlerTestParams:
     """Test parameters for TypeHandler tests."""
 
     input_type: Any
-    expected_output: Dict[str, Any]  # Changed from Any to Dict[str, Any]
+    expected_output: dict[str, Any]  # Changed from Any to Dict[str, Any]
     test_id: str
     description: str = ""
 
@@ -174,7 +174,7 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[int],
+                    input_type=int | None,
                     expected_output={
                         "type_str": "Optional[int]",
                         "type_obj": int,
@@ -191,10 +191,10 @@ class TestTypeHandlerProcessFieldType:
             # List types
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=List[str],
+                    input_type=list[str],
                     expected_output={
                         "type_str": "List[str]",
-                        "type_obj": List[str],
+                        "type_obj": list[str],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},
@@ -210,7 +210,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type=list[float],  # Use modern type hint if possible
                     expected_output={
                         "type_str": "List[float]",  # format_type_string prefers List
-                        "type_obj": List[float],
+                        "type_obj": list[float],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},  # Should still detect List needed
@@ -223,10 +223,10 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[List[bool]],
+                    input_type=list[bool] | None,
                     expected_output={
                         "type_str": "Optional[List[bool]]",
-                        "type_obj": Optional[List[bool]],
+                        "type_obj": list[bool] | None,
                         "is_optional": True,
                         "is_list": True,
                         "imports": {"typing": ["List", "Optional"]},
@@ -240,10 +240,10 @@ class TestTypeHandlerProcessFieldType:
             # Union types
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Union[int, str],
+                    input_type=int | str,
                     expected_output={
                         "type_str": "Union[int, str]",
-                        "type_obj": Union[int, str],
+                        "type_obj": int | str,
                         "is_optional": False,
                         "is_list": False,
                         "imports": {"typing": ["Union"]},  # Corrected: Only Union needed for original type
@@ -256,7 +256,7 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Union[int, None],  # This is Optional[int]
+                    input_type=int | None,  # This is Optional[int]
                     expected_output={
                         "type_str": "Optional[int]",
                         "type_obj": int,
@@ -345,7 +345,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type="list_basic_dataclass",  # Map key
                     expected_output={
                         "type_str": "List[BasicDC]",
-                        "type_obj": lambda dc: List[dc],
+                        "type_obj": lambda dc: list[dc],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {
@@ -365,7 +365,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type="optional_list_basic_dataclass",  # Map key
                     expected_output={
                         "type_str": "Optional[List[BasicDC]]",
-                        "type_obj": lambda dc: Optional[List[dc]],
+                        "type_obj": lambda dc: list[dc] | None,
                         "is_optional": True,
                         "is_list": True,
                         "imports": {
@@ -383,7 +383,7 @@ class TestTypeHandlerProcessFieldType:
             # Callable types
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Callable[[dict], Dict[str, Any]],
+                    input_type=Callable[[dict], dict[str, Any]],
                     expected_output={
                         "type_str": "Callable[[dict], Dict[str, Any]]",  # Raw repr, simplified
                         "type_obj": CollectionsCallable,  # Simplified to origin - Use alias
@@ -399,7 +399,7 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[Callable[[Any], Dict[str, Any]]],
+                    input_type=Callable[[Any], dict[str, Any]] | None,
                     expected_output={
                         "type_str": "Optional[Callable[[Any], Dict[str, Any]]]",  # Raw repr, simplified
                         "type_obj": CollectionsCallable,  # Simplified to origin - Use alias
@@ -424,9 +424,9 @@ class TestTypeHandlerProcessFieldType:
             "basic_dataclass": basic_dataclass,
             "optional_dataclass": optional_dataclass,
             "inner_dataclass": nested_dataclass["InnerDC"],
-            "optional_basic_dataclass": Optional[basic_dataclass],
-            "list_basic_dataclass": List[basic_dataclass],
-            "optional_list_basic_dataclass": Optional[List[basic_dataclass]],
+            "optional_basic_dataclass": basic_dataclass | None,
+            "list_basic_dataclass": list[basic_dataclass],
+            "optional_list_basic_dataclass": list[basic_dataclass] | None,
         }
         actual_input_type = type_map.get(params.input_type, params.input_type)
 
@@ -521,7 +521,7 @@ class TestTypeHandlerRequiredImports:
             # ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Dict[str, List[Any]],  # Use actual type
+                    input_type=dict[str, list[Any]],  # Use actual type
                     expected_output={"typing": ["Any", "Dict", "List"]},
                     test_id="imports-for-nested-typing-constructs",
                 ),
@@ -533,7 +533,7 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[int],
+                    input_type=int | None,
                     expected_output={"typing": ["Optional"]},
                     test_id="import-optional",
                 ),
@@ -541,7 +541,7 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=List[str],
+                    input_type=list[str],
                     expected_output={"typing": ["List"]},
                     test_id="import-list",
                 ),
@@ -549,7 +549,7 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Dict[str, Any],
+                    input_type=dict[str, Any],
                     expected_output={"typing": ["Any", "Dict"]},
                     test_id="import-dict-any",
                 ),
@@ -557,7 +557,7 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Union[int, str],
+                    input_type=int | str,
                     expected_output={"typing": ["Union"]},
                     test_id="import-union",
                 ),
@@ -603,8 +603,8 @@ class TestTypeHandlerRequiredImports:
         # Map string keys to actual types/classes from fixtures
         type_map = {
             "basic_dataclass": basic_dataclass,
-            "optional_basic_dataclass": Optional[basic_dataclass],
-            "list_basic_dataclass": List[basic_dataclass],
+            "optional_basic_dataclass": basic_dataclass | None,
+            "list_basic_dataclass": list[basic_dataclass],
             # Add others if needed by tests above that were commented out
         }
         actual_input_type = type_map.get(params.input_type, params.input_type)
