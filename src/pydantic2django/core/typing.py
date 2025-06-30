@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import is_dataclass
 from functools import reduce
 from types import UnionType
-from typing import Annotated, Any, Literal, Optional, TypeVar, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -76,12 +76,12 @@ class TypeHandler:
         args = get_args(type_obj)
 
         # Check for Optional[T] specifically first (Union[T, NoneType])
-        if origin is Union and len(args) == 2 and type(None) in args:
+        if origin in (Union, UnionType) and len(args) == 2 and type(None) in args:
             return "Optional"
 
         if origin:
             # Now check for other origins
-            if origin is Union:  # Handles Union[A, B, ...]
+            if origin in (Union, UnionType):  # Handles Union[A, B, ...]
                 return "Union"
             if origin is list:
                 return "List"  # Use capital L consistently
@@ -153,9 +153,9 @@ class TypeHandler:
                     typing_name = "Tuple"
                 elif origin is set:
                     typing_name = "Set"
-                elif origin is Union or origin is UnionType:  # Handle types.UnionType for Python 3.10+
-                    is_optional = len(args) == 2 and type(None) in args
-                    typing_name = "Optional" if is_optional else "Union"
+                elif origin in (Union, UnionType):  # Handle types.UnionType for Python 3.10+
+                    # We don't need to add Union or Optional imports anymore with | syntax
+                    typing_name = None
                 elif origin is type:
                     typing_name = "Type"
                 # Check both typing.Callable and collections.abc.Callable
@@ -235,7 +235,7 @@ class TypeHandler:
         # Clean up imports (unique, sorted)
         final_imports = {}
         for module, names in imports.items():
-            unique_names = sorted(list(set(names)))
+            unique_names = sorted(set(names))
             if unique_names:
                 final_imports[module] = unique_names
         return final_imports
@@ -246,7 +246,7 @@ class TypeHandler:
         logger.debug(f"[TypeHandler] Processing type: {field_type!r}")
         is_optional = False
         is_list = False
-        metadata: Optional[tuple[Any, ...]] = None  # Initialize metadata with type hint
+        metadata: tuple[Any, ...] | None = None  # Initialize metadata with type hint
         imports = set()
         contained_dataclasses = set()
         current_type = field_type  # Keep track of the potentially unwrapped type
@@ -302,11 +302,7 @@ class TypeHandler:
                 if len(non_none_args) == 1:
                     current_type = non_none_args[0]  # Simplify Union[T, None] to T
                 elif len(non_none_args) > 1:
-                    # Use typing.Union to rebuild for consistency
-                    # current_type = Union[non_none_args] # Original incorrect syntax
-                    # current_type = Union[tuple(non_none_args)] # Also incorrect
-                    # current_type = Union[*non_none_args] # Still incorrect for linter?
-                    # --- Attempt using UnionType with reduce --- #
+                    # Use UnionType to rebuild
                     current_type = reduce(lambda x, y: x | y, non_none_args)
                 else:  # pragma: no cover
                     # Should not happen if NoneType was in args
@@ -351,9 +347,9 @@ class TypeHandler:
             # A simple check: was is_optional also flagged?
             if is_optional:
                 # Reconstruct Optional[List[SimplifiedInner]]
-                reconstructed_type = Optional[list[simplified_inner_type]]
+                reconstructed_type = list[simplified_inner_type] | None
                 logger.debug(
-                    f"  Original was Optional[List-like]. Reconstructing Optional[List[...]] "
+                    f"  Original was Optional[List-like]. Reconstructing List[...] | None "
                     f"around simplified inner type {simplified_inner_type!r} -> {reconstructed_type!r}"
                 )
             else:
@@ -419,10 +415,10 @@ class TypeHandler:
         origin = get_origin(type_obj)
         args = get_args(type_obj)
 
-        if origin is Union and len(args) == 2 and type(None) in args:
+        if origin in (Union, UnionType) and len(args) == 2 and type(None) in args:
             # Handle Optional[T]
             inner_type_str = TypeHandler.format_type_string(next(arg for arg in args if arg is not type(None)))
-            return f"Optional[{inner_type_str}]"
+            return f"{inner_type_str} | None"
         elif origin in (list, Sequence):
             # Handle List[T] / Sequence[T]
             if args:
@@ -430,16 +426,43 @@ class TypeHandler:
                 return f"List[{inner_type_str}]"  # Prefer List for generated code
             else:
                 return "List[Any]"
-        elif origin is Union:  # Non-optional Union
+        elif origin is dict:
+            if args and len(args) == 2:
+                key_type_str = TypeHandler.format_type_string(args[0])
+                value_type_str = TypeHandler.format_type_string(args[1])
+                return f"Dict[{key_type_str}, {value_type_str}]"
+            else:
+                return "dict"
+        elif origin is Callable:
+            if args:
+                # For Callable[[A, B], R], args is ([A, B], R) in Py3.9+
+                # For Callable[A, R], args is (A, R)
+                # For Callable[[], R], args is ([], R)
+                param_part = args[0]
+                return_part = args[-1]
+
+                if param_part is ...:
+                    param_str = "..."
+                elif isinstance(param_part, list):
+                    param_types = [TypeHandler.format_type_string(p) for p in param_part]
+                    param_str = f'[{", ".join(param_types)}]'
+                else:  # Single argument
+                    param_str = f"[{TypeHandler.format_type_string(param_part)}]"
+
+                return_type_str = TypeHandler.format_type_string(return_part)
+                return f"Callable[{param_str}, {return_type_str}]"
+            else:
+                return "Callable"
+        elif origin in (Union, UnionType):  # Non-optional Union
             inner_types = [TypeHandler.format_type_string(arg) for arg in args]
-            return f"Union[{', '.join(inner_types)}]"
+            return " | ".join(inner_types)
         elif origin is Literal:
             inner_values = [repr(arg) for arg in args]
             return f"Literal[{', '.join(inner_values)}]"
         # Add other origins like Dict, Tuple, Callable if needed
 
         # Fallback to the cleaned raw representation
-        return base_name
+        return base_name.replace("collections.abc.", "")
 
     @staticmethod
     def _get_raw_type_string(type_obj: Any) -> str:

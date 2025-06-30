@@ -3,7 +3,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from collections.abc import Callable as CollectionsCallable
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, Generic, Set
+from typing import Any, Callable, TypeVar, Generic, Dict, List, Optional, Union, Set
 
 # Corrected import path for fixtures
 from tests.fixtures.fixtures import basic_dataclass, optional_dataclass, nested_dataclass
@@ -33,7 +33,7 @@ def is_valid_callable(type_str: str) -> bool:
         return False
 
     # Extract parameters and return type
-    inner_part = type_str[len("Callable[") : -1]
+    # inner_part = type_str[len("Callable[") : -1]
 
     # Properly formed Callable should have parameters and return type
     # or at least have a well-formed structure
@@ -124,7 +124,7 @@ def validate_callable_structure(type_str: str) -> bool:
     return open_brackets == close_brackets
 
 
-def imports_contain(imports: List[str], module: str, symbol: str) -> bool:
+def imports_contain(imports: list[str], module: str, symbol: str) -> bool:
     """Check if the imports list contains a specific module and symbol import."""
     for imp in imports:
         if f"from {module} import {symbol}" in imp or (module == "typing" and f"from typing import {symbol}" in imp):
@@ -143,7 +143,7 @@ class TypeHandlerTestParams:
     """Test parameters for TypeHandler tests."""
 
     input_type: Any
-    expected_output: Dict[str, Any]  # Changed from Any to Dict[str, Any]
+    expected_output: dict[str, Any]  # Changed from Any to Dict[str, Any]
     test_id: str
     description: str = ""
 
@@ -174,27 +174,43 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[int],
+                    input_type=int | None,
                     expected_output={
-                        "type_str": "Optional[int]",
+                        "type_str": "int | None",
                         "type_obj": int,
                         "is_optional": True,
                         "is_list": False,
-                        "imports": {"typing": ["Optional"]},
+                        "imports": {},
                         "contained_dataclasses": set(),
                         "metadata": None,
                     },
-                    test_id="optional-int",
+                    test_id="optional-int-pipe",
                 ),
-                id="optional-int",
+                id="optional-int-pipe",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Optional[int],
+                    expected_output={
+                        "type_str": "int | None",
+                        "type_obj": int,
+                        "is_optional": True,
+                        "is_list": False,
+                        "imports": {},
+                        "contained_dataclasses": set(),
+                        "metadata": None,
+                    },
+                    test_id="optional-int-legacy",
+                ),
+                id="optional-int-legacy",
             ),
             # List types
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=List[str],
+                    input_type=list[str],
                     expected_output={
                         "type_str": "List[str]",
-                        "type_obj": List[str],
+                        "type_obj": list[str],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},
@@ -210,7 +226,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type=list[float],  # Use modern type hint if possible
                     expected_output={
                         "type_str": "List[float]",  # format_type_string prefers List
-                        "type_obj": List[float],
+                        "type_obj": list[float],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {"typing": ["List"]},  # Should still detect List needed
@@ -225,11 +241,27 @@ class TestTypeHandlerProcessFieldType:
                 TypeHandlerTestParams(
                     input_type=Optional[List[bool]],
                     expected_output={
-                        "type_str": "Optional[List[bool]]",
-                        "type_obj": Optional[List[bool]],
+                        "type_str": "List[bool] | None",
+                        "type_obj": list[bool] | None,
                         "is_optional": True,
                         "is_list": True,
-                        "imports": {"typing": ["List", "Optional"]},
+                        "imports": {"typing": ["List"]},
+                        "contained_dataclasses": set(),
+                        "metadata": None,
+                    },
+                    test_id="optional-list-bool-legacy",
+                ),
+                id="optional-list-bool-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=list[bool] | None,
+                    expected_output={
+                        "type_str": "List[bool] | None",
+                        "type_obj": list[bool] | None,
+                        "is_optional": True,
+                        "is_list": True,
+                        "imports": {"typing": ["List"]},
                         "contained_dataclasses": set(),
                         "metadata": None,
                     },
@@ -242,11 +274,27 @@ class TestTypeHandlerProcessFieldType:
                 TypeHandlerTestParams(
                     input_type=Union[int, str],
                     expected_output={
-                        "type_str": "Union[int, str]",
-                        "type_obj": Union[int, str],
+                        "type_str": "int | str",
+                        "type_obj": int | str,
                         "is_optional": False,
                         "is_list": False,
-                        "imports": {"typing": ["Union"]},  # Corrected: Only Union needed for original type
+                        "imports": {},
+                        "contained_dataclasses": set(),
+                        "metadata": None,
+                    },
+                    test_id="union-int-str-legacy",
+                ),
+                id="union-int-str-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=int | str,
+                    expected_output={
+                        "type_str": "int | str",
+                        "type_obj": int | str,
+                        "is_optional": False,
+                        "is_list": False,
+                        "imports": {},
                         "contained_dataclasses": set(),
                         "metadata": None,
                     },
@@ -258,11 +306,27 @@ class TestTypeHandlerProcessFieldType:
                 TypeHandlerTestParams(
                     input_type=Union[int, None],  # This is Optional[int]
                     expected_output={
-                        "type_str": "Optional[int]",
+                        "type_str": "int | None",
                         "type_obj": int,
                         "is_optional": True,
                         "is_list": False,
-                        "imports": {"typing": ["Optional"]},
+                        "imports": {},
+                        "contained_dataclasses": set(),
+                        "metadata": None,
+                    },
+                    test_id="union-int-none-is-optional-legacy",
+                ),
+                id="union-int-none-is-optional-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=int | None,  # This is Optional[int]
+                    expected_output={
+                        "type_str": "int | None",
+                        "type_obj": int,
+                        "is_optional": True,
+                        "is_list": False,
+                        "imports": {},
                         "contained_dataclasses": set(),
                         "metadata": None,
                     },
@@ -322,14 +386,32 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type="optional_basic_dataclass",  # Map key
+                    input_type="optional_basic_dataclass_legacy",  # Map key
                     expected_output={
-                        "type_str": "Optional[BasicDC]",
+                        "type_str": "BasicDC | None",
                         "type_obj": lambda dc: dc,  # Expect the class itself
                         "is_optional": True,
                         "is_list": False,
                         "imports": {
-                            "typing": ["Optional"],
+                            "dataclasses": ["dataclass"],
+                            "tests.fixtures.fixtures": ["BasicDC"],
+                        },
+                        "contained_dataclasses": lambda dc: {dc},
+                        "metadata": None,
+                    },
+                    test_id="optional-basic-dataclass-legacy",
+                ),
+                id="optional-basic-dataclass-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="optional_basic_dataclass",  # Map key
+                    expected_output={
+                        "type_str": "BasicDC | None",
+                        "type_obj": lambda dc: dc,  # Expect the class itself
+                        "is_optional": True,
+                        "is_list": False,
+                        "imports": {
                             "dataclasses": ["dataclass"],
                             "tests.fixtures.fixtures": ["BasicDC"],
                         },
@@ -345,7 +427,7 @@ class TestTypeHandlerProcessFieldType:
                     input_type="list_basic_dataclass",  # Map key
                     expected_output={
                         "type_str": "List[BasicDC]",
-                        "type_obj": lambda dc: List[dc],
+                        "type_obj": lambda dc: list[dc],
                         "is_optional": False,
                         "is_list": True,
                         "imports": {
@@ -362,14 +444,34 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type="optional_list_basic_dataclass",  # Map key
+                    input_type="optional_list_basic_dataclass_legacy",  # Map key
                     expected_output={
-                        "type_str": "Optional[List[BasicDC]]",
-                        "type_obj": lambda dc: Optional[List[dc]],
+                        "type_str": "List[BasicDC] | None",
+                        "type_obj": lambda dc: list[dc] | None,
                         "is_optional": True,
                         "is_list": True,
                         "imports": {
-                            "typing": ["List", "Optional"],
+                            "typing": ["List"],
+                            "dataclasses": ["dataclass"],
+                            "tests.fixtures.fixtures": ["BasicDC"],
+                        },
+                        "contained_dataclasses": lambda dc: {dc},
+                        "metadata": None,
+                    },
+                    test_id="optional-list-basic-dataclass-legacy",
+                ),
+                id="optional-list-basic-dataclass-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type="optional_list_basic_dataclass",  # Map key
+                    expected_output={
+                        "type_str": "List[BasicDC] | None",
+                        "type_obj": lambda dc: list[dc] | None,
+                        "is_optional": True,
+                        "is_list": True,
+                        "imports": {
+                            "typing": ["List"],
                             "dataclasses": ["dataclass"],
                             "tests.fixtures.fixtures": ["BasicDC"],
                         },
@@ -383,7 +485,7 @@ class TestTypeHandlerProcessFieldType:
             # Callable types
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Callable[[dict], Dict[str, Any]],
+                    input_type=Callable[[dict], dict[str, Any]],
                     expected_output={
                         "type_str": "Callable[[dict], Dict[str, Any]]",  # Raw repr, simplified
                         "type_obj": CollectionsCallable,  # Simplified to origin - Use alias
@@ -399,13 +501,29 @@ class TestTypeHandlerProcessFieldType:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Optional[Callable[[Any], Dict[str, Any]]],
+                    input_type=Optional[Callable[[Any], dict[str, Any]]],
                     expected_output={
-                        "type_str": "Optional[Callable[[Any], Dict[str, Any]]]",  # Raw repr, simplified
+                        "type_str": "Callable[[Any], Dict[str, Any]] | None",
                         "type_obj": CollectionsCallable,  # Simplified to origin - Use alias
                         "is_optional": True,
                         "is_list": False,
-                        "imports": {"typing": ["Any", "Callable", "Dict", "Optional"]},
+                        "imports": {"typing": ["Any", "Callable", "Dict"]},
+                        "contained_dataclasses": set(),
+                        "metadata": None,
+                    },
+                    test_id="process-optional-callable-with-args-legacy",
+                ),
+                id="process-optional-callable-with-args-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=Callable[[Any], dict[str, Any]] | None,
+                    expected_output={
+                        "type_str": "Callable[[Any], Dict[str, Any]] | None",
+                        "type_obj": CollectionsCallable,  # Simplified to origin - Use alias
+                        "is_optional": True,
+                        "is_list": False,
+                        "imports": {"typing": ["Any", "Callable", "Dict"]},
                         "contained_dataclasses": set(),
                         "metadata": None,
                     },
@@ -424,9 +542,11 @@ class TestTypeHandlerProcessFieldType:
             "basic_dataclass": basic_dataclass,
             "optional_dataclass": optional_dataclass,
             "inner_dataclass": nested_dataclass["InnerDC"],
-            "optional_basic_dataclass": Optional[basic_dataclass],
-            "list_basic_dataclass": List[basic_dataclass],
-            "optional_list_basic_dataclass": Optional[List[basic_dataclass]],
+            "optional_basic_dataclass": basic_dataclass | None,
+            "list_basic_dataclass": list[basic_dataclass],
+            "optional_list_basic_dataclass": list[basic_dataclass] | None,
+            "optional_basic_dataclass_legacy": Optional[basic_dataclass],
+            "optional_list_basic_dataclass_legacy": Optional[List[basic_dataclass]],
         }
         actual_input_type = type_map.get(params.input_type, params.input_type)
 
@@ -521,7 +641,7 @@ class TestTypeHandlerRequiredImports:
             # ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Dict[str, List[Any]],  # Use actual type
+                    input_type=dict[str, list[Any]],  # Use actual type
                     expected_output={"typing": ["Any", "Dict", "List"]},
                     test_id="imports-for-nested-typing-constructs",
                 ),
@@ -534,14 +654,22 @@ class TestTypeHandlerRequiredImports:
             pytest.param(
                 TypeHandlerTestParams(
                     input_type=Optional[int],
-                    expected_output={"typing": ["Optional"]},
+                    expected_output={},
+                    test_id="import-optional-legacy",
+                ),
+                id="import-optional-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=int | None,
+                    expected_output={},
                     test_id="import-optional",
                 ),
                 id="import-optional",
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=List[str],
+                    input_type=list[str],
                     expected_output={"typing": ["List"]},
                     test_id="import-list",
                 ),
@@ -549,7 +677,7 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type=Dict[str, Any],
+                    input_type=dict[str, Any],
                     expected_output={"typing": ["Any", "Dict"]},
                     test_id="import-dict-any",
                 ),
@@ -558,7 +686,15 @@ class TestTypeHandlerRequiredImports:
             pytest.param(
                 TypeHandlerTestParams(
                     input_type=Union[int, str],
-                    expected_output={"typing": ["Union"]},
+                    expected_output={},
+                    test_id="import-union-legacy",
+                ),
+                id="import-union-legacy",
+            ),
+            pytest.param(
+                TypeHandlerTestParams(
+                    input_type=int | str,
+                    expected_output={},
                     test_id="import-union",
                 ),
                 id="import-union",
@@ -574,15 +710,14 @@ class TestTypeHandlerRequiredImports:
             ),
             pytest.param(
                 TypeHandlerTestParams(
-                    input_type="optional_basic_dataclass",  # Map key
+                    input_type="optional_basic_dataclass_legacy",  # Map key
                     expected_output={
-                        "typing": ["Optional"],
                         "dataclasses": ["dataclass"],
                         "tests.fixtures.fixtures": ["BasicDC"],
                     },
-                    test_id="import-optional-basic-dataclass",
+                    test_id="import-optional-basic-dataclass-legacy",
                 ),
-                id="import-optional-basic-dataclass",
+                id="import-optional-basic-dataclass-legacy",
             ),
             pytest.param(
                 TypeHandlerTestParams(
@@ -599,29 +734,20 @@ class TestTypeHandlerRequiredImports:
         ],
     )
     def test_get_required_imports(self, params: TypeHandlerTestParams, basic_dataclass):
-        """Test identifying required imports for different field types."""
+        """Test that get_required_imports produces the correct import map."""
         # Map string keys to actual types/classes from fixtures
         type_map = {
             "basic_dataclass": basic_dataclass,
-            "optional_basic_dataclass": Optional[basic_dataclass],
+            "optional_basic_dataclass": basic_dataclass | None,
             "list_basic_dataclass": List[basic_dataclass],
+            "optional_basic_dataclass_legacy": Optional[basic_dataclass],
             # Add others if needed by tests above that were commented out
         }
         actual_input_type = type_map.get(params.input_type, params.input_type)
-        result_imports_dict = TypeHandler.get_required_imports(actual_input_type)
-
-        # Ensure expected output is also a dictionary with sorted lists for comparison
-        expected_imports_dict = params.expected_output
-        sorted_expected_dict = {}
-        if isinstance(expected_imports_dict, dict):
-            sorted_expected_dict = {module: sorted(names) for module, names in expected_imports_dict.items() if names}
-
-        # Sort results as well
-        sorted_result_dict = {module: sorted(names) for module, names in result_imports_dict.items() if names}
-
-        assert (
-            sorted_result_dict == sorted_expected_dict
-        ), f"Test failed for {params.test_id}: Expected {sorted_expected_dict}, got {sorted_result_dict}"
+        actual_imports = TypeHandler.get_required_imports(actual_input_type)
+        assert actual_imports == params.expected_output, (
+            f"Test failed for {params.test_id}: Expected {params.expected_output}, got {actual_imports}"
+        )
 
 
 # class TestTypeHandlerSpecificIssues:
