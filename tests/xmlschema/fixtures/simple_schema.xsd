@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com"
+           xmlns:tns="http://www.example.com"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="BookType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string" />
+            <xs:element name="published_date" type="xs:date" />
+            <xs:element name="pages" type="xs:int" />
+            <xs:element name="in_print" type="xs:boolean" />
+            <xs:element name="price" type="xs:decimal" minOccurs="0" />
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID"/>
+    </xs:complexType>
+
+</xs:schema>

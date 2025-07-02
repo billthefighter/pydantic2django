@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/comprehensive"
+           xmlns:tns="http://www.example.com/comprehensive"
+           elementFormDefault="qualified">
+
+    <!-- Define Author status enumeration -->
+    <xs:simpleType name="AuthorStatus">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="active"/>
+            <xs:enumeration value="inactive"/>
+            <xs:enumeration value="deceased"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <!-- Define Book genre enumeration -->
+    <xs:simpleType name="BookGenre">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="fiction"/>
+            <xs:enumeration value="non-fiction"/>
+            <xs:enumeration value="science-fiction"/>
+            <xs:enumeration value="fantasy"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <!-- Author Type Definition -->
+    <xs:complexType name="AuthorType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string" />
+            <xs:element name="email" minOccurs="0">
+                <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                        <xs:pattern value="[^@]+@[^@]+\.[^@]+"/>
+                    </xs:restriction>
+                </xs:simpleType>
+            </xs:element>
+            <xs:element name="bio" type="xs:string" minOccurs="0" />
+            <xs:element name="status" type="tns:AuthorStatus" default="active" />
+        </xs:sequence>
+        <xs:attribute name="author_id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+    <!-- Book Type Definition -->
+    <xs:complexType name="BookType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string" />
+            <xs:element name="publication_date" type="xs:gYear" />
+            <xs:element name="pages" type="xs:positiveInteger" />
+            <xs:element name="author_ref" type="xs:IDREF" />
+            <xs:element name="genre" type="tns:BookGenre" default="fiction"/>
+            <xs:element name="summary" type="xs:string" minOccurs="0" nillable="true" />
+        </xs:sequence>
+        <xs:attribute name="isbn" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <!-- Root element that contains authors and books -->
+    <xs:element name="Library">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="authors">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="author" type="tns:AuthorType" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+                <xs:element name="books">
+                     <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="book" type="tns:BookType" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+        <!-- Define uniqueness and references for relationships -->
+        <xs:key name="AuthorKey">
+            <xs:selector xpath=".//tns:author"/>
+            <xs:field xpath="@author_id"/>
+        </xs:key>
+        <xs:keyref name="AuthorRefKey" refer="tns:AuthorKey">
+            <xs:selector xpath=".//tns:book"/>
+            <xs:field xpath="tns:author_ref"/>
+        </xs:keyref>
+    </xs:element>
+
+</xs:schema>
