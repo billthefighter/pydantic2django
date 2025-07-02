@@ -62,16 +62,28 @@ class XmlSchemaType(Enum):
     # Other types
     QNAME = "xs:QName"
     NOTATION = "xs:NOTATION"
+    ID = "xs:ID"
+    IDREF = "xs:IDREF"
+
+
+@dataclass
+class XmlSchemaImport:
+    """Represents an XSD import statement."""
+
+    namespace: str | None
+    schema_location: str | None
 
 
 @dataclass
 class XmlSchemaRestriction:
     """Represents XML Schema restrictions/facets."""
 
+    base: str | None = None
     min_length: int | None = None
     max_length: int | None = None
+    length: int | None = None
     pattern: str | None = None
-    enumeration: list[str] | None = None
+    enumeration: list[tuple[str, str]] | None = None
     min_inclusive: int | float | None = None
     max_inclusive: int | float | None = None
     min_exclusive: int | float | None = None
@@ -96,6 +108,7 @@ class XmlSchemaElement:
     abstract: bool = False
     substitution_group: str | None = None
     restrictions: XmlSchemaRestriction | None = None
+    complex_type: "XmlSchemaComplexType | None" = None
     documentation: str | None = None
     namespace: str | None = None
     schema_location: str | None = None
@@ -152,7 +165,9 @@ class XmlSchemaComplexType:
     base_type: str | None = None  # For inheritance
     mixed: bool = False  # Mixed content model
     abstract: bool = False
-    choice: bool = False  # True for choice content model, False for sequence
+    sequence: bool = False
+    choice: bool = False
+    all_elements: bool = False
     documentation: str | None = None
     schema_location: str | None = None
 
@@ -209,6 +224,7 @@ class XmlSchemaSimpleType:
     namespace: str | None = None
     base_type: XmlSchemaType | None = None
     restrictions: XmlSchemaRestriction | None = None
+    enumeration: list[tuple[str, str]] | None = None
     documentation: str | None = None
     schema_location: str | None = None
 
@@ -224,7 +240,8 @@ class XmlSchemaDefinition:
     complex_types: dict[str, XmlSchemaComplexType] = field(default_factory=dict)
     simple_types: dict[str, XmlSchemaSimpleType] = field(default_factory=dict)
     elements: dict[str, XmlSchemaElement] = field(default_factory=dict)
-    imports: list[str] = field(default_factory=list)
+    attributes: dict[str, XmlSchemaAttribute] = field(default_factory=dict)
+    imports: list[XmlSchemaImport] = field(default_factory=list)
     includes: list[str] = field(default_factory=list)
 
     # Schema linking fields

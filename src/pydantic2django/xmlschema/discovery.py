@@ -34,11 +34,9 @@ class XmlSchemaDiscovery(BaseDiscovery[XmlSchemaComplexType]):
     def _default_eligibility_filter(self, model: XmlSchemaComplexType) -> bool:
         """Apply default filtering logic for XML Schema complex types."""
         if model.abstract:
-            logger.debug(f"Filtering out abstract complex type: {model.name}")
             return False
 
         if len(model.elements) == 0 and len(model.attributes) == 0:
-            logger.debug(f"Filtering out empty complex type: {model.name}")
             return False
 
         return True
@@ -63,13 +61,18 @@ class XmlSchemaDiscovery(BaseDiscovery[XmlSchemaComplexType]):
 
         # Parse all schema files
         for schema_file in schema_files:
-            schema_def = self.schema_parser.parse_schema_file(schema_file)
-            self.parsed_schemas.append(schema_def)
+            try:
+                schema_def = self.schema_parser.parse_schema_file(schema_file)
+                self.parsed_schemas.append(schema_def)
 
-            for complex_type in schema_def.get_all_complex_types():
-                namespace = complex_type.namespace or "default"
-                qualname = f"{namespace}.{complex_type.name}"
-                self.all_models[qualname] = complex_type
+                for complex_type in schema_def.get_all_complex_types():
+                    namespace = complex_type.namespace or "default"
+                    qualname = f"{namespace}.{complex_type.name}"
+                    self.all_models[qualname] = complex_type
+
+            except XmlSchemaParseError as e:
+                logger.error(f"Failed to parse schema file {schema_file}: {e}")
+                continue
 
         logger.info(f"Discovered {len(self.all_models)} total complex types")
 

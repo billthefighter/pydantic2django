@@ -15,6 +15,7 @@ from .models import (
     XmlSchemaComplexType,
     XmlSchemaDefinition,
     XmlSchemaElement,
+    XmlSchemaImport,
     XmlSchemaRestriction,
     XmlSchemaSimpleType,
     XmlSchemaType,
@@ -130,8 +131,11 @@ class XmlSchemaParser:
         """Parse the contents of a schema element"""
         logger.info(f"Parsing contents of schema: {schema_def.schema_location}")
         for child in schema_root:
+            # Skip comments and other non-element nodes
+            if not isinstance(child.tag, str):
+                continue
+
             tag_name = self._get_local_name(child.tag)
-            logger.info(f"Found tag: {tag_name} with attributes: {child.attrib}")
 
             if tag_name == "complexType":
                 complex_type = self._parse_complex_type(child, schema_def)
@@ -157,7 +161,9 @@ class XmlSchemaParser:
                     schema_def.attributes[attribute.name] = attribute
 
             elif tag_name == "import":
-                import_info = {"namespace": child.get("namespace"), "schema_location": child.get("schemaLocation")}
+                import_info = XmlSchemaImport(
+                    namespace=child.get("namespace"), schema_location=child.get("schemaLocation")
+                )
                 schema_def.imports.append(import_info)
 
             elif tag_name == "include":
@@ -166,10 +172,10 @@ class XmlSchemaParser:
                     schema_def.includes.append(schema_location)
 
     def _parse_complex_type(
-        self, element: "etree.Element", schema_def: XmlSchemaDefinition
+        self, element: "etree.Element", schema_def: XmlSchemaDefinition, name_override: str | None = None
     ) -> XmlSchemaComplexType | None:
         """Parse a complexType element"""
-        name = element.get("name")
+        name = name_override or element.get("name")
         if not name:
             logger.warning("Skipping anonymous complex type")
             return None
@@ -187,9 +193,11 @@ class XmlSchemaParser:
         if doc_elem is not None and doc_elem.text:
             complex_type.documentation = doc_elem.text.strip()
 
+        logger.debug(f"Parsing content for complexType: {name}")
         # Parse content model (sequence, choice, all)
         for child in element:
             tag_name = self._get_local_name(child.tag)
+            logger.debug(f"  - Found tag in {name}: {tag_name}")
 
             if tag_name == "sequence":
                 complex_type.sequence = True
@@ -225,8 +233,10 @@ class XmlSchemaParser:
         self, particle: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
         """Parse sequence, choice, or all content"""
+        logger.debug(f"Parsing particle content for {complex_type.name}")
         for child in particle:
             tag_name = self._get_local_name(child.tag)
+            logger.debug(f"  - Found particle child in {complex_type.name}: {tag_name}")
 
             if tag_name == "element":
                 element = self._parse_element(child, schema_def)
@@ -236,6 +246,8 @@ class XmlSchemaParser:
             elif tag_name in ("sequence", "choice", "all"):
                 # Nested groups
                 self._parse_particle_content(child, complex_type, schema_def)
+
+        logger.debug(f"Finished particle content for {complex_type.name}. Total elements: {len(complex_type.elements)}")
 
     def _parse_element(self, element: "etree.Element", schema_def: XmlSchemaDefinition) -> XmlSchemaElement | None:
         """Parse an element definition"""
@@ -265,7 +277,7 @@ class XmlSchemaParser:
         else:
             try:
                 xml_element.max_occurs = int(xml_element.max_occurs)
-            except ValueError:
+            except (ValueError, TypeError):
                 xml_element.max_occurs = 1
 
         # Parse documentation
@@ -284,9 +296,9 @@ class XmlSchemaParser:
         if inline_complex is not None:
             # Create a synthetic name for the inline type
             synthetic_name = f"{name}_Type" if name else "InlineType"
-            inline_type = self._parse_complex_type(inline_complex, schema_def)
+            inline_type = self._parse_complex_type(inline_complex, schema_def, name_override=synthetic_name)
             if inline_type:
-                inline_type.name = synthetic_name
+                schema_def.complex_types[inline_type.name] = inline_type
                 xml_element.complex_type = inline_type
 
         # Parse restrictions (simpleType with restrictions)
@@ -306,11 +318,14 @@ class XmlSchemaParser:
     def _parse_attribute(self, element: "etree.Element", schema_def: XmlSchemaDefinition) -> XmlSchemaAttribute | None:
         """Parse an attribute definition"""
         name = element.get("name")
-        if not name:
+        ref = element.get("ref")
+
+        if not name and not ref:
+            logger.warning("Attribute without name or ref, skipping")
             return None
 
         attribute = XmlSchemaAttribute(
-            name=name,
+            name=name or ref,
             type_name=element.get("type"),
             use=element.get("use", "optional"),
             default_value=element.get("default"),
@@ -332,6 +347,7 @@ class XmlSchemaParser:
         """Parse a simpleType definition"""
         name = element.get("name")
         if not name:
+            logger.warning("Skipping anonymous simple type")
             return None
 
         simple_type = XmlSchemaSimpleType(
@@ -360,15 +376,17 @@ class XmlSchemaParser:
             for facet in restriction_elem.findall(f"{{{self.XS_NAMESPACE}}}enumeration"):
                 value = facet.get("value")
                 if value:
-                    enum_values.append(value)
+                    doc_elem = facet.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
+                    label = doc_elem.text.strip() if doc_elem is not None and doc_elem.text else value
+                    enum_values.append((value, label))
             if enum_values:
-                simple_type.enumeration_values = enum_values
+                simple_type.enumeration = enum_values
 
         return simple_type
 
     def _parse_restriction(self, restriction_elem: "etree.Element") -> XmlSchemaRestriction:
-        """Parse restriction facets"""
-        restriction = XmlSchemaRestriction()
+        """Parse a restriction element"""
+        restriction = XmlSchemaRestriction(base=restriction_elem.get("base"))
 
         # Map facet elements to restriction attributes
         facet_mapping = {
@@ -401,7 +419,11 @@ class XmlSchemaParser:
                     restriction.enumeration = []
                 value = facet_elem.get("value")
                 if value:
-                    restriction.enumeration.append(value)
+                    doc_elem = facet_elem.find(
+                        f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation"
+                    )
+                    label = doc_elem.text.strip() if doc_elem is not None and doc_elem.text else value
+                    restriction.enumeration.append((value, label))
 
         return restriction
 
@@ -414,6 +436,13 @@ class XmlSchemaParser:
             base_type = extension.get("base")
             if base_type:
                 complex_type.base_type = base_type
+
+            # Parse attributes in the extension
+            for child in extension:
+                if self._get_local_name(child.tag) == "attribute":
+                    attribute = self._parse_attribute(child, schema_def)
+                    if attribute:
+                        complex_type.attributes[attribute.name] = attribute
 
             # Parse additional content in the extension
             self._parse_particle_content(extension, complex_type, schema_def)

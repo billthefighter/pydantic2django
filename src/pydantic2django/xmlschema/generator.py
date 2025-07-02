@@ -3,16 +3,17 @@ XML Schema Django model generator.
 Main entry point for generating Django models from XML Schema files.
 """
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 
 from django.db import models
 
-from ..core.base_generator import BaseStaticGenerator
-from ..core.factories import ConversionCarrier
-from ..django.models import Xml2DjangoBaseClass
+from pydantic2django.core.base_generator import BaseStaticGenerator
+from pydantic2django.django.models import Xml2DjangoBaseClass
+
 from .discovery import XmlSchemaDiscovery
-from .factory import XmlSchemaFieldFactory, XmlSchemaFieldInfo, XmlSchemaModelFactory
+from .factory import XmlSchemaFieldInfo, XmlSchemaModelFactory
 from .models import XmlSchemaComplexType
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,7 @@ logger = logging.getLogger(__name__)
 
 class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, XmlSchemaFieldInfo]):
     """
-    Generates Django models from XML Schema files.
-
-    This is the main entry point for XML Schema to Django model conversion.
-    It follows the same pattern as StaticPydanticModelGenerator and DataclassDjangoModelGenerator.
+    Main class to orchestrate the generation of Django models from XML Schemas.
     """
 
     def __init__(
@@ -37,106 +35,79 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         base_model_class: type[models.Model] = Xml2DjangoBaseClass,
         class_name_prefix: str = "",
     ):
-        """
-        Initialize the XML Schema generator.
+        discovery = XmlSchemaDiscovery(schema_files=[Path(f) for f in schema_files])
+        model_factory = XmlSchemaModelFactory(app_label=app_label)
 
-        Args:
-            schema_files: List of XSD file paths to parse
-            output_path: Path where generated models.py will be written
-            app_label: Django app label for the generated models
-            filter_function: Optional function to filter which complex types to include
-            verbose: Enable verbose logging
-            module_mappings: Optional mapping for import remapping
-            base_model_class: Base Django model class to inherit from
-            class_name_prefix: Prefix for generated Django model names. Defaults to empty string for direct mapping.
-        """
-
-        # Initialize XML Schema-specific components
-        self.schema_files = [Path(f) for f in schema_files]
-
-        # Create discovery instance
-        self.xmlschema_discovery = XmlSchemaDiscovery(self.schema_files)
-
-        # Create field and model factories
-        from ..core.relationships import RelationshipConversionAccessor
-
-        self.relationship_accessor = RelationshipConversionAccessor()
-
-        self.xmlschema_field_factory = XmlSchemaFieldFactory(relationship_accessor=self.relationship_accessor)
-
-        self.xmlschema_model_factory = XmlSchemaModelFactory(
-            field_factory=self.xmlschema_field_factory,
-            relationship_accessor=self.relationship_accessor,
-        )
-
-        # Call parent constructor with packages as schema file paths
         super().__init__(
             output_path=output_path,
-            packages=[str(f) for f in self.schema_files],  # Pass schema files as "packages"
+            packages=[str(f) for f in schema_files],
             app_label=app_label,
-            filter_function=filter_function,
-            verbose=verbose,
-            discovery_instance=self.xmlschema_discovery,
-            model_factory_instance=self.xmlschema_model_factory,
-            module_mappings=module_mappings,
+            discovery_instance=discovery,
+            model_factory_instance=model_factory,
             base_model_class=base_model_class,
             class_name_prefix=class_name_prefix,
+            module_mappings=module_mappings,
+            verbose=verbose,
+            filter_function=filter_function,
         )
 
-        logger.info(f"XmlSchemaDjangoModelGenerator initialized with {len(self.schema_files)} schema files")
+    def _generate_file_content(self) -> str:
+        # Start with the base content (imports, etc.)
+        base_content = super()._generate_file_content()
+
+        # Render choices classes
+        choices_classes_str = []
+        for carrier in self.carriers:
+            if carrier.model_context and "choices_classes" in carrier.model_context:
+                for choices_info in carrier.model_context["choices_classes"]:
+                    class_name = choices_info["name"]
+                    choices = choices_info["choices"]
+                    lines = [f"class {class_name}(models.TextChoices):"]
+                    for value, label in choices:
+                        member_name = re.sub(r"[^a-zA-Z0-9_]", "_", label.upper())
+                        if not member_name or not member_name[0].isalpha():
+                            member_name = f"CHOICE_{member_name}"
+                        lines.append(f'    {member_name} = "{value}", "{label}"')
+                    choices_classes_str.append("\\n".join(lines))
+
+        # Find where to insert the choices classes. A bit of a hack.
+        # Let's insert them before the first 'class ' declaration of a model.
+
+        generated_models_str = self._render_django_models()
+
+        final_content = base_content.replace(
+            "# Generated Django models",
+            "# Generated Django models\\n\\n" + "\\n\\n".join(choices_classes_str) + "\\n\\n" + generated_models_str,
+        )
+
+        return final_content
 
     # --- Implement abstract methods from BaseStaticGenerator ---
 
-    def _get_source_model_name(self, carrier: ConversionCarrier[XmlSchemaComplexType]) -> str:
-        """Get the name of the original XML Schema complex type."""
-        return carrier.source_model.name if carrier.source_model else "UnknownComplexType"
+    def _get_source_model_name(self, carrier: "ConversionCarrier[XmlSchemaComplexType]") -> str:
+        return carrier.source_model.name
 
-    def _add_source_model_import(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
-        """Add import for the original XML Schema (not applicable, but required by interface)."""
-        # XML Schema doesn't have Python imports, but we could add comments
-        # about the source schema file
-        if carrier.source_model and carrier.source_model.schema_location:
-            # Could add as a comment in the generated file
-            pass
+    def _add_source_model_import(self, carrier: "ConversionCarrier[XmlSchemaComplexType]"):
+        # Not needed for XML Schema generation as the models are self-contained
+        pass
 
     def _prepare_template_context(
         self, unique_model_definitions: list[str], django_model_names: list[str], imports: dict
     ) -> dict:
-        """Prepare template context for XML Schema models."""
         return {
-            "model_definitions": unique_model_definitions,
+            "unique_model_definitions": unique_model_definitions,
             "django_model_names": django_model_names,
             "imports": imports,
-            "generation_source_type": "xmlschema",
-            "context_definitions": [],  # XML Schema doesn't use context classes
-            "context_class_names": [],
-            "model_has_context": {},
-            "schema_files": [str(f) for f in self.schema_files],  # Add schema file info
         }
 
     def _get_models_in_processing_order(self) -> list[XmlSchemaComplexType]:
-        """Return XML Schema complex types in dependency order."""
-        return self.xmlschema_discovery.get_models_in_registration_order()
+        # For now, return in the order they were discovered.
+        # A more sophisticated implementation would use the dependency graph.
+        return list(self.discovery_instance.filtered_models.values())
 
-    def _get_model_definition_extra_context(self, carrier: ConversionCarrier[XmlSchemaComplexType]) -> dict:
-        """Provide extra context for XML Schema model template."""
-        context = {
-            "field_definitions": carrier.django_field_definitions,
-        }
-
-        if carrier.source_model:
-            # Add XML Schema specific context
-            context.update(
-                {
-                    "xml_namespace": carrier.source_model.namespace,
-                    "xml_documentation": carrier.source_model.documentation,
-                    "schema_location": carrier.source_model.schema_location,
-                    "is_mixed_content": carrier.source_model.mixed,
-                    "content_model": "choice" if carrier.source_model.choice else "sequence",
-                }
-            )
-
-        return context
+    def _get_model_definition_extra_context(self, carrier: "ConversionCarrier[XmlSchemaComplexType]") -> dict:
+        # No extra context needed for XML Schema models
+        return {}
 
     # --- Additional XML Schema specific methods ---
 
@@ -176,15 +147,15 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
     def get_schema_statistics(self) -> dict:
         """Get statistics about the parsed schemas."""
         stats = {
-            "total_schemas": len(self.xmlschema_discovery.parsed_schemas),
-            "total_complex_types": len(self.xmlschema_discovery.all_models),
-            "filtered_complex_types": len(self.xmlschema_discovery.filtered_models),
+            "total_schemas": len(self.discovery_instance.parsed_schemas),
+            "total_complex_types": len(self.discovery_instance.all_models),
+            "filtered_complex_types": len(self.discovery_instance.filtered_models),
             "generated_models": len(self.carriers),
         }
 
         # Add per-schema breakdown
         schema_breakdown = []
-        for schema_def in self.xmlschema_discovery.parsed_schemas:
+        for schema_def in self.discovery_instance.parsed_schemas:
             schema_breakdown.append(
                 {
                     "schema_location": schema_def.schema_location,
@@ -207,7 +178,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         """
         messages = []
 
-        for schema_def in self.xmlschema_discovery.parsed_schemas:
+        for schema_def in self.discovery_instance.parsed_schemas:
             # Check for common issues
             if not schema_def.target_namespace:
                 messages.append(f"Schema {schema_def.schema_location} has no target namespace")
@@ -234,3 +205,16 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             Configured XmlSchemaDjangoModelGenerator instance
         """
         return cls(schema_files=schema_files, **kwargs)
+
+    def _render_choices_class(self, choices_info: dict) -> str:
+        """Render a single TextChoices class."""
+        class_name = choices_info["name"]
+        choices = choices_info["choices"]
+        lines = [f"class {class_name}(models.TextChoices):"]
+        for value, label in choices:
+            # Attempt to create a valid Python identifier for the member name
+            member_name = re.sub(r"[^a-zA-Z0-9_]", "_", label.upper())
+            if not member_name or not member_name[0].isalpha():
+                member_name = f"CHOICE_{member_name}"
+            lines.append(f'    {member_name} = "{value}", "{label}"')
+        return "\\n".join(lines)
