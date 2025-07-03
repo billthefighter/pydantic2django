@@ -5,9 +5,19 @@ complex and simple types from XSD files.
 
 import pytest
 from pathlib import Path
+import logging
 
 from pydantic2django.xmlschema.parser import XmlSchemaParser
 from pydantic2django.xmlschema.models import XmlSchemaType
+
+# Configure logging to see parser output during tests
+parser_logger = logging.getLogger("pydantic2django.xmlschema.parser")
+parser_logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
+parser_logger.addHandler(handler)
+parser_logger.propagate = False
 
 
 @pytest.fixture(scope="module")

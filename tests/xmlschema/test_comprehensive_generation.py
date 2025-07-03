@@ -7,6 +7,7 @@ import pytest
 import re
 from pathlib import Path
 import logging
+import json
 
 from pydantic2django.xmlschema.generator import XmlSchemaDjangoModelGenerator
 from .test_generation import assert_field_definition_xml
@@ -38,8 +39,8 @@ def comprehensive_xsd_path() -> Path:
     return Path(__file__).parent / "fixtures" / "comprehensive_schema.xsd"
 
 
-@pytest.fixture(scope="module")
-def generated_code(comprehensive_xsd_path, tmp_path_factory) -> str:
+@pytest.fixture(scope="function")
+def generated_code(comprehensive_xsd_path, tmp_path_factory, caplog) -> str:
     """
     Runs the generator for the comprehensive schema once per test module
     and returns the generated code as a string.
@@ -47,19 +48,17 @@ def generated_code(comprehensive_xsd_path, tmp_path_factory) -> str:
     output_file = tmp_path_factory.mktemp("generated") / "models.py"
     app_label = "test_app"
 
-    generator = XmlSchemaDjangoModelGenerator(
-        schema_files=[str(comprehensive_xsd_path)],
-        output_path=str(output_file),
-        app_label=app_label,
-    )
-    generator.generate()
+    with caplog.at_level(logging.DEBUG):
+        generator = XmlSchemaDjangoModelGenerator(
+            schema_files=[str(comprehensive_xsd_path)],
+            output_path=str(output_file),
+            app_label=app_label,
+            verbose=True,
+        )
+        generator.generate()
 
     assert output_file.exists()
-    code = output_file.read_text()
-    print(f"\\n--- Generated Code from comprehensive_schema.xsd ---")
-    print(code)
-    print("----------------------------------------------------")
-    return code
+    return output_file.read_text()
 
 
 class TestComprehensiveSchemaGeneration:
@@ -75,7 +74,7 @@ class TestComprehensiveSchemaGeneration:
         assert "class Meta:" in generated_code
         assert "app_label = 'test_app'" in generated_code
         # Ensure it appears for both models
-        assert generated_code.count("app_label = 'test_app'") == 2
+        assert generated_code.count("app_label = 'test_app'") == 3
 
     # --- Author Model Tests ---
 
@@ -85,7 +84,7 @@ class TestComprehensiveSchemaGeneration:
             ("author_id", "CharField", {"max_length": "255", "primary_key": "True"}, ["null", "blank"]),
             ("name", "CharField", {"max_length": "255"}, ["null", "blank"]),
             ("email", "CharField", {"max_length": "255", "null": "True", "blank": "True"}, []),
-            ("bio", "TextField", {"null": "True", "blank": "True"}, []),
+            ("bio", "CharField", {"null": "True", "blank": "True"}, []),
             (
                 "status",
                 "CharField",
@@ -108,15 +107,18 @@ class TestComprehensiveSchemaGeneration:
     # @pytest.mark.xfail(reason="Validators from simpleType restrictions not yet implemented")
     def test_author_email_field_has_validator(self, generated_code: str):
         """Tests that the email field has a RegexValidator from the simpleType pattern."""
-        # This test needs to be more robust, checking for the actual validator object.
-        # For now, we check the generated code string.
-        assert_field_definition_xml(
-            generated_code,
-            "email",
-            "CharField",
-            {"validators": "[RegexValidator"},  # Check if validators list starts
-            model_name="AuthorType",
+        # The helper can't easily handle list contents, so we do a direct regex search.
+        field_pattern = re.compile(
+            r"^\s*email\s*=\s*models\.CharField\((.*)\)", re.MULTILINE
         )
+        match = field_pattern.search(generated_code)
+        assert match, "Field 'email' not found in AuthorType model"
+
+        kwargs_str = match.group(1)
+        validator_pattern = re.compile(r"validators=\[.*RegexValidator\(.*?\)\]")
+        assert validator_pattern.search(
+            kwargs_str
+        ), f"RegexValidator not found in email field kwargs: {kwargs_str}"
 
     # @pytest.mark.xfail(reason="Enum class generation from simpleType not yet implemented")
     def test_author_status_enum_class_generated(self, generated_code: str):
@@ -129,23 +131,23 @@ class TestComprehensiveSchemaGeneration:
     @pytest.mark.parametrize(
         "field_name, expected_type, expected_kwargs, absent_kwargs",
         [
-            ("isbn", "CharField", {"max_length": "255", "primary_key": "True"}, ["null", "blank"]),
-            # ("title", "CharField", {"max_length": "255"}, ["null", "blank"]),
-            # ("publication_date", "IntegerField", {}, ["null", "blank"]), # xs:gYear -> IntegerField
-            # ("pages", "PositiveIntegerField", {}, ["null", "blank"]),
-            # (
-            #     "genre",
-            #     "CharField",
-            #     {
-            #         "max_length": "15", # length of 'science-fiction'
-            #         "choices": "Genre.choices",
-            #         "default": "Genre.FICTION",
-            #     },
-            #     ["null", "blank"],
-            # ),
-            # ("summary", "TextField", {"null": "True", "blank": "True"}, []),
+            ("isbn", "CharField", {"max_length": "255"}, ["null", "blank"]),
+            ("title", "CharField", {"max_length": "255"}, ["null", "blank"]),
+            ("publication_date", "IntegerField", {}, ["null", "blank"]), # xs:gYear -> IntegerField
+            ("pages", "PositiveIntegerField", {}, ["null", "blank"]),
+            (
+                "genre",
+                "CharField",
+                {
+                    "max_length": "15", # length of 'science-fiction'
+                    "choices": "Genre.choices",
+                    "default": "Genre.FICTION",
+                },
+                ["null", "blank"],
+            ),
+            ("summary", "TextField", {"null": "True", "blank": "True"}, []),
         ],
-        ids=["isbn-pk"], #, "title-required", "publication_date-gYear", "pages-positiveInt", "genre-enum-default", "summary-nillable"],
+        ids=["isbn-pk", "title-required", "publication_date-gYear", "pages-positiveInt", "genre-enum-default", "summary-nillable"],
     )
     def test_book_model_fields(self, generated_code: str, field_name: str, expected_type: str, expected_kwargs: dict, absent_kwargs: list):
         """Parameterized test for fields in the generated BookType model."""

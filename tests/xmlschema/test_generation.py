@@ -31,8 +31,25 @@ def assert_field_definition_xml(
 
     if expected_kwargs:
         for key, expected_value_str in expected_kwargs.items():
-            # Using a flexible pattern to match different quoting and spacing
-            pattern = re.compile(rf"{re.escape(key)}\s*=\s*(?:{re.escape(expected_value_str)}|'{re.escape(expected_value_str)}'|\"{re.escape(expected_value_str)}\")")
+            escaped_value = re.escape(expected_value_str)
+
+            # Flexible pattern to handle different quoting and spacing.
+            # Handles:
+            # 1. Quoted strings: to="'app.Model'" (value in dict is "'app.Model'")
+            # 2. Bare values: choices=Status.choices (value in dict is "Status.choices")
+            # 3. Numeric/Boolean: max_length=255, null=True (value in dict is "255", "True")
+            # For case 3, we also check for quoted versions.
+
+            if (expected_value_str.startswith("'") and expected_value_str.endswith("'")) or \
+               (expected_value_str.startswith('"') and expected_value_str.endswith('"')):
+                # Case 1: Value is already quoted
+                value_pattern = escaped_value
+            else:
+                # Case 2 & 3: Bare value, check for quoted versions as well for numbers/bools
+                value_pattern = f"(?:{escaped_value}|'{escaped_value}'|\"{escaped_value}\")"
+
+            pattern = re.compile(rf"{re.escape(key)}\s*=\s*{value_pattern}")
+
             assert pattern.search(
                 kwargs_str
             ), f"Expected kwarg '{key} = {expected_value_str}' not found for field '{field_name}' in {model_name}. Found kwargs: '{kwargs_str}'"

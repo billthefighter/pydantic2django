@@ -9,7 +9,7 @@ from typing import Any
 
 from ..core.discovery import BaseDiscovery
 from .models import XmlSchemaComplexType, XmlSchemaDefinition
-from .parser import XmlSchemaParser
+from .parser import XmlSchemaParseError, XmlSchemaParser
 
 logger = logging.getLogger(__name__)
 

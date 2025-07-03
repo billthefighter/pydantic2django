@@ -83,7 +83,7 @@ class XmlSchemaRestriction:
     max_length: int | None = None
     length: int | None = None
     pattern: str | None = None
-    enumeration: list[tuple[str, str]] | None = None
+    enumeration: list[tuple[str, str]] = field(default_factory=list)
     min_inclusive: int | float | None = None
     max_inclusive: int | float | None = None
     min_exclusive: int | float | None = None
@@ -91,6 +91,25 @@ class XmlSchemaRestriction:
     total_digits: int | None = None
     fraction_digits: int | None = None
     white_space: str | None = None  # preserve, replace, collapse
+
+
+@dataclass
+class XmlSchemaKey:
+    """Represents an <xs:key> definition."""
+
+    name: str
+    selector: str
+    fields: list[str] = field(default_factory=list)
+
+
+@dataclass
+class XmlSchemaKeyRef:
+    """Represents an <xs:keyref> definition."""
+
+    name: str
+    refer: str
+    selector: str
+    fields: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +121,7 @@ class XmlSchemaElement:
     type_name: str | None = None  # For references to complex types
     min_occurs: int = 1
     max_occurs: int | str = 1  # Can be "unbounded"
+    is_list: bool = False
     default_value: Any | None = None
     fixed_value: Any | None = None
     nillable: bool = False
@@ -112,6 +132,8 @@ class XmlSchemaElement:
     documentation: str | None = None
     namespace: str | None = None
     schema_location: str | None = None
+    keys: list[XmlSchemaKey] = field(default_factory=list)
+    keyrefs: list[XmlSchemaKeyRef] = field(default_factory=list)
 
     @property
     def is_optional(self) -> bool:
@@ -123,10 +145,10 @@ class XmlSchemaElement:
         """Check if element is required (min_occurs > 0)."""
         return self.min_occurs > 0
 
-    @property
-    def is_list(self) -> bool:
-        """Check if element can have multiple occurrences."""
-        return (isinstance(self.max_occurs, int) and self.max_occurs > 1) or self.max_occurs == "unbounded"
+    # @property
+    # def is_list(self) -> bool:
+    #     """Check if element can have multiple occurrences."""
+    #     return (isinstance(self.max_occurs, int) and self.max_occurs > 1) or self.max_occurs == "unbounded"
 
 
 @dataclass
@@ -170,6 +192,7 @@ class XmlSchemaComplexType:
     all_elements: bool = False
     documentation: str | None = None
     schema_location: str | None = None
+    schema_def: "XmlSchemaDefinition | None" = field(default=None, repr=False)
 
     @property
     def __name__(self) -> str:
@@ -224,9 +247,11 @@ class XmlSchemaSimpleType:
     namespace: str | None = None
     base_type: XmlSchemaType | None = None
     restrictions: XmlSchemaRestriction | None = None
-    enumeration: list[tuple[str, str]] | None = None
-    documentation: str | None = None
     schema_location: str | None = None
+
+    @property
+    def __name__(self) -> str:
+        return self.name
 
 
 @dataclass
@@ -243,6 +268,8 @@ class XmlSchemaDefinition:
     attributes: dict[str, XmlSchemaAttribute] = field(default_factory=dict)
     imports: list[XmlSchemaImport] = field(default_factory=list)
     includes: list[str] = field(default_factory=list)
+    keys: list[XmlSchemaKey] = field(default_factory=list)
+    keyrefs: list[XmlSchemaKeyRef] = field(default_factory=list)
 
     # Schema linking fields
     conversion_session_id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
@@ -253,6 +280,7 @@ class XmlSchemaDefinition:
         complex_type.namespace = complex_type.namespace or self.target_namespace
         complex_type.conversion_session_id = self.conversion_session_id
         complex_type.schema_source_file = self.schema_location
+        complex_type.schema_def = self
         self.complex_types[complex_type.name] = complex_type
 
     def add_simple_type(self, simple_type: XmlSchemaSimpleType) -> None:

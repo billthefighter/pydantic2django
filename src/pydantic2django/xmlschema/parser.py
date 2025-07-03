@@ -15,7 +15,8 @@ from .models import (
     XmlSchemaComplexType,
     XmlSchemaDefinition,
     XmlSchemaElement,
-    XmlSchemaImport,
+    XmlSchemaKey,
+    XmlSchemaKeyRef,
     XmlSchemaRestriction,
     XmlSchemaSimpleType,
     XmlSchemaType,
@@ -68,11 +69,13 @@ class XmlSchemaParser:
             "dateTime": XmlSchemaType.DATETIME,
             "time": XmlSchemaType.TIME,
             "duration": XmlSchemaType.DURATION,
+            "gYear": XmlSchemaType.GYEAR,
             "anyURI": XmlSchemaType.ANYURI,
             "base64Binary": XmlSchemaType.BASE64BINARY,
             "hexBinary": XmlSchemaType.HEXBINARY,
             "QName": XmlSchemaType.QNAME,
-            "ID": XmlSchemaType.STRING,
+            "ID": XmlSchemaType.ID,
+            "IDREF": XmlSchemaType.IDREF,
         }
 
     def parse_schema_file(self, schema_path: str | Path) -> XmlSchemaDefinition:
@@ -130,46 +133,34 @@ class XmlSchemaParser:
     def _parse_schema_contents(self, schema_root: "etree.Element", schema_def: XmlSchemaDefinition):
         """Parse the contents of a schema element"""
         logger.info(f"Parsing contents of schema: {schema_def.schema_location}")
+        logger.debug(f"Root element: {schema_root.tag}")
         for child in schema_root:
-            # Skip comments and other non-element nodes
             if not isinstance(child.tag, str):
+                logger.debug(f"Skipping non-string tag: {child.tag}")
                 continue
-
             tag_name = self._get_local_name(child.tag)
+            logger.debug(f"Found child tag: {tag_name}")
 
             if tag_name == "complexType":
                 complex_type = self._parse_complex_type(child, schema_def)
                 if complex_type:
-                    logger.info(f"Parsed complexType: {complex_type.name}")
-                    schema_def.complex_types[complex_type.name] = complex_type
-
+                    schema_def.add_complex_type(complex_type)
             elif tag_name == "simpleType":
                 simple_type = self._parse_simple_type(child, schema_def)
                 if simple_type:
-                    logger.info(f"Parsed simpleType: {simple_type.name}")
-                    schema_def.simple_types[simple_type.name] = simple_type
-
+                    schema_def.add_simple_type(simple_type)
             elif tag_name == "element":
                 element = self._parse_element(child, schema_def)
                 if element:
-                    logger.info(f"Parsed element: {element.name}")
-                    schema_def.elements[element.name] = element
-
-            elif tag_name == "attribute":
-                attribute = self._parse_attribute(child, schema_def)
-                if attribute:
-                    schema_def.attributes[attribute.name] = attribute
-
-            elif tag_name == "import":
-                import_info = XmlSchemaImport(
-                    namespace=child.get("namespace"), schema_location=child.get("schemaLocation")
-                )
-                schema_def.imports.append(import_info)
-
-            elif tag_name == "include":
-                schema_location = child.get("schemaLocation")
-                if schema_location:
-                    schema_def.includes.append(schema_location)
+                    schema_def.add_element(element)
+            elif tag_name == "key":
+                key = self._parse_key(child)
+                if key:
+                    schema_def.keys.append(key)
+            elif tag_name == "keyref":
+                keyref = self._parse_keyref(child)
+                if keyref:
+                    schema_def.keyrefs.append(keyref)
 
     def _parse_complex_type(
         self, element: "etree.Element", schema_def: XmlSchemaDefinition, name_override: str | None = None
@@ -258,6 +249,22 @@ class XmlSchemaParser:
             logger.warning("Element without name or ref, skipping")
             return None
 
+        # Keys and keyrefs can be defined within an element
+        for key_elem in element.findall(f"{{{self.XS_NAMESPACE}}}key"):
+            key = self._parse_key(key_elem)
+            if key:
+                schema_def.keys.append(key)
+
+        for keyref_elem in element.findall(f"{{{self.XS_NAMESPACE}}}keyref"):
+            keyref = self._parse_keyref(keyref_elem)
+            if keyref:
+                schema_def.keyrefs.append(keyref)
+
+        # If it's a reference, we might need to look it up later
+        if ref:
+            # For now, just store the ref. Resolution can happen in a later pass.
+            pass
+
         xml_element = XmlSchemaElement(
             name=name or ref,
             type_name=element.get("type"),
@@ -273,17 +280,10 @@ class XmlSchemaParser:
 
         # Handle maxOccurs="unbounded"
         if xml_element.max_occurs == "unbounded":
-            pass  # Keep as string
+            xml_element.is_list = True
+            xml_element.max_occurs = -1  # Or some indicator of unbounded
         else:
-            try:
-                xml_element.max_occurs = int(xml_element.max_occurs)
-            except (ValueError, TypeError):
-                xml_element.max_occurs = 1
-
-        # Parse documentation
-        doc_elem = element.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
-        if doc_elem is not None and doc_elem.text:
-            xml_element.documentation = doc_elem.text.strip()
+            xml_element.max_occurs = int(xml_element.max_occurs)
 
         # Map built-in types
         if xml_element.type_name:
@@ -291,27 +291,34 @@ class XmlSchemaParser:
             if type_local_name in self.type_mappings:
                 xml_element.base_type = self.type_mappings[type_local_name]
 
-        # Parse inline complex type
-        inline_complex = element.find(f"{{{self.XS_NAMESPACE}}}complexType")
-        if inline_complex is not None:
-            # Create a synthetic name for the inline type
-            synthetic_name = f"{name}_Type" if name else "InlineType"
-            inline_type = self._parse_complex_type(inline_complex, schema_def, name_override=synthetic_name)
-            if inline_type:
-                schema_def.complex_types[inline_type.name] = inline_type
-                xml_element.complex_type = inline_type
+        # Look for an inline complexType and parse it
+        inline_complex_type_elem = element.find(f"{{{self.XS_NAMESPACE}}}complexType")
+        if inline_complex_type_elem is not None:
+            # Synthesize a name for the inline complex type
+            type_name = f"{xml_element.name}_Type"
+            logger.debug(f"Found inline complexType for element '{xml_element.name}'. Creating type '{type_name}'.")
 
-        # Parse restrictions (simpleType with restrictions)
-        simple_type_elem = element.find(f"{{{self.XS_NAMESPACE}}}simpleType")
-        if simple_type_elem is not None:
-            restriction_elem = simple_type_elem.find(f"{{{self.XS_NAMESPACE}}}restriction")
-            if restriction_elem is not None:
-                xml_element.restrictions = self._parse_restriction(restriction_elem)
-                base_type = restriction_elem.get("base")
-                if base_type:
-                    type_local_name = self._get_local_name(base_type)
-                    if type_local_name in self.type_mappings:
-                        xml_element.base_type = self.type_mappings[type_local_name]
+            # Parse the complex type
+            complex_type = self._parse_complex_type(inline_complex_type_elem, schema_def, name_override=type_name)
+
+            if complex_type:
+                schema_def.add_complex_type(complex_type)
+                xml_element.type_name = type_name  # Associate element with new type
+
+        # Handle inline simpleType as well
+        inline_simple_type_elem = element.find(f"{{{self.XS_NAMESPACE}}}simpleType")
+        if inline_simple_type_elem is not None:
+            # Synthesize a name for the inline simple type
+            type_name = f"{xml_element.name}_SimpleType"
+            simple_type = self._parse_simple_type(inline_simple_type_elem, schema_def, name_override=type_name)
+            if simple_type:
+                schema_def.add_simple_type(simple_type)
+                xml_element.type_name = type_name
+
+        # Parse documentation
+        doc_elem = element.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
+        if doc_elem is not None and doc_elem.text:
+            xml_element.documentation = doc_elem.text.strip()
 
         return xml_element
 
@@ -342,137 +349,145 @@ class XmlSchemaParser:
         return attribute
 
     def _parse_simple_type(
-        self, element: "etree.Element", schema_def: XmlSchemaDefinition
+        self, element: "etree.Element", schema_def: XmlSchemaDefinition, name_override: str | None = None
     ) -> XmlSchemaSimpleType | None:
-        """Parse a simpleType definition"""
-        name = element.get("name")
+        """Parse a simpleType element."""
+        name = name_override or element.get("name")
         if not name:
-            logger.warning("Skipping anonymous simple type")
+            logger.warning("Skipping anonymous simple type.")
             return None
 
-        simple_type = XmlSchemaSimpleType(
-            name=name,
-            namespace=schema_def.target_namespace,
-        )
+        simple_type = XmlSchemaSimpleType(name=name)
 
         # Parse documentation
         doc_elem = element.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
         if doc_elem is not None and doc_elem.text:
             simple_type.documentation = doc_elem.text.strip()
 
-        # Parse restriction
-        restriction_elem = element.find(f"{{{self.XS_NAMESPACE}}}restriction")
-        if restriction_elem is not None:
-            base_type = restriction_elem.get("base")
-            if base_type:
-                type_local_name = self._get_local_name(base_type)
-                if type_local_name in self.type_mappings:
-                    simple_type.base_type = self.type_mappings[type_local_name]
-
-            simple_type.restrictions = self._parse_restriction(restriction_elem)
-
-            # Parse enumeration values separately
-            enum_values = []
-            for facet in restriction_elem.findall(f"{{{self.XS_NAMESPACE}}}enumeration"):
-                value = facet.get("value")
-                if value:
-                    doc_elem = facet.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
-                    label = doc_elem.text.strip() if doc_elem is not None and doc_elem.text else value
-                    enum_values.append((value, label))
-            if enum_values:
-                simple_type.enumeration = enum_values
+        # Parse content (restriction, list, union)
+        for child in element:
+            tag_name = self._get_local_name(child.tag)
+            if tag_name == "restriction":
+                simple_type.restriction = self._parse_restriction(child)
+                if simple_type.restriction and simple_type.restriction.base:
+                    type_local_name = self._get_local_name(simple_type.restriction.base)
+                    if type_local_name in self.type_mappings:
+                        simple_type.base_type = self.type_mappings[type_local_name]
+                if simple_type.restriction and simple_type.restriction.enumeration:
+                    simple_type.enumeration = simple_type.restriction.enumeration
+            # TODO: Add support for list and union simpleTypes
 
         return simple_type
 
     def _parse_restriction(self, restriction_elem: "etree.Element") -> XmlSchemaRestriction:
         """Parse a restriction element"""
-        restriction = XmlSchemaRestriction(base=restriction_elem.get("base"))
+        base_type_qname = restriction_elem.get("base")
+        base_type_name = self._get_local_name(base_type_qname) if base_type_qname else None
+        base_type = self._get_base_type(base_type_name)
 
-        # Map facet elements to restriction attributes
-        facet_mapping = {
-            "minLength": ("min_length", int),
-            "maxLength": ("max_length", int),
-            "length": ("length", int),
-            "minInclusive": ("min_inclusive", float),
-            "maxInclusive": ("max_inclusive", float),
-            "minExclusive": ("min_exclusive", float),
-            "maxExclusive": ("max_exclusive", float),
-            "pattern": ("pattern", str),
-            "fractionDigits": ("fraction_digits", int),
-            "totalDigits": ("total_digits", int),
-            "whiteSpace": ("white_space", str),
-        }
+        restriction = XmlSchemaRestriction(base=base_type.value if base_type else None)
 
-        for facet_elem in restriction_elem:
-            facet_name = self._get_local_name(facet_elem.tag)
-            if facet_name in facet_mapping:
-                attr_name, converter = facet_mapping[facet_name]
-                value = facet_elem.get("value")
+        for child in restriction_elem:
+            tag_name = self._get_local_name(child.tag)
+            value = child.get("value")
+
+            if tag_name == "enumeration":
                 if value:
-                    try:
-                        setattr(restriction, attr_name, converter(value))
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Invalid {facet_name} value '{value}': {e}")
-            elif facet_name == "enumeration":
-                # Handle enumeration separately as it can have multiple values
-                if restriction.enumeration is None:
-                    restriction.enumeration = []
-                value = facet_elem.get("value")
-                if value:
-                    doc_elem = facet_elem.find(
-                        f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation"
-                    )
-                    label = doc_elem.text.strip() if doc_elem is not None and doc_elem.text else value
+                    label = value.replace("_", " ").title()
                     restriction.enumeration.append((value, label))
+            elif tag_name == "pattern":
+                if value:
+                    restriction.pattern = value
+            elif tag_name == "minLength":
+                restriction.min_length = int(value)
+            elif tag_name == "maxLength":
+                restriction.max_length = int(value)
+            elif tag_name == "length":
+                restriction.length = int(value)
+            elif tag_name == "minInclusive":
+                restriction.min_inclusive = float(value)
+            elif tag_name == "maxInclusive":
+                restriction.max_inclusive = float(value)
+            elif tag_name == "minExclusive":
+                restriction.min_exclusive = float(value)
+            elif tag_name == "maxExclusive":
+                restriction.max_exclusive = float(value)
+            elif tag_name == "fractionDigits":
+                restriction.fraction_digits = int(value)
+            elif tag_name == "totalDigits":
+                restriction.total_digits = int(value)
+            elif tag_name == "whiteSpace":
+                restriction.white_space = value
 
         return restriction
 
     def _parse_complex_content(
         self, complex_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
-        """Parse complexContent (inheritance/extension)"""
-        extension = complex_content.find(f"{{{self.XS_NAMESPACE}}}extension")
-        if extension is not None:
-            base_type = extension.get("base")
-            if base_type:
-                complex_type.base_type = base_type
-
-            # Parse attributes in the extension
-            for child in extension:
-                if self._get_local_name(child.tag) == "attribute":
-                    attribute = self._parse_attribute(child, schema_def)
-                    if attribute:
-                        complex_type.attributes[attribute.name] = attribute
-
-            # Parse additional content in the extension
-            self._parse_particle_content(extension, complex_type, schema_def)
+        """Parse complexContent, which typically implies extension or restriction."""
+        # TODO: Implement complexContent parsing if needed
+        logger.warning(f"complexContent in {complex_type.name} is not fully supported yet.")
 
     def _parse_simple_content(
         self, simple_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
-        """Parse simpleContent (simple content with attributes)"""
-        extension = simple_content.find(f"{{{self.XS_NAMESPACE}}}extension")
-        if extension is not None:
-            base_type = extension.get("base")
-            if base_type:
-                complex_type.base_type = base_type
-
-            # Parse attributes in the extension
-            for child in extension:
-                if self._get_local_name(child.tag) == "attribute":
-                    attribute = self._parse_attribute(child, schema_def)
-                    if attribute:
-                        complex_type.attributes[attribute.name] = attribute
+        """Parse simpleContent, which adds attributes to a simple type."""
+        # TODO: Implement simpleContent parsing if needed
+        logger.warning(f"simpleContent in {complex_type.name} is not fully supported yet.")
 
     def _get_local_name(self, qname: str) -> str:
-        """Extract local name from a qualified name"""
+        """Extract the local name from a qualified name (e.g., {http://...}string -> string)."""
         if "}" in qname:
-            return qname.split("}")[-1]
-        return qname.split(":")[-1]
+            return qname.split("}", 1)[-1]
+        if ":" in qname:
+            return qname.split(":", 1)[-1]
+        return qname
+
+    def _parse_key(self, element: "etree.Element") -> XmlSchemaKey | None:
+        """Parse a key element."""
+        name = element.get("name")
+        if not name:
+            logger.warning("Key without name, skipping.")
+            return None
+
+        selector_elem = element.find(f"{{{self.XS_NAMESPACE}}}selector")
+        selector = selector_elem.get("xpath") if selector_elem is not None else None
+
+        fields = [
+            field.get("xpath") for field in element.findall(f"{{{self.XS_NAMESPACE}}}field") if field.get("xpath")
+        ]
+
+        if not selector or not fields:
+            logger.warning(f"Key '{name}' is missing selector or fields, skipping.")
+            return None
+
+        return XmlSchemaKey(name=name, selector=selector, fields=fields)
+
+    def _parse_keyref(self, element: "etree.Element") -> XmlSchemaKeyRef | None:
+        """Parse a keyref element."""
+        name = element.get("name")
+        refer = element.get("refer")
+
+        if not name or not refer:
+            logger.warning("KeyRef without name or refer, skipping.")
+            return None
+
+        selector_elem = element.find(f"{{{self.XS_NAMESPACE}}}selector")
+        selector = selector_elem.get("xpath") if selector_elem is not None else None
+
+        fields = [
+            field.get("xpath") for field in element.findall(f"{{{self.XS_NAMESPACE}}}field") if field.get("xpath")
+        ]
+
+        if not selector or not fields:
+            logger.warning(f"KeyRef '{name}' is missing selector or fields, skipping.")
+            return None
+
+        return XmlSchemaKeyRef(name=name, refer=refer, selector=selector, fields=fields)
 
     def parse_multiple_schemas(self, schema_paths: list[str | Path]) -> list[XmlSchemaDefinition]:
         """
-        Parse multiple XSD files and return their definitions.
+        Parse multiple XSD files and return a list of schema definitions.
 
         Args:
             schema_paths: List of paths to XSD files
@@ -491,3 +506,23 @@ class XmlSchemaParser:
                 continue
 
         return schemas
+
+    def _get_base_type(self, type_name: str | None) -> XmlSchemaType:
+        """Resolve XML Schema built-in type to an XmlSchemaType enum."""
+        if not type_name:
+            return XmlSchemaType.STRING  # Default
+
+        logger.debug(f"Attempting to resolve base type for: {type_name}")
+        # Remove namespace prefix (e.g., 'xs:')
+        local_name = type_name.split(":")[-1].upper()
+
+        try:
+            resolved_type = XmlSchemaType[local_name]
+            logger.debug(f"Resolved '{type_name}' to '{resolved_type}'")
+            return resolved_type
+        except KeyError:
+            # It's not a built-in, might be a custom simpleType or complexType
+            # The factory will need to resolve this later.
+            # For now, we can return a default or a special "unresolved" type
+            logger.debug(f"Could not resolve '{type_name}' to a built-in type. Defaulting to STRING.")
+            return XmlSchemaType.STRING  # Fallback

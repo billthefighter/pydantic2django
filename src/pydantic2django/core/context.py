@@ -50,6 +50,7 @@ class ModelContext(Generic[SourceModelType]):  # Make ModelContext generic
     django_model: type[models.Model]
     source_class: type[SourceModelType]  # Changed from pydantic_class
     context_fields: dict[str, FieldContext] = field(default_factory=dict)
+    context_data: dict[str, Any] = field(default_factory=dict)
 
     @property
     def required_context_keys(self) -> set[str]:

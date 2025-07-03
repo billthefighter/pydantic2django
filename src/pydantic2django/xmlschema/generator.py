@@ -5,11 +5,13 @@ Main entry point for generating Django models from XML Schema files.
 import logging
 import re
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from django.db import models
 
 from pydantic2django.core.base_generator import BaseStaticGenerator
+from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.django.models import Xml2DjangoBaseClass
 
 from .discovery import XmlSchemaDiscovery
@@ -35,7 +37,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         base_model_class: type[models.Model] = Xml2DjangoBaseClass,
         class_name_prefix: str = "",
     ):
-        discovery = XmlSchemaDiscovery(schema_files=[Path(f) for f in schema_files])
+        discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(app_label=app_label)
 
         super().__init__(
@@ -51,63 +53,49 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             filter_function=filter_function,
         )
 
-    def _generate_file_content(self) -> str:
-        # Start with the base content (imports, etc.)
-        base_content = super()._generate_file_content()
+    def _get_model_definition_extra_context(self, carrier: ConversionCarrier) -> dict:
+        """
+        Extracts additional context required for rendering the Django model,
+        including field definitions and enum classes.
+        """
+        field_definitions = carrier.django_field_definitions
 
-        # Render choices classes
-        choices_classes_str = []
-        for carrier in self.carriers:
-            if carrier.model_context and "choices_classes" in carrier.model_context:
-                for choices_info in carrier.model_context["choices_classes"]:
-                    class_name = choices_info["name"]
-                    choices = choices_info["choices"]
-                    lines = [f"class {class_name}(models.TextChoices):"]
-                    for value, label in choices:
-                        member_name = re.sub(r"[^a-zA-Z0-9_]", "_", label.upper())
-                        if not member_name or not member_name[0].isalpha():
-                            member_name = f"CHOICE_{member_name}"
-                        lines.append(f'    {member_name} = "{value}", "{label}"')
-                    choices_classes_str.append("\\n".join(lines))
+        enum_classes = carrier.context_data.get("enums", {})
 
-        # Find where to insert the choices classes. A bit of a hack.
-        # Let's insert them before the first 'class ' declaration of a model.
+        return {
+            "field_definitions": field_definitions,
+            "enum_classes": enum_classes.values(),
+        }
 
-        generated_models_str = self._render_django_models()
-
-        final_content = base_content.replace(
-            "# Generated Django models",
-            "# Generated Django models\\n\\n" + "\\n\\n".join(choices_classes_str) + "\\n\\n" + generated_models_str,
-        )
-
-        return final_content
+    # All rendering logic is now handled by the BaseStaticGenerator using the implemented abstract methods.
+    # The custom generate and _generate_file_content methods are no longer needed.
 
     # --- Implement abstract methods from BaseStaticGenerator ---
 
-    def _get_source_model_name(self, carrier: "ConversionCarrier[XmlSchemaComplexType]") -> str:
+    def _get_source_model_name(self, carrier: ConversionCarrier[XmlSchemaComplexType]) -> str:
+        """Get the name of the original source model from the carrier."""
         return carrier.source_model.name
 
-    def _add_source_model_import(self, carrier: "ConversionCarrier[XmlSchemaComplexType]"):
-        # Not needed for XML Schema generation as the models are self-contained
+    def _add_source_model_import(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
+        """Add the necessary import for the original source model."""
+        # For XML Schema, the models are generated, not imported
         pass
 
     def _prepare_template_context(
         self, unique_model_definitions: list[str], django_model_names: list[str], imports: dict
     ) -> dict:
+        """Prepare the subclass-specific context for the main models_file.py.j2 template."""
         return {
-            "unique_model_definitions": unique_model_definitions,
+            "model_definitions": unique_model_definitions,
             "django_model_names": django_model_names,
             "imports": imports,
+            "generation_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "app_label": self.app_label,
         }
 
     def _get_models_in_processing_order(self) -> list[XmlSchemaComplexType]:
-        # For now, return in the order they were discovered.
-        # A more sophisticated implementation would use the dependency graph.
-        return list(self.discovery_instance.filtered_models.values())
-
-    def _get_model_definition_extra_context(self, carrier: "ConversionCarrier[XmlSchemaComplexType]") -> dict:
-        # No extra context needed for XML Schema models
-        return {}
+        """Return source models in the correct processing (dependency) order."""
+        return self.discovery_instance.get_models_in_registration_order()
 
     # --- Additional XML Schema specific methods ---
 
@@ -218,3 +206,18 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                 member_name = f"CHOICE_{member_name}"
             lines.append(f'    {member_name} = "{value}", "{label}"')
         return "\\n".join(lines)
+
+    def generate(self):
+        """
+        Main method to generate the Django models file.
+        """
+        logger.info(f"Starting Django model generation to {self.output_path}")
+
+        # The base class now handles the full generation pipeline
+        super().generate()
+
+        logger.info(f"Successfully generated Django models in {self.output_path}")
+
+    def _write_to_file(self, content: str):
+        with open(self.output_path, "w") as f:
+            f.write(content)
