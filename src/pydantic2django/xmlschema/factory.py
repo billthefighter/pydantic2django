@@ -148,8 +148,11 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         kwargs = {"max_length": 255}  # Default, can be overridden
         if simple_type.restriction:
             if simple_type.restriction.pattern:
-                # This will be serialized later into a RegexValidator
-                kwargs["validators"] = [f"RegexValidator(r'{simple_type.restriction.pattern}')"]
+                # Import RawCode for proper validator serialization
+                from ..django.utils.serialization import RawCode
+
+                # Use RawCode to ensure validator is not quoted as string
+                kwargs["validators"] = [RawCode(f"RegexValidator(r'{simple_type.restriction.pattern}')")]
             if simple_type.restriction.max_length:
                 kwargs["max_length"] = int(simple_type.restriction.max_length)
             # Add other restrictions as needed (e.g., min_length)
@@ -232,11 +235,16 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
     ) -> tuple[type[models.ForeignKey], dict]:
         """Creates a ForeignKey field from an IDREF attribute or element."""
         schema_def = carrier.source_model.schema_def
-        kwargs = {"on_delete": "models.CASCADE"}
+        kwargs = {"on_delete": models.CASCADE}
 
         # Find the keyref that applies to this field
+        # Handle namespace prefixes in keyref fields (e.g., 'tns:author_ref' matches 'author_ref')
         keyref = next(
-            (kr for kr in schema_def.keyrefs if field_info.name in kr.fields),
+            (
+                kr
+                for kr in schema_def.keyrefs
+                if any(field_info.name == field_path.split(":")[-1] for field_path in kr.fields)
+            ),
             None,
         )
 
@@ -246,22 +254,38 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             key = next((k for k in schema_def.keys if k.name == refer_name), None)
             if key:
                 # Determine the target model by resolving the selector xpath
+                # key.selector is like ".//tns:Author", extract "Author"
                 selector_target = key.selector.split(":")[-1]
-                target_element = schema_def.elements.get(selector_target)
-                if target_element and target_element.type_name:
-                    target_model_name = target_element.type_name.split(":")[-1]
-                else:
-                    target_model_name = selector_target  # Fallback
 
-                kwargs["to"] = f"'{carrier.meta_app_label}.{target_model_name}'"
+                # The selector typically refers to elements of a specific type
+                # Try multiple resolution strategies:
+
+                # Strategy 1: Direct complex type match (Author -> AuthorType)
+                if f"{selector_target}Type" in schema_def.complex_types:
+                    target_model_name = f"{selector_target}Type"
+                # Strategy 2: Look for global element with that name
+                elif selector_target in schema_def.elements:
+                    target_element = schema_def.elements[selector_target]
+                    if target_element.type_name:
+                        target_model_name = target_element.type_name.split(":")[-1]
+                    else:
+                        target_model_name = f"{selector_target}Type"
+                # Strategy 3: Check if selector_target itself is a complex type
+                elif selector_target in schema_def.complex_types:
+                    target_model_name = selector_target
+                else:
+                    # Final fallback - use the selector target name + "Type"
+                    target_model_name = f"{selector_target}Type"
+
+                kwargs["to"] = f"{carrier.meta_app_label}.{target_model_name}"
 
                 # Use the keyref selector to generate a better related_name
                 if keyref.selector:
                     related_name_base = keyref.selector.split(":")[-1].replace(".//", "")
                     related_name = f"{related_name_base.lower()}s"
-                    kwargs["related_name"] = f"'{related_name}'"
+                    kwargs["related_name"] = related_name
                 else:
-                    kwargs["related_name"] = f"'{model_name.lower()}s'"
+                    kwargs["related_name"] = f"{model_name.lower()}s"
 
         # Fallback if keyref resolution fails
         if "to" not in kwargs:
