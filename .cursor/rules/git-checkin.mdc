@@ -1,127 +1,145 @@
----
-description: Git Checkin Standards
-globs: .git/hooks/pre-commit
----
 @mdc.mdc
 
-# Git Checkin Standards
+# Git Checkin Standards for Pydantic2django
 
-Standards for ensuring proper git commit practices in the LLMaestro project.
+## Commit Message Format
+Follow the conventional commit format for all commits:
 
-<rule>
-name: git_checkin_standards
-description: Guidelines for ensuring proper git commit practices
+```
+<type>(<scope>): <description>
 
-## Pre-Commit Requirements
+[optional body]
 
-Before committing changes to the repository, ensure:
+[optional footer(s)]
+```
 
-1. **Changenotes are implemented** according to the standards in `changenotes.mdc`
-2. **Pre-commit hooks pass** with all errors fixed
-3. **Code quality standards** are maintained
+### Types
+- **feat**: New feature implementation
+- **fix**: Bug fix
+- **docs**: Documentation changes
+- **style**: Code style changes (formatting, etc.)
+- **refactor**: Code refactoring
+- **test**: Adding or updating tests
+- **chore**: Maintenance tasks, dependencies, etc.
 
-## Changenotes Implementation
+### Scopes
+- **core**: Core functionality changes
+- **django**: Django-specific changes
+- **pydantic**: Pydantic-specific changes
+- **dataclass**: Dataclass functionality
+- **typedclass**: TypedClass functionality
+- **xmlschema**: XML Schema functionality
+- **tests**: Test-related changes
+- **docs**: Documentation changes
 
-For any significant changes, a changenote must be created in the `docs/changenotes` directory:
+### Examples
+```
+feat(core): add bidirectional type mapping for optional fields
+fix(django): resolve field requirement validation in Pydantic generation
+docs(changenotes): add comprehensive fix summary for validation issue
+test(dj2pyd): add tests for field requirement fix
+```
 
-1. Verify a changenote file exists for your branch/feature
-2. Ensure it follows the naming convention: `changes_from_<branch_name>_<commit_hash>.md`
-3. Confirm it includes all required sections:
-   - Title with change description and commit reference
-   - Overview of changes
-   - Detailed list of changes made
-   - Benefits of the changes
-   - Test coverage information
-   - Verification details
+## Branch Naming
+Use descriptive branch names that reflect the work being done:
 
-## Pre-Commit Hook Implementation
+- **feature/**: New features (e.g., `feature/optional-field-fix`)
+- **fix/**: Bug fixes (e.g., `fix/pydantic-validation-error`)
+- **docs/**: Documentation updates (e.g., `docs/changenotes-standards`)
+- **refactor/**: Code refactoring (e.g., `refactor/bidirectional-mapper`)
+- **test/**: Test improvements (e.g., `test/field-requirement-coverage`)
 
-The repository should have a pre-commit hook that:
+## Integration with Changenotes
+When creating significant changes:
 
-1. Checks for the existence of appropriate changenotes
-2. Runs all configured pre-commit hooks
-3. Blocks commits if any checks fail
+1. **Create changenote first**: Write the changenote in `[changenotes/](mdc:changenotes/)` before making changes
+2. **Branch naming**: Use the changenote name to inform branch naming
+3. **Commit references**: Include changenote filename in commit messages when applicable
+4. **Final update**: Update changenote with final implementation details before merge
 
-### Sample Pre-Commit Hook Script
-
+### Example Workflow
 ```bash
-#!/bin/bash
+# 1. Create changenote
+echo "# Pydantic Validation Fix Summary" > changenotes/PYDANTIC_VALIDATION_FIX_SUMMARY.md
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
+# 2. Create feature branch
+git checkout -b fix/pydantic-field-requirement
 
-echo -e "${YELLOW}Running pre-commit checks...${NC}"
+# 3. Make changes with descriptive commits
+git commit -m "fix(core): set default=None for optional fields in BidirectionalTypeMapper"
+git commit -m "fix(django): update fallback logic to check dj_field.null"
+git commit -m "test(dj2pyd): add comprehensive tests for field requirement fix"
 
-# Get current branch name
-BRANCH_NAME=$(git symbolic-ref --short HEAD)
+# 4. Update changenote with final details
+# Edit changenotes/PYDANTIC_VALIDATION_FIX_SUMMARY.md
 
-# Get latest commit hash (short version)
-COMMIT_HASH=$(git rev-parse --short HEAD)
-
-# Check if changenotes exist for the current branch
-CHANGENOTE_PATH="docs/changenotes/changes_from_${BRANCH_NAME}_${COMMIT_HASH}.md"
-CHANGENOTE_EXISTS=false
-
-# Check if we're on a feature branch (not main/master)
-if [[ "$BRANCH_NAME" != "main" && "$BRANCH_NAME" != "master" ]]; then
-    # Look for any changenote file that matches the branch pattern
-    if ls docs/changenotes/changes_from_${BRANCH_NAME}_*.md 1> /dev/null 2>&1; then
-        CHANGENOTE_EXISTS=true
-        echo -e "${GREEN}✓ Changenote found for branch $BRANCH_NAME${NC}"
-    else
-        echo -e "${RED}✗ No changenote found for branch $BRANCH_NAME${NC}"
-        echo -e "${YELLOW}Please create a changenote file at: $CHANGENOTE_PATH${NC}"
-        echo -e "${YELLOW}See .cursor/rules/changenotes.mdc for format requirements${NC}"
-        exit 1
-    fi
-fi
-
-# Run pre-commit hooks
-echo -e "${YELLOW}Running pre-commit hooks...${NC}"
-poetry run pre-commit run --all-files
-
-# Check the exit status of pre-commit
-if [ $? -ne 0 ]; then
-    echo -e "${RED}✗ Pre-commit hooks failed. Please fix the issues and try again.${NC}"
-    exit 1
-else
-    echo -e "${GREEN}✓ All pre-commit hooks passed!${NC}"
-fi
-
-echo -e "${GREEN}All checks passed. Proceeding with commit.${NC}"
-exit 0
+# 5. Final commit
+git commit -m "docs(changenotes): finalize Pydantic validation fix summary"
 ```
 
-## Integration with Git Workflow
+## Pull Request Standards
+When creating pull requests:
 
-To implement this pre-commit hook:
+1. **Title**: Use conventional commit format
+2. **Description**: Include:
+   - Summary of changes
+   - Reference to changenote if applicable
+   - Testing performed
+   - Impact on existing functionality
+3. **Changenote**: Link to or include changenote content
+4. **Tests**: Ensure all tests pass and new tests are added
 
-1. Create the hook file at `.git/hooks/pre-commit`
-2. Make it executable: `chmod +x .git/hooks/pre-commit`
-3. Ensure all developers on the project have the hook installed
+### PR Description Template
+```markdown
+## Summary
+Brief description of the changes made.
 
-Alternatively, use the pre-commit framework to manage hooks:
+## Changes
+- [ ] Change 1
+- [ ] Change 2
+- [ ] Change 3
 
-```yaml
-# In .pre-commit-config.yaml
-- repo: local
-  hooks:
-    - id: check-changenotes
-      name: Check changenotes exist
-      entry: scripts/check_changenotes.py
-      language: python
-      pass_filenames: false
-      always_run: true
+## Testing
+- [ ] All existing tests pass
+- [ ] New tests added for functionality
+- [ ] Demo scripts run successfully
+- [ ] No regressions introduced
+
+## Changenote
+See: [changenotes/CHANGENOTE_NAME.md](mdc:changenotes/CHANGENOTE_NAME.md)
+
+## Impact
+- Before: ❌ What didn't work
+- After: ✅ What now works
 ```
 
-## Best Practices
+## Quality Gates
+Before merging any PR:
 
-- Always run pre-commit hooks before pushing changes
-- Address all issues raised by pre-commit hooks
-- Keep changenotes up-to-date as you develop
+- [ ] All tests pass
+- [ ] Code follows project style guidelines
+- [ ] Documentation is updated
+- [ ] Changenote is complete and accurate
+- [ ] No breaking changes without proper documentation
+- [ ] Performance impact assessed (if applicable)
+
+## Release Integration
+For release-related changes:
+
+1. **Version bump**: Update version in `pyproject.toml`
+2. **Changelog**: Update `CHANGELOG.md` with release notes
+3. **Tagging**: Create git tag with version number
+4. **Changenotes**: Ensure all relevant changenotes are included in release notes
+
+### Release Commit Example
+```
+chore(release): bump version to 1.2.0
+
+- Add Pydantic field requirement fix
+- Include comprehensive changenotes
+- Update documentation
+```
+
 - Document all significant changes in changenotes
 - Ensure code quality standards are maintained
 </rule>

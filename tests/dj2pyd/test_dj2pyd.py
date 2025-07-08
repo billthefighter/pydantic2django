@@ -35,7 +35,9 @@ if not logger.handlers:
     logger.propagate = False
 
 # Import the function to test
-from pydantic2django.django.conversion import django_to_pydantic
+from pydantic2django.django.conversion import django_to_pydantic, generate_pydantic_class
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
+from pydantic2django.core.relationships import RelationshipConversionAccessor
 
 # Import Django Fixtures (ensure pytest path allows this)
 # These fixtures return the *class*, not an instance
@@ -1054,3 +1056,111 @@ def test_pydantic_serialization_error_with_raw_lazy_choices(lazy_choice_model):
 #         name = models.CharField(max_length=50, default="Test")
 
 #     return LazyChoiceModel
+
+
+@pytest.mark.django_db
+def test_field_requirement_fix():
+    """
+    Test that the field requirement fix correctly handles optional fields
+    when field_info_kwargs is empty or invalid.
+    """
+    from django.db import models
+    from pydantic import BaseModel, ValidationError
+
+    # Create a test Django model with both required and optional fields
+    class TestModel(models.Model):
+        class Meta:
+            app_label = "test_app"
+
+        # Required fields
+        required_field = models.CharField(max_length=100)
+        required_int = models.IntegerField()
+
+        # Optional fields (null=True)
+        optional_field = models.CharField(max_length=100, null=True, blank=True)
+        optional_date = models.DateField(null=True, blank=True)
+        optional_decimal = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
+    # Set up the mapper and generate Pydantic model
+    mapper = BidirectionalTypeMapper(RelationshipConversionAccessor())
+    generated_model = generate_pydantic_class(TestModel, mapper, model_name="TestPydanticModel")
+
+    # Verify the generated model has the correct field requirements
+    assert issubclass(generated_model, BaseModel)
+
+    # Test that required fields are actually required
+    with pytest.raises(ValidationError):
+        # Missing required fields should raise ValidationError
+        generated_model()
+
+    # Test that optional fields can be omitted
+    try:
+        instance = generated_model(
+            required_field="test",
+            required_int=42
+        )
+        assert instance.required_field == "test"
+        assert instance.required_int == 42
+        assert instance.optional_field is None
+        assert instance.optional_date is None
+        assert instance.optional_decimal is None
+    except ValidationError as e:
+        pytest.fail(f"Optional fields should not be required: {e}")
+
+    # Test that optional fields can be provided
+    try:
+        instance = generated_model(
+            required_field="test",
+            required_int=42,
+            optional_field="optional value",
+            optional_date=date(2023, 1, 1),
+            optional_decimal=Decimal("10.50")
+        )
+        assert instance.optional_field == "optional value"
+        assert instance.optional_date == date(2023, 1, 1)
+        assert instance.optional_decimal == Decimal("10.50")
+    except ValidationError as e:
+        pytest.fail(f"Optional fields should accept values: {e}")
+
+
+@pytest.mark.django_db
+def test_field_requirement_fix_with_invalid_kwargs():
+    """
+    Test that the field requirement fix correctly handles cases where
+    field_info_kwargs is invalid and falls back to checking dj_field.null.
+    """
+    from django.db import models
+    from pydantic import BaseModel, ValidationError
+
+    # Create a test Django model with optional fields
+    class TestModelWithOptional(models.Model):
+        class Meta:
+            app_label = "test_app"
+
+        required_field = models.CharField(max_length=100)
+        optional_field = models.CharField(max_length=100, null=True, blank=True)
+
+    # Set up the mapper and generate Pydantic model
+    mapper = BidirectionalTypeMapper(RelationshipConversionAccessor())
+    generated_model = generate_pydantic_class(TestModelWithOptional, mapper, model_name="TestOptionalModel")
+
+    # Verify the generated model has the correct field requirements
+    assert issubclass(generated_model, BaseModel)
+
+    # Test that optional field can be omitted
+    try:
+        instance = generated_model(required_field="test")
+        assert instance.required_field == "test"
+        assert instance.optional_field is None
+    except ValidationError as e:
+        pytest.fail(f"Optional field should not be required: {e}")
+
+    # Test that optional field can be provided
+    try:
+        instance = generated_model(
+            required_field="test",
+            optional_field="optional value"
+        )
+        assert instance.optional_field == "optional value"
+    except ValidationError as e:
+        pytest.fail(f"Optional field should accept values: {e}")
