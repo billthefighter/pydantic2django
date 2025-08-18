@@ -1,0 +1,12 @@
+site_name: pydantic2django
+site_description: Convert Pydantic types to Django types and back
+
+docs_dir: docs
+
+plugins:
+  - search
+  - mkdocstrings
+
+nav:
+  - Overview: index.md
+  - Reference: reference.md
