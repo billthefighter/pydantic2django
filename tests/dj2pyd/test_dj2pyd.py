@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, List, Optional, Dict, Callable, Tuple, cast, ForwardRef, get_args
+from typing import Any, Callable, ForwardRef, cast, get_args
 
 from pydantic import BaseModel, Field, EmailStr, Json, HttpUrl, IPvAnyAddress
 from pydantic_core import PydanticUndefined
@@ -95,39 +95,39 @@ class PydanticAllFields(BaseModel):
     # Match fields in the all_fields_model fixture
     auto_field: int
     boolean_field: bool
-    null_boolean_field: Optional[bool] = None
+    null_boolean_field: bool | None = None
     char_field: str
     char_field_choices: PydanticStatusEnum  # Expect enum value
-    text_field: Optional[str] = None
+    text_field: str | None = None
     slug_field: str
-    email_field: Optional[EmailStr] = None
+    email_field: EmailStr | None = None
     url_field: HttpUrl
     ip_address_field: IPvAnyAddress
     uuid_field: uuid.UUID
     integer_field: int
-    big_integer_field: Optional[int] = None
+    big_integer_field: int | None = None
     small_integer_field: int
     positive_integer_field: int
     positive_small_integer_field: int
     positive_big_integer_field: int
-    float_field: Optional[float] = None
+    float_field: float | None = None
     decimal_field: Decimal
     date_field: date
     datetime_field: datetime
-    time_field: Optional[time] = None
+    time_field: time | None = None
     duration_field: timedelta
     binary_field: bytes  # Pydantic handles bytes
     # File/Image fields are tricky - often represented as URL strings or just names in Pydantic
-    file_field: Optional[str] = None  # Assuming conversion results in path/URL string
-    image_field: Optional[str] = None
+    file_field: str | None = None  # Assuming conversion results in path/URL string
+    image_field: str | None = None
     # image_height: Optional[int] = None # These are usually read-only on Django side
     # image_width: Optional[int] = None
-    json_field: Optional[Json[Any]] = None  # Use Json[Any]
+    json_field: Json[Any] | None = None  # Use Json[Any]
 
     # Relationships - expect nested Pydantic models
-    foreign_key_field: Optional[PydanticRelated] = None
-    one_to_one_field: Optional[PydanticRelated] = None
-    many_to_many_field: List[PydanticRelated] = []
+    foreign_key_field: PydanticRelated | None = None
+    one_to_one_field: PydanticRelated | None = None
+    many_to_many_field: list[PydanticRelated] = []
 
     model_config = {"from_attributes": True}
 
@@ -135,7 +135,7 @@ class PydanticAllFields(BaseModel):
 # --- Helper Functions for Comparisons ---
 
 
-def compare_m2m(actual_pyd_list: List[PydanticRelated], expected_dj_qs):
+def compare_m2m(actual_pyd_list: list[PydanticRelated], expected_dj_qs):
     """Compare M2M list: check type, length, and content (IDs and names)."""
     assert isinstance(actual_pyd_list, list)
     expected_ids = {obj.id for obj in expected_dj_qs}
@@ -150,7 +150,7 @@ def compare_m2m(actual_pyd_list: List[PydanticRelated], expected_dj_qs):
         assert isinstance(item, PydanticRelated)
 
 
-def compare_related(actual_pyd_obj: Optional[PydanticRelated], expected_dj_obj):
+def compare_related(actual_pyd_obj: PydanticRelated | None, expected_dj_obj):
     """Compare FK/O2O: check type and key attributes."""
     if expected_dj_obj is None:
         assert actual_pyd_obj is None
@@ -914,7 +914,8 @@ def test_lazy_choices_fail_serialization_without_translation_active(lazy_choice_
     # Optional: Verify proxies are still in json_schema_extra at this point
     lazy_field_info = GeneratedModel.model_fields.get("lazy_choice_field")
     assert lazy_field_info is not None
-    schema_extra = lazy_field_info.json_schema_extra or {}
+    schema_extra = lazy_field_info.json_schema_extra
+    assert isinstance(schema_extra, dict)
     choices = schema_extra.get("choices", [])
     # Ensure choices is a list of pairs before iterating
     valid_choices_structure = False
@@ -955,7 +956,8 @@ def test_lazy_choices_fail_serialization_without_translation_active(lazy_choice_
             # Verify labels are resolved now
             lazy_field_info_active = GeneratedModelActive.model_fields.get("lazy_choice_field")
             assert lazy_field_info_active is not None
-            schema_extra_active = lazy_field_info_active.json_schema_extra or {}
+            schema_extra_active = lazy_field_info_active.json_schema_extra
+            assert isinstance(schema_extra_active, dict)
             choices_active = schema_extra_active.get("choices", [])
             # Ensure choices_active is a list of pairs before iterating
             valid_choices_active_structure = False

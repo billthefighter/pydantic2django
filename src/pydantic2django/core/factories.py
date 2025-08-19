@@ -41,6 +41,7 @@ class ConversionCarrier(Generic[SourceModelType]):
     django_fields: dict[str, models.Field] = field(default_factory=dict)
     relationship_fields: dict[str, models.Field] = field(default_factory=dict)
     context_fields: dict[str, Any] = field(default_factory=dict)  # Store original source field info
+    context_data: dict[str, Any] = field(default_factory=dict)
     # Stores (original_field_name, union_details_dict) for multi-FK unions
     pending_multi_fk_unions: list[tuple[str, dict]] = field(default_factory=list)
     invalid_fields: list[tuple[str, str]] = field(default_factory=list)
