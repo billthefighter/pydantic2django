@@ -1,7 +1,7 @@
 [project]
-name = "pydantic2django"
+name = "django-typed2django"
 version = "0.1.0"
-description = "Convert Pydantic models to Django models dynamically"
+description = "Convert typed Python DTOs (Pydantic, Dataclass, etc.) to Django models"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -21,6 +21,7 @@ dependencies = [
     "email-validator>=2.1.0",
     "pydantic-ai>=0.1.2",
     "mkdocs-autolinks-plugin>=0.7.1",
+    "lxml>=6.0.0",
 ]
 
 [dependency-groups]
@@ -60,7 +61,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pydantic2django"]
+packages = ["src/pydantic2django", "src/typed2django"]
 
 [tool.ruff]
 select = [
@@ -82,7 +83,7 @@ exclude = [
     "**/*_test.py",]
 
 [tool.ruff.isort]
-known-first-party = ["pydantic2django"]
+known-first-party = ["pydantic2django", "typed2django"]
 
 [tool.black]
 line-length = 120

@@ -1,4 +1,4 @@
-site_name: Pydantic2Django
+site_name: django-typed2django
 site_description: Convert Pydantic models to Django models dynamically
 
 # When publishing to GitHub Pages, this will be set by the action
