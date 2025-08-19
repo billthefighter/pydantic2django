@@ -1,0 +1,4 @@
+append_unmatched: true
+nav:
+  - index.md
+  - "*"

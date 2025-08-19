@@ -42,6 +42,17 @@ websockets = "^15.0.1"
 sqlalchemy = "^2.0.40"
 torch = "^2.2.0"
 
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "^1.6.0"
+mkdocs-material = "^9.5.0"
+mkdocs-awesome-nav = "^3.0.0"
+mkdocs-api-autonav = ">=0.3.0"
+mkdocstrings = ">=0.25.0"
+mkdocstrings-python = ">=1.8.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
