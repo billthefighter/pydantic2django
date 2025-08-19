@@ -393,7 +393,12 @@ class XmlSchemaParser:
 
             if tag_name == "enumeration":
                 if value:
-                    label = value.replace("_", " ").title()
+                    # Try to read per-enumeration documentation label
+                    doc_elem = child.find(f"{{{self.XS_NAMESPACE}}}annotation/{{{self.XS_NAMESPACE}}}documentation")
+                    if doc_elem is not None and doc_elem.text:
+                        label = doc_elem.text.strip()
+                    else:
+                        label = value.replace("_", " ").title()
                     restriction.enumeration.append((value, label))
             elif tag_name == "pattern":
                 if value:

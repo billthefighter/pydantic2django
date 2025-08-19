@@ -36,9 +36,18 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         module_mappings: dict[str, str] | None = None,
         base_model_class: type[models.Model] = Xml2DjangoBaseClass,
         class_name_prefix: str = "",
+        # Relationship handling for nested complex types
+        nested_relationship_strategy: str = "auto",  # one of: "fk", "json", "auto"
+        list_relationship_style: str = "child_fk",  # one of: "child_fk", "m2m", "json"
+        nesting_depth_threshold: int = 1,
     ):
         discovery = XmlSchemaDiscovery()
-        model_factory = XmlSchemaModelFactory(app_label=app_label)
+        model_factory = XmlSchemaModelFactory(
+            app_label=app_label,
+            nested_relationship_strategy=nested_relationship_strategy,
+            list_relationship_style=list_relationship_style,
+            nesting_depth_threshold=nesting_depth_threshold,
+        )
 
         super().__init__(
             output_path=output_path,
@@ -217,6 +226,68 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         super().generate()
 
         logger.info(f"Successfully generated Django models in {self.output_path}")
+
+    def generate_models_file(self) -> str:
+        """
+        Override to allow relationship finalization after carriers are built
+        but before rendering templates.
+        """
+        # Discover and create carriers first via base implementation pieces
+        self.discover_models()
+        models_to_process = self._get_models_in_processing_order()
+
+        # Reset state for this run (mirror BaseStaticGenerator)
+        self.carriers = []
+        self.import_handler.extra_type_imports.clear()
+        self.import_handler.pydantic_imports.clear()
+        self.import_handler.context_class_imports.clear()
+        self.import_handler.imported_names.clear()
+        self.import_handler.processed_field_types.clear()
+        self.import_handler._add_type_import(self.base_model_class)
+
+        for source_model in models_to_process:
+            self.setup_django_model(source_model)
+
+        # Give the factory a chance to add cross-model relationship fields (e.g., child FKs)
+        carriers_by_name = {
+            getattr(c.source_model, "__name__", ""): c for c in self.carriers if c.django_model is not None
+        }
+        if hasattr(self.model_factory_instance, "finalize_relationships"):
+            try:
+                # type: ignore[attr-defined]
+                self.model_factory_instance.finalize_relationships(carriers_by_name, self.app_label)  # noqa: E501
+            except Exception as e:
+                logger.error(f"Error finalizing XML relationships: {e}")
+
+        # Proceed with standard definition rendering
+        model_definitions = []
+        django_model_names = []
+        for carrier in self.carriers:
+            if carrier.django_model:
+                try:
+                    model_def = self.generate_model_definition(carrier)
+                    if model_def:
+                        model_definitions.append(model_def)
+                        django_model_names.append(f"'{self._clean_generic_type(carrier.django_model.__name__)}'")
+                except Exception as e:
+                    logger.error(
+                        f"Error generating definition for source model {getattr(carrier.source_model, '__name__', '?')}: {e}",
+                        exc_info=True,
+                    )
+
+        unique_model_definitions = self._deduplicate_definitions(model_definitions)
+        imports = self.import_handler.deduplicate_imports()
+        template_context = self._prepare_template_context(unique_model_definitions, django_model_names, imports)
+        template_context.update(
+            {
+                "generation_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "base_model_module": self.base_model_class.__module__,
+                "base_model_name": self.base_model_class.__name__,
+                "extra_type_imports": sorted(self.import_handler.extra_type_imports),
+            }
+        )
+        template = self.jinja_env.get_template("models_file.py.j2")
+        return template.render(**template_context)
 
     def _write_to_file(self, content: str):
         with open(self.output_path, "w") as f:

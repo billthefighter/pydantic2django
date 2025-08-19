@@ -17,6 +17,7 @@ from ..core.factories import (
 from .models import (
     XmlSchemaAttribute,
     XmlSchemaComplexType,
+    XmlSchemaDefinition,
     XmlSchemaElement,
     XmlSchemaSimpleType,
     XmlSchemaType,
@@ -40,6 +41,11 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
     FIELD_TYPE_MAP = {
         XmlSchemaType.STRING: models.CharField,
         XmlSchemaType.INTEGER: models.IntegerField,
+        XmlSchemaType.LONG: models.BigIntegerField,
+        XmlSchemaType.SHORT: models.SmallIntegerField,
+        XmlSchemaType.BYTE: models.SmallIntegerField,
+        XmlSchemaType.UNSIGNEDINT: models.PositiveIntegerField,
+        XmlSchemaType.UNSIGNEDLONG: models.PositiveBigIntegerField,
         XmlSchemaType.POSITIVEINTEGER: models.PositiveIntegerField,
         XmlSchemaType.DECIMAL: models.DecimalField,
         XmlSchemaType.BOOLEAN: models.BooleanField,
@@ -51,6 +57,18 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         XmlSchemaType.IDREF: models.ForeignKey,
         XmlSchemaType.HEXBINARY: models.BinaryField,
     }
+
+    def __init__(
+        self,
+        *,
+        nested_relationship_strategy: str = "auto",
+        list_relationship_style: str = "child_fk",
+        nesting_depth_threshold: int = 1,
+    ):
+        super().__init__()
+        self.nested_relationship_strategy = nested_relationship_strategy
+        self.list_relationship_style = list_relationship_style
+        self.nesting_depth_threshold = max(0, int(nesting_depth_threshold))
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -185,6 +203,45 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         carrier: ConversionCarrier[XmlSchemaComplexType],
     ):
         """Creates a Django field from an XmlSchemaElement."""
+        schema_def = carrier.source_model.schema_def
+
+        # Handle references to complex types (nested objects)
+        if element.base_type is None and element.type_name and schema_def:
+            target_type_name = element.type_name.split(":")[-1]
+            if target_type_name in schema_def.complex_types:
+                strategy = self._decide_nested_strategy(current_depth=1)
+                # Repeating complex elements
+                if element.is_list:
+                    if strategy == "json" or self.list_relationship_style == "json":
+                        return self._make_json_field_kwargs(element)
+                    if self.list_relationship_style == "m2m":
+                        kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "blank": True}
+                        return models.ManyToManyField, kwargs
+                    # Default: child_fk -> defer actual FK creation to child model via finalize step
+                    # Store pending relation on the model factory via carrier.context_data
+                    pending = carrier.context_data.setdefault("_pending_child_fk", [])
+                    pending.append(
+                        {
+                            "child": target_type_name,
+                            "parent": getattr(carrier.source_model, "__name__", model_name),
+                            "element_name": element.name,
+                        }
+                    )
+                    # Represent on parent as a reverse accessor only; no concrete field needed
+                    # Use a JSONField as placeholder if desired by strategy
+                    return self._make_json_field_kwargs(element) if strategy == "json" else (None, {})
+
+                # Single nested complex element
+                if strategy == "json":
+                    return self._make_json_field_kwargs(element)
+                # FK on parent to child
+                kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
+                if element.min_occurs == 0 or element.nillable:
+                    kwargs["null"] = True
+                    kwargs["blank"] = True
+                return models.ForeignKey, kwargs
+
+        # Default simple-type mapping
         field_class = self.FIELD_TYPE_MAP.get(element.base_type, models.CharField)
         kwargs = {}
 
@@ -203,9 +260,26 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             kwargs["default"] = element.default_value
 
         if element.base_type is None and element.type_name:
-            pass
+            # If we reach here, the referenced type couldn't be resolved to a complex/simple mapping
+            # Fallback to JSON for safety
+            json_field, json_kwargs = self._make_json_field_kwargs(element)
+            return json_field, json_kwargs
 
         return field_class, kwargs
+
+    def _decide_nested_strategy(self, current_depth: int) -> str:
+        """Decide how to represent nested complex types based on configuration."""
+        if self.nested_relationship_strategy in {"fk", "json"}:
+            return self.nested_relationship_strategy
+        # auto: depth-based
+        return "fk" if current_depth <= self.nesting_depth_threshold else "json"
+
+    def _make_json_field_kwargs(self, element: XmlSchemaElement):
+        kwargs: dict = {}
+        if element.nillable or element.min_occurs == 0:
+            kwargs["null"] = True
+            kwargs["blank"] = True
+        return models.JSONField, kwargs
 
     def _create_attribute_field(self, attribute: XmlSchemaAttribute, model_name: str):
         """Creates a Django field from an XmlSchemaAttribute."""
@@ -299,7 +373,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         return models.ForeignKey, kwargs
 
     def _resolve_simple_type(
-        self, type_name: str | None, schema_def: "XmlSchemaDefinition"
+        self, type_name: str | None, schema_def: XmlSchemaDefinition
     ) -> XmlSchemaSimpleType | None:
         """Looks up a simple type by its name in the schema definition."""
         if not type_name:
@@ -330,8 +404,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         choices = []
         if simple_type.restriction and simple_type.restriction.enumeration:
             for value, label in simple_type.restriction.enumeration:
-                # ('fiction', 'Fiction') -> FICTION = 'fiction', 'Fiction'
-                enum_member_name = label.replace("-", " ").upper().replace(" ", "_")
+                # Use the value to form the enum member name, label for human-readable
+                enum_member_name = value.replace("-", " ").upper().replace(" ", "_")
                 choices.append({"name": enum_member_name, "value": value, "label": label})
 
         carrier.context_data["enums"][enum_class_name] = {"name": enum_class_name, "choices": choices}
@@ -352,9 +426,22 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
 class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFieldInfo]):
     """Creates Django `Model` instances from `XmlSchemaComplexType` definitions."""
 
-    def __init__(self, app_label: str):
+    def __init__(
+        self,
+        app_label: str,
+        *,
+        nested_relationship_strategy: str = "auto",
+        list_relationship_style: str = "child_fk",
+        nesting_depth_threshold: int = 1,
+    ):
         self.app_label = app_label
-        self.field_factory = XmlSchemaFieldFactory()
+        self.field_factory = XmlSchemaFieldFactory(
+            nested_relationship_strategy=nested_relationship_strategy,
+            list_relationship_style=list_relationship_style,
+            nesting_depth_threshold=nesting_depth_threshold,
+        )
+        # Track pending child FK relations to inject after all models exist
+        self._pending_child_fk: list[dict] = []
 
     def _handle_field_result(self, result: FieldConversionResult, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Handle the result of field conversion and add to appropriate carrier containers."""
@@ -385,6 +472,10 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
             field_info = XmlSchemaFieldInfo(name=element.name, element=element)
             result = self.field_factory.create_field(field_info, model_name, carrier)
             self._handle_field_result(result, carrier)
+            # Collect pending child FK relations from this carrier's context
+            pending = carrier.context_data.pop("_pending_child_fk", [])
+            if pending:
+                self._pending_child_fk.extend(pending)
 
     def _build_model_context(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Builds the final ModelContext for the Django model."""
@@ -399,3 +490,38 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
             context_fields={},  # Will be populated if needed
             context_data=carrier.context_data,  # Pass through any context data like enums
         )
+
+    # --- Post-processing for cross-model relationships ---
+    def finalize_relationships(
+        self, carriers_by_name: dict[str, ConversionCarrier[XmlSchemaComplexType]], app_label: str
+    ):
+        """
+        After all models are built, inject ForeignKey fields into child models
+        for repeating nested complex elements (one-to-many parent->child).
+        """
+        if not self._pending_child_fk:
+            return
+        for rel in self._pending_child_fk:
+            child_name = rel.get("child")
+            parent_name = rel.get("parent")
+            element_name = rel.get("element_name", "items")
+            child_carrier = carriers_by_name.get(child_name)
+            if not child_carrier or not child_carrier.django_model:
+                logger.warning(f"Could not inject child FK: missing carrier for {child_name}")
+                continue
+            # Build kwargs for FK on child -> parent
+            rn_base = element_name.lower()
+            if not rn_base.endswith("s"):
+                rn_base = rn_base + "s"
+            related_name = rn_base
+            fk_kwargs = {
+                "to": f"{app_label}.{parent_name}",
+                "on_delete": "models.CASCADE",
+                "related_name": related_name,
+            }
+            # Generate definition string and register as field definition
+            from ..django.utils.serialization import generate_field_definition_string
+
+            fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
+            field_name = f"{parent_name.lower()}"
+            child_carrier.django_field_definitions[field_name] = fk_def

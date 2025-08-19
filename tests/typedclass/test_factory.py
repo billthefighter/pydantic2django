@@ -49,6 +49,18 @@ class TestTypedClassModelFactory:
         # return TypedClassModelFactory(field_factory=field_factory, relationship_accessor=accessor)
         return None # Placeholder
 
+@pytest.fixture
+def carrier(simple_typed_class_fixture):
+    # accessor = RelationshipConversionAccessor()
+    # return ConversionCarrier(
+    #     source_model=simple_typed_class_fixture,
+    #     source_model_name=simple_typed_class_fixture.__name__,
+    #     django_model_name=f"{simple_typed_class_fixture.__name__}DjangoModel",
+    #     app_label="tests",
+    #     relationship_accessor=accessor
+    # )
+    return None # Placeholder
+
     def test_get_model_fields_info_from_init(self, model_factory, typed_class_with_init_fixture, carrier):
         # field_infos = model_factory._get_model_fields_info(typed_class_with_init_fixture, carrier)
         # assert len(field_infos) == 2

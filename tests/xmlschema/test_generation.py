@@ -104,3 +104,66 @@ def test_generate_simple_model_from_xsd(simple_xsd_path, tmp_path):
     # Check for Meta class
     assert "class Meta:" in generated_code
     assert f"app_label = '{app_label}'" in generated_code
+
+
+# --- Nested schema tests ---
+
+@pytest.fixture(scope="module")
+def nested_xsd_path() -> Path:
+    return Path(__file__).parent / "fixtures" / "nested_schema.xsd"
+
+
+def test_nested_elements_as_fk_and_child_fk(nested_xsd_path, tmp_path):
+    output_file = tmp_path / "models.py"
+    app_label = "test_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(nested_xsd_path)],
+        output_path=str(output_file),
+        app_label=app_label,
+        nested_relationship_strategy="fk",
+        list_relationship_style="child_fk",
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+
+    # ParentType should have a FK to ChildType for single nested element
+    assert "class ParentType(Xml2DjangoBaseClass):" in code
+    assert_field_definition_xml(
+        code,
+        "child",
+        "ForeignKey",
+        {"to": "'test_app.ChildType'", "on_delete": "models.SET_NULL", "null": "True", "blank": "True"},
+        model_name="ParentType",
+    )
+
+    # ItemType should have an FK back to ParentType (one-to-many) with related_name 'items'
+    assert "class ItemType(Xml2DjangoBaseClass):" in code
+    assert_field_definition_xml(
+        code,
+        "parenttype",
+        "ForeignKey",
+        {"to": "'test_app.ParentType'", "on_delete": "models.CASCADE", "related_name": "'items'"},
+        model_name="ItemType",
+    )
+
+
+def test_nested_elements_as_json(nested_xsd_path, tmp_path):
+    output_file = tmp_path / "models.py"
+    app_label = "test_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(nested_xsd_path)],
+        output_path=str(output_file),
+        app_label=app_label,
+        nested_relationship_strategy="json",
+        list_relationship_style="json",
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+
+    # ParentType should store nested child and items as JSON
+    assert_field_definition_xml(code, "child", "JSONField", {"null": "True", "blank": "True"}, model_name="ParentType")
+    assert_field_definition_xml(code, "items", "JSONField", {"null": "True", "blank": "True"}, model_name="ParentType")
