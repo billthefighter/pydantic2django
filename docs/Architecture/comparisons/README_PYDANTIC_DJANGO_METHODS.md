@@ -100,8 +100,6 @@ In practice, the library's architecture allows for flexibility:
 3. `methods.py` can be used optionally to copy specific methods for better performance and IDE support
 4. `discovery.py` provides high-level discovery and registration regardless of which method approach is used
 
-This modular design allows users to choose the method integration approach that best fits their needs, while the core model creation and discovery functionality remains the same.
-
 ## Use Case Differences
 
 ### Development Experience
@@ -151,45 +149,3 @@ The two approaches represent different design philosophies:
 - `__getattr__` follows a **dynamic, implicit** approach that prioritizes simplicity and maintenance
 
 The choice between them depends on specific requirements around performance, maintainability, and developer experience. In practice, a hybrid approach might offer the best balance, using `methods.py` for critical methods and `__getattr__` as a fallback.
-
-## Code Examples
-
-### `methods.py` Approach
-
-```python
-# Copy methods from Pydantic model to Django model
-from pydantic2django.methods import copy_methods_to_django_model
-
-# After creating the Django model
-django_model = make_django_model(MyPydanticModel, app_label="myapp")
-django_model = copy_methods_to_django_model(django_model, MyPydanticModel)
-
-# Now methods are directly available on Django model instances
-instance = django_model.objects.get(pk=1)
-result = instance.my_method()  # Direct call, good performance
-```
-
-### `__getattr__` Approach
-
-```python
-# The __getattr__ approach is built into Pydantic2DjangoBaseClass
-# No explicit code needed to enable it
-
-# Methods are dynamically resolved
-instance = MyDjangoModel.objects.get(pk=1)
-result = instance.my_method()  # Dynamic resolution, converts to Pydantic first
-```
-
-## When to Use Each Approach
-
-- Use `methods.py` when:
-  - Performance is critical
-  - IDE support is important
-  - You need class methods and static methods
-  - You want explicit control over method behavior
-
-- Use `__getattr__` when:
-  - Simplicity is more important than performance
-  - You want automatic adaptation to Pydantic model changes
-  - You're primarily using instance methods
-  - Memory usage is a concern

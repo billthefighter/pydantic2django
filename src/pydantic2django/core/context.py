@@ -58,7 +58,12 @@ class ModelContext(Generic[SourceModelType]):  # Make ModelContext generic
         return required_fields
 
     def add_field(
-        self, field_name: str, field_type_str: str, is_optional: bool = False, is_list: bool = False, **kwargs
+        self,
+        field_name: str,
+        field_type_str: str,
+        is_optional: bool = False,
+        is_list: bool = False,
+        **kwargs: Any,
     ) -> None:
         """
         Add a field to the context storage.
@@ -195,7 +200,7 @@ class ModelContext(Generic[SourceModelType]):  # Make ModelContext generic
         return imports
 
     @classmethod
-    def generate_context_class_code(cls, model_context: "ModelContext", jinja_env=None) -> str:
+    def generate_context_class_code(cls, model_context: "ModelContext", jinja_env: Any | None = None) -> str:
         """
         Generate a string representation of the context class.
 
@@ -216,7 +221,7 @@ class ContextClassGenerator:
     Utility class for generating context class code from ModelContext objects.
     """
 
-    def __init__(self, jinja_env=None):
+    def __init__(self, jinja_env: Any | None = None) -> None:
         """
         Initialize the ContextClassGenerator.
 
@@ -307,8 +312,8 @@ class ContextClassGenerator:
             field_definitions.append(field_def)
 
         # Prepare imports for the template
-        typing_imports_str = ", ".join(sorted(list(self.imports["typing"])))
-        custom_imports_list = sorted(list(self.imports["custom"]))  # Keep as list of strings
+        typing_imports_str = ", ".join(sorted(self.imports["typing"]))
+        custom_imports_list = sorted(self.imports["custom"])  # Keep as list of strings
 
         model_name = self._clean_generic_type(model_context.django_model.__name__)
         source_class_name = self._clean_generic_type(model_context.source_class.__name__)

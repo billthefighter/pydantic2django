@@ -134,3 +134,4 @@ context: UserContext = {
     "permissions_handler": PermissionsHandler()
 }
 pydantic_user = user.to_pydantic(context=context)
+```

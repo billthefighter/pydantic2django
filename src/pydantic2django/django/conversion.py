@@ -628,11 +628,11 @@ def generate_pydantic_class(
                 field_instance = Field(**field_info_kwargs)
             except TypeError as field_exc:
                 logger.error(f"Invalid FieldInfo kwargs for '{field_name}': {field_info_kwargs}. Error: {field_exc}")
-                # Fallback to a simple required field
-                field_instance = ...  # Keep as required on error
+                # Fallback: Check Django field nullability
+                field_instance = None if dj_field.null else ...
         else:
-            # Required field (no defaults or specific settings from mapper)
-            field_instance = ...  # Pydantic V2 uses Ellipsis for required fields
+            # No field info kwargs: Check Django field nullability
+            field_instance = None if dj_field.null else ...
 
         field_definitions[field_name] = (final_type, field_instance)
         logger.debug(f"  Defined field '{field_name}': Type={final_type}, Definition={field_instance!r}")

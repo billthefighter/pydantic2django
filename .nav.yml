@@ -1,0 +1,4 @@
+append_unmatched: false
+
+nav:
+  - README.md

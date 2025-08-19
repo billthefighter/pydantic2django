@@ -1,97 +1,101 @@
----
-description: Changenotes Standards
-globs: docs/changenotes/*.md
----
-# Changenotes Standards
-
-Standards for creating and organizing change notes in the LLMaestro project.
-
-<rule>
-name: changenotes_standards
-description: Guidelines for creating and organizing change notes
-
-## Placement and Organization
-
-Change notes should be placed in the `docs/changenotes` directory with the following structure:
-
-```
-docs/changenotes/
-├── changes_from_<branch_name>_<commit_hash>.md
-├── changes_from_<feature>_<commit_hash>.md
-└── ...
-```
-
-## Naming Convention
-
-- Use the format `changes_from_<branch_name>_<commit_hash>.md`
-- Always include the branch name and a short commit hash
-- Use lowercase and underscores for consistency
-- Example: `changes_from_tool_dev_5884f30.md`
-
-## Content Requirements
-
-Each change note should include:
-
-1. **Title**: Clear heading with the change description and commit reference
-2. **Overview**: Brief summary of the changes made
-3. **Changes Made**: Detailed list of specific changes
-4. **Benefits**: Explanation of why the changes improve the codebase
-5. **Test Coverage**: Information about test coverage and verification
-6. **Verification**: How the changes were tested and verified
-
-## Example Structure
-
-```markdown
-# Feature Implementation Changes from branch_name 1234abc
+# Changenotes Standards for Pydantic2django
 
 ## Overview
+Changenotes should be created for significant changes, bug fixes, and feature implementations. They provide a clear record of what was changed, why it was changed, and how it impacts users.
 
-Brief description of the changes.
+## File Location and Naming
+- **Directory**: All changenotes should be stored in `[changenotes/](mdc:changenotes/)`
+- **Naming Convention**: Use descriptive names with underscores: `FEATURE_NAME_SUMMARY.md` or `BUG_FIX_SUMMARY.md`
+- **Branch Tagging**: Include the branch name in the filename or as a prefix: `BRANCH_NAME_FEATURE_SUMMARY.md`
 
-## Changes Made
+## Changenote Structure
+Follow this template for all changenotes:
 
-1. **Change Category One**:
-   - Specific change details
-   - More details
+```markdown
+# [Feature/Bug Fix] Title
 
-2. **Change Category Two**:
-   - Specific change details
-   - More details
+## Summary
+Brief description of what was implemented or fixed.
 
-## Benefits of Changes
+## Problem Description
+Detailed explanation of the issue or requirement.
 
-Explanation of how these changes improve the codebase.
+### Root Cause (for bug fixes)
+Technical explanation of why the problem occurred.
 
-## Test Coverage
+## Solution Implemented
+Step-by-step breakdown of the changes made.
 
-Information about test coverage.
+### Files Modified
+List of files that were changed with brief descriptions.
 
-## Verification
+## Testing
+Description of tests added or modified.
 
-How the changes were tested and verified.
+### Test Cases Added
+- Test name and purpose
+- Test name and purpose
+
+### Demo Scripts (if applicable)
+Description of any demonstration scripts created.
+
+## Impact
+### Before the Fix/Implementation
+- ❌ What didn't work
+- ❌ Problems users faced
+
+### After the Fix/Implementation
+- ✅ What now works
+- ✅ Benefits to users
+
+## Technical Details
+### Key Changes
+1. **Component Name**: What was changed
+2. **Component Name**: What was changed
+
+### Verification
+- ✅ All existing tests pass
+- ✅ New tests specifically for the change pass
+- ✅ Demo scripts run successfully
+- ✅ No regressions introduced
+
+## Usage
+How to use the new feature or how the fix affects existing usage.
+
+### Example (if applicable)
+```python
+# Code example showing the new functionality
 ```
 
-## When to Create Change Notes
+## Conclusion
+Summary of the overall impact and benefits.
+```
 
-Create change notes for:
-- Major feature implementations
-- Significant refactorings
-- Architecture changes
-- Breaking changes
-- Important bug fixes
+## When to Create Changenotes
+Create changenotes for:
+- **Bug Fixes**: When resolving issues that affect functionality
+- **Feature Implementations**: When adding new capabilities
+- **Breaking Changes**: When API changes require user updates
+- **Performance Improvements**: When significant optimizations are made
+- **Security Fixes**: When addressing security vulnerabilities
 
-## Integration with Development Workflow
+## Branch Integration
+- **Branch Name**: Include the Git branch name in the changenote filename
+- **Version Tagging**: Consider adding version numbers for release-related changes
+- **Cross-Reference**: Link to related issues, pull requests, or discussions
 
-1. Create the change note as part of your feature branch
-2. Update it as you make changes
-3. Finalize before merging to main/master
-4. Include the file path in your PR description
+## Examples
+Reference existing changenotes like [PYDANTIC_VALIDATION_FIX_SUMMARY.md](mdc:changenotes/PYDANTIC_VALIDATION_FIX_SUMMARY.md) for examples of well-structured changenotes.
 
-## Best Practices
+## Quality Checklist
+Before finalizing a changenote:
+- [ ] All sections are complete and accurate
+- [ ] Technical details are clear and precise
+- [ ] Impact is clearly explained
+- [ ] Examples are provided where helpful
+- [ ] File is properly named and located in changenotes directory
+- [ ] Branch name is included in filename or content
 
-- Be concise but thorough
-- Focus on the "why" as much as the "what"
-- Include code examples when helpful
 - Reference related issues or PRs
 - Update if changes are made after initial creation
 </rule>

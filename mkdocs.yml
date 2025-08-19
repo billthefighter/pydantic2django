@@ -1,0 +1,82 @@
+site_name: Pydantic2Django
+site_description: Convert Pydantic models to Django models dynamically
+
+# When publishing to GitHub Pages, this will be set by the action
+# site_url can be added later if desired
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.sections
+    - navigation.instant
+    - navigation.tracking
+    - navigation.expand
+    - navigation.path
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.integrate
+    - toc.follow
+    - search.share
+extra:
+  version:
+    provider: mike
+
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+
+
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+docs_dir: docs
+
+plugins:
+  - search
+  - api-autonav:
+      modules:
+        - src/pydantic2django
+      nav_section_title: "API"
+      api_root_uri: "reference"
+      exclude_private: true
+  - awesome-nav
+  - autorefs
+  - mermaid2
+  - mike
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+
+markdown_extensions:
+  - admonition
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+
+# Navigation is provided via src/.nav.yml (Awesome Nav)
