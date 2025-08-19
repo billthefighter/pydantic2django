@@ -17,8 +17,8 @@ This document outlines the directory structure and key files of the `pydantic2dj
 -   [`.pre-commit-config.yaml`](./.pre-commit-config.yaml): Configuration for pre-commit hooks.
 -   [`LICENSE`](./LICENSE): Project license file (Assumed, add if present).
 -   [`mypy.ini`](./mypy.ini): Configuration file for the MyPy type checker.
--   [`poetry.lock`](./poetry.lock): Defines exact dependency versions managed by Poetry.
--   [`pyproject.toml`](./pyproject.toml): Project metadata, dependencies, and tool configurations (like Ruff, Pytest) for Poetry.
+-   [`uv.lock`](./uv.lock): Defines exact, locked dependency versions managed by uv (generated via `uv lock` or `uv sync`).
+-   [`pyproject.toml`](./pyproject.toml): Project metadata, dependencies, and tool configurations (like Ruff, Pytest) using PEP 621 with Hatchling; uv reads this to manage environments and installs.
 -   [`README.md`](./README.md): The main introductory file for the project.
 -   [`setup.py`](./setup.py): Legacy setup script (may be present for compatibility).
 -   Other configuration files (`.ruff_cache/`, `.mypy_cache/`, `.pytest_cache/`, `.coverage`, `test_db.sqlite3`) are typically development artifacts.

@@ -1,0 +1,13 @@
+#append_unmatched: false
+
+nav:
+  - Introduction: docs/index.md
+  - Architecture: docs/Architecture
+  - Docs:
+      - glob: "docs/**/*.md"
+        sort:
+          by: filename
+      - glob: "pydantic2django/**/*.md"
+        sort:
+          by: filename
+  - API: reference/

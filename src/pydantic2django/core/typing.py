@@ -15,8 +15,9 @@ logger = logging.getLogger("pydantic2django.core.typing")
 
 # Add a function to configure logging
 def configure_core_typing_logging(
-    level=logging.WARNING, format_str="%Y-%m-%d %H:%M:%S - %(name)s - %(levelname)s - %(message)s"
-):
+    level: int = logging.WARNING,
+    format_str: str = "%Y-%m-%d %H:%M:%S - %(name)s - %(levelname)s - %(message)s",
+) -> None:
     """
     Configure the logging for core typing module.
 
