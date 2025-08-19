@@ -2,3 +2,9 @@ append_unmatched: false
 
 nav:
   - README.md
+  - How to Use:
+    - docs/how_to_use/bidirectional_generation.md
+    - docs/how_to_use/integrate_into_django_app.md
+  - How it works:
+    - docs/how_it_works/core_modules_and_concepts.md
+    - docs/how_it_works/readme_bidirectional_mapper.md

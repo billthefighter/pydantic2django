@@ -24,9 +24,13 @@ This library supports:
 -   **Type Hint Aware**: Leverages type hints to create the most appropriate Django model fields, including support for `Optional`, `Union`, `Literal`, and generic collections.
 -   **Extensible & Modular**: The library is structured into distinct modules for `pydantic`, `dataclass`, and `typedclass` handling, allowing for clear separation of concerns. You can dive into the core logic in `src/pydantic2django/core/`.
 
+## Full Documentation
+
+For the complete documentation site, visit the GitHub Pages deployment: [pydantic2django docs](https://billthefighter.github.io/pydantic2django/).
+
 ## Alternativves
 
-Consider [django-pydantic-field](https://github.com/surenkov/django-pydantic-field) which has lots of cool features but not quite as much scope (and, commensurately, not as much complexity) as this library. 
+Consider [django-pydantic-field](https://github.com/surenkov/django-pydantic-field) which has lots of cool features but not quite as much scope (and, commensurately, not as much complexity) as this library.
 
 ## Installation
 
