@@ -1,3 +1,14 @@
+{% if enum_classes %}
+# Enum Choices for {{ model_name }}
+{% for enum_class in enum_classes %}
+class {{ enum_class.name }}(models.TextChoices):
+    {% for choice in enum_class.choices %}
+    {{ choice.name }} = "{{ choice.value }}", "{{ choice.label }}"
+    {% endfor %}
+
+
+{% endfor %}
+{% endif %}
 """
 Django model for {{ pydantic_model_name }}.
 """

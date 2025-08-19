@@ -20,6 +20,7 @@ dependencies = [
     "pre-commit>=4.1.0",
     "email-validator>=2.1.0",
     "pydantic-ai>=0.1.2",
+    "mkdocs-autolinks-plugin>=0.7.1",
 ]
 
 [dependency-groups]

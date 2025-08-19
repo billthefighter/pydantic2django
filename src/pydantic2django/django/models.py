@@ -1309,3 +1309,212 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
         """
         self.save()
         return self.to_pydantic(context=None)
+
+
+# XML Schema Base Functionality
+
+
+class Xml2DjangoBaseClass(models.Model):
+    """
+    Base class for Django models generated from XML Schema definitions.
+    Provides XML-specific conversion methods and metadata handling.
+    """
+
+    # Schema linking fields
+    conversion_session = models.UUIDField(null=True, blank=True, help_text="Links to the conversion session")
+    schema_source = models.CharField(max_length=255, null=True, blank=True, help_text="Source XSD file")
+
+    # XML Schema metadata (can be overridden in generated models)
+    _xml_namespace: ClassVar[Optional[str]] = None
+    _xml_schema_location: ClassVar[Optional[str]] = None
+    _xml_type_name: ClassVar[Optional[str]] = None
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def from_xml_dict(cls, xml_data: dict[str, Any], **kwargs) -> "Xml2DjangoBaseClass":
+        """
+        Create Django model instance from XML data dictionary.
+
+        Args:
+            xml_data: Dictionary representation of XML data
+            **kwargs: Additional field values to override
+
+        Returns:
+            Django model instance
+        """
+        # Convert XML data (field names might need conversion from XML naming)
+        data = cls._convert_xml_data(xml_data)
+
+        # Override with any provided kwargs
+        data.update(kwargs)
+
+        # Create Django instance
+        return cls(**data)
+
+    @classmethod
+    def _convert_xml_data(cls, xml_data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Convert XML data dictionary to Django model field format.
+        Can be overridden to handle XML-to-Django field name mapping.
+        """
+        # Basic implementation - can be enhanced to handle:
+        # - camelCase to snake_case conversion
+        # - XML attribute vs element handling
+        # - Namespace handling
+        converted = {}
+        for key, value in xml_data.items():
+            # Skip XML metadata
+            if key.startswith("_") or key.startswith("@"):
+                continue
+
+            # Convert camelCase to snake_case for Django field names
+            django_field_name = cls._xml_name_to_django_field(key)
+            converted[django_field_name] = value
+
+        return converted
+
+    @classmethod
+    def _xml_name_to_django_field(cls, xml_name: str) -> str:
+        """Convert XML element/attribute name to Django field name."""
+        # Simple camelCase to snake_case conversion
+        import re
+
+        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", xml_name)
+        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+    def to_xml_dict(self, include_metadata: bool = False) -> dict[str, Any]:
+        """
+        Convert Django model instance to XML-compatible dictionary.
+
+        Args:
+            include_metadata: Whether to include XML namespace and schema information
+
+        Returns:
+            Dictionary suitable for XML serialization
+        """
+        data = {}
+
+        # Get field values
+        for field in self._meta.fields:
+            value = getattr(self, field.name)
+            if value is not None:
+                # Convert Django field name back to XML name
+                xml_name = self._django_field_to_xml_name(field.name)
+                data[xml_name] = self._serialize_field_value(value, field)
+
+        # Include metadata if requested
+        if include_metadata:
+            if self._xml_namespace:
+                data["_namespace"] = self._xml_namespace
+            if self._xml_schema_location:
+                data["_schema_location"] = self._xml_schema_location
+            if self._xml_type_name:
+                data["_type_name"] = self._xml_type_name
+
+        return data
+
+    def _django_field_to_xml_name(self, field_name: str) -> str:
+        """Convert Django field name back to XML element/attribute name."""
+        # Simple snake_case to camelCase conversion
+        components = field_name.split("_")
+        return components[0] + "".join(word.capitalize() for word in components[1:])
+
+    def _serialize_field_value(self, value: Any, field: models.Field) -> Any:
+        """Serialize field value for XML output."""
+        # Handle different field types
+        if isinstance(field, (models.DateTimeField, models.DateField, models.TimeField)):
+            return value.isoformat() if value else None
+        elif isinstance(field, models.UUIDField):
+            return str(value) if value else None
+        elif isinstance(field, (models.ForeignKey, models.OneToOneField)):
+            # For relationships, return the related object's primary key
+            return value.pk if value else None
+        elif isinstance(field, models.ManyToManyField):
+            # For M2M, return list of primary keys
+            return [obj.pk for obj in value.all()] if value else []
+        else:
+            return value
+
+    def to_xml_string(self, root_element_name: Optional[str] = None, include_declaration: bool = True) -> str:
+        """
+        Convert Django model instance to XML string.
+
+        Args:
+            root_element_name: Name for the root XML element (defaults to model class name)
+            include_declaration: Whether to include XML declaration
+
+        Returns:
+            XML string representation
+        """
+        try:
+            import xml.etree.ElementTree as ET
+        except ImportError:
+            raise ImportError("XML support requires xml.etree.ElementTree")
+
+        root_name = root_element_name or self._xml_type_name or self.__class__.__name__
+        root = ET.Element(root_name)
+
+        # Add namespace if available
+        if self._xml_namespace:
+            root.set("xmlns", self._xml_namespace)
+
+        # Convert to dict and build XML
+        data = self.to_xml_dict()
+        for key, value in data.items():
+            if key.startswith("_"):  # Skip metadata
+                continue
+            if value is not None:
+                if isinstance(value, list):
+                    # Handle lists (from maxOccurs="unbounded")
+                    for item in value:
+                        elem = ET.SubElement(root, key)
+                        elem.text = str(item)
+                else:
+                    elem = ET.SubElement(root, key)
+                    elem.text = str(value)
+
+        # Convert to string
+        xml_str = ET.tostring(root, encoding="unicode")
+
+        if include_declaration:
+            xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str
+
+        return xml_str
+
+    @classmethod
+    def from_xml_string(cls, xml_string: str) -> "Xml2DjangoBaseClass":
+        """
+        Create Django model instance from XML string.
+
+        Args:
+            xml_string: XML string to parse
+
+        Returns:
+            Django model instance
+        """
+        try:
+            import xml.etree.ElementTree as ET
+        except ImportError:
+            raise ImportError("XML support requires xml.etree.ElementTree")
+
+        root = ET.fromstring(xml_string)
+        data = {}
+
+        # Extract elements
+        for elem in root:
+            if elem.tag in data:
+                # Handle multiple elements with same name (lists)
+                if not isinstance(data[elem.tag], list):
+                    data[elem.tag] = [data[elem.tag]]
+                data[elem.tag].append(elem.text)
+            else:
+                data[elem.tag] = elem.text
+
+        # Extract attributes (prefixed with @)
+        for attr_name, attr_value in root.attrib.items():
+            if not attr_name.startswith("{"):  # Skip namespace declarations
+                data[f"@{attr_name}"] = attr_value
+
+        return cls.from_xml_dict(data)

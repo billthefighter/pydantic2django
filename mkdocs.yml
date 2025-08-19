@@ -50,7 +50,7 @@ extra:
         icon: material/brightness-4
         name: Switch to system preference
 
-docs_dir: src
+docs_dir: docs
 
 plugins:
   - search

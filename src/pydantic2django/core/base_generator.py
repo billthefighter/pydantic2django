@@ -40,6 +40,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         module_mappings: Optional[dict[str, str]],
         base_model_class: type[models.Model],
         packages: list[str] | None = None,
+        class_name_prefix: str = "Django",
     ):
         """
         Initialize the base generator.
@@ -54,6 +55,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             model_factory_instance: An instance of a BaseModelFactory subclass.
             module_mappings: Optional mapping of modules to remap imports.
             base_model_class: The base Django model class to inherit from.
+            class_name_prefix: Prefix for generated Django model class names.
         """
         self.output_path = output_path
         self.packages = packages
@@ -63,6 +65,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self.discovery_instance = discovery_instance
         self.model_factory_instance = model_factory_instance
         self.base_model_class = base_model_class
+        self.class_name_prefix = class_name_prefix
         self.carriers: list[ConversionCarrier[SourceModelType]] = []  # Stores results from model factory
 
         self.import_handler = ImportHandler(module_mappings=module_mappings)
@@ -210,6 +213,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             source_model=cast(type[SourceModelType], source_model),
             meta_app_label=self.app_label,
             base_django_model=self.base_model_class,
+            class_name_prefix=self.class_name_prefix,
             # Add other defaults/configs if needed, e.g., strict mode
             strict=False,  # Example default
         )
