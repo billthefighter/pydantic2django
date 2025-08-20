@@ -687,7 +687,7 @@ class BidirectionalTypeMapper:
                             f"Cannot map relationship: No corresponding Django model found for source model "
                             f"{related_py_model.__name__} in RelationshipConversionAccessor."
                         )
-                    # Use string representation (app_label.ModelName) if possible, else name
+                    # Use lowercase label for internal consistency with existing expectations
                     model_ref = getattr(target_django_model._meta, "label_lower", target_django_model.__name__)
 
                 kwargs["to"] = model_ref

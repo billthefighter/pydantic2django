@@ -514,9 +514,17 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
     def _handle_field_result(self, result: FieldConversionResult, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Handle the result of field conversion and add to appropriate carrier containers."""
         if result.django_field:
-            carrier.django_fields[result.field_name] = result.django_field
+            # Avoid generating a plain 'id' field unless it's a primary key; rename to prevent Django E004
+            out_field_name = result.field_name
+            try:
+                if out_field_name.lower() == "id" and not getattr(result.django_field, "primary_key", False):
+                    out_field_name = "xml_id"
+            except Exception:
+                pass
+
+            carrier.django_fields[out_field_name] = result.django_field
             if result.field_definition_str:
-                carrier.django_field_definitions[result.field_name] = result.field_definition_str
+                carrier.django_field_definitions[out_field_name] = result.field_definition_str
         elif result.context_field:
             carrier.context_fields[result.field_name] = result.context_field
         elif result.error_str:
