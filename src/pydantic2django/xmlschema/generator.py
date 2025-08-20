@@ -121,7 +121,9 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         except Exception:
             pass
         try:
-            from typed2django.django.models import Xml2DjangoBaseClass as _Base  # type: ignore[import-not-found]
+            from typed2django.django.models import (
+                Xml2DjangoBaseClass as _Base,  # type: ignore[import-not-found]
+            )
 
             return _Base
         except Exception as exc:  # pragma: no cover - defensive
