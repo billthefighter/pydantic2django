@@ -39,10 +39,10 @@ jobs:
       - name: Read versions
         id: versions
         run: |
-          ROOT_VERSION=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read())['project']['version'])")
+          ROOT_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           P2D_VERSION=$ROOT_VERSION
-          P2D_PYDANTIC_VERSION=$(python -c "import tomllib,sys;\nimport pathlib;\np=pathlib.Path('packages/pydantic/pyproject.toml');\nprint(tomllib.loads(p.read_bytes())['project']['version']) if p.exists() else print('')")
-          P2D_XMLSCHEMA_VERSION=$(python -c "import tomllib,sys;\nimport pathlib;\np=pathlib.Path('packages/xmlschema/pyproject.toml');\nprint(tomllib.loads(p.read_bytes())['project']['version']) if p.exists() else print('')")
+          P2D_PYDANTIC_VERSION=$(python -c "import tomllib,sys,pathlib; p=pathlib.Path('packages/pydantic/pyproject.toml'); print(tomllib.load(open(p,'rb'))['project']['version']) if p.exists() else print('')")
+          P2D_XMLSCHEMA_VERSION=$(python -c "import tomllib,sys,pathlib; p=pathlib.Path('packages/xmlschema/pyproject.toml'); print(tomllib.load(open(p,'rb'))['project']['version']) if p.exists() else print('')")
           echo "root_version=${ROOT_VERSION}" >> $GITHUB_OUTPUT
           echo "pydantic_version=${P2D_PYDANTIC_VERSION}" >> $GITHUB_OUTPUT
           echo "xmlschema_version=${P2D_XMLSCHEMA_VERSION}" >> $GITHUB_OUTPUT
