@@ -2,6 +2,9 @@
 
 Generate Django models from Pydantic models, Python dataclasses, or plain typed classes — and convert data back and forth reliably.
 
+> [!IMPORTANT]
+> Namespace rename and deprecation: The distribution is now `django-typed2django` and the new import namespace is `typed2django`. The old `pydantic2django` namespace is deprecated and will be removed in version 1.1.0. Please migrate imports to `typed2django.*`.
+
 ## Features
 
 - Automatic Django model generation (`models.py`) from your Python types
@@ -12,13 +15,13 @@ Generate Django models from Pydantic models, Python dataclasses, or plain typed 
 
 ## Quickstart
 
-1) Install
+1. Install
 
 ```bash
-pip install pydantic2django
+pip install django-typed2django
 ```
 
-2) Define your Pydantic models
+1. Define your Pydantic models
 
 ```python
 import uuid
@@ -36,10 +39,10 @@ class Product(BaseModel):
     owner: User
 ```
 
-3) Generate a `models.py` file
+1. Generate a `models.py` file
 
 ```python
-from pydantic2django.pydantic.generator import StaticPydanticModelGenerator
+from typed2django.pydantic.generator import StaticPydanticModelGenerator
 
 generator = StaticPydanticModelGenerator(
     output_path="my_app/models.py",
@@ -52,7 +55,7 @@ generator = StaticPydanticModelGenerator(
 generator.generate()
 ```
 
-4) Use the generated models
+1. Use the generated models
 
 ```python
 from my_app.models import User as DjangoUser

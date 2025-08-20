@@ -2,27 +2,31 @@
 
 A powerful utility for generating Django models from Pydantic models, Python dataclasses, and even generic Python classes, and providing seamless, bidirectional data conversion between them.
 
+> [!IMPORTANT]
+> Namespace rename and deprecation: The distribution is now published as `django-typed2django` and the new import namespace is `typed2django`. The old `pydantic2django` namespace is deprecated and will be removed in version 1.1.0. Please migrate imports from `pydantic2django.*` to `typed2django.*`.
+
 ## Overview
 
 Pydantic2Django bridges the gap between your application's data layer (defined using Pydantic, dataclasses, etc.) and your persistence layer in Django. It allows you to:
 
-1.  **Generate `models.py` files automatically** from your existing Python classes.
-2.  **Convert data seamlessly** between Django model instances and your source Pydantic/dataclass objects.
-3.  **Persist and manage** application data objects in a Django database without writing boilerplate mapping code.
-4.  **Handle relationships** between your Python objects and translate them into Django's relational fields (`ForeignKey`, `ManyToManyField`).
+1. **Generate `models.py` files automatically** from your existing Python classes.
+2. **Convert data seamlessly** between Django model instances and your source Pydantic/dataclass objects.
+3. **Persist and manage** application data objects in a Django database without writing boilerplate mapping code.
+4. **Handle relationships** between your Python objects and translate them into Django's relational fields (`ForeignKey`, `ManyToManyField`).
 
 This library supports:
--   **Pydantic Models**: Robust support for `pydantic.BaseModel`.
--   **Python Dataclasses**: Full support for classes decorated with `@dataclasses.dataclass`.
--   **Generic Python Classes**: Experimental support for converting plain Python classes that act as data containers (see [Experimental Features](#experimental-features)).
+
+- **Pydantic Models**: Robust support for `pydantic.BaseModel`.
+- **Python Dataclasses**: Full support for classes decorated with `@dataclasses.dataclass`.
+- **Generic Python Classes**: Experimental support for converting plain Python classes that act as data containers (see [Experimental Features](#experimental-features)).
 
 ## Core Features
 
--   **Automatic Django Model Generation**: Scans your project to discover data classes and generates a complete, ready-to-use `models.py` file.
--   **Bidirectional Data Mapping**: The generated Django models, or models inheriting from the provided base classes, include methods like `.from_pydantic()` and `.to_pydantic()` for easy and reliable data conversion.
--   **Relationship Management**: Intelligently detects relationships between your source models and automatically creates the corresponding `ForeignKey` and `ManyToManyField` fields in Django.
--   **Type Hint Aware**: Leverages type hints to create the most appropriate Django model fields, including support for `Optional`, `Union`, `Literal`, and generic collections.
--   **Extensible & Modular**: The library is structured into distinct modules for `pydantic`, `dataclass`, and `typedclass` handling, allowing for clear separation of concerns. You can dive into the core logic in `src/pydantic2django/core/`.
+- **Automatic Django Model Generation**: Scans your project to discover data classes and generates a complete, ready-to-use `models.py` file.
+- **Bidirectional Data Mapping**: The generated Django models, or models inheriting from the provided base classes, include methods like `.from_pydantic()` and `.to_pydantic()` for easy and reliable data conversion.
+- **Relationship Management**: Intelligently detects relationships between your source models and automatically creates the corresponding `ForeignKey` and `ManyToManyField` fields in Django.
+- **Type Hint Aware**: Leverages type hints to create the most appropriate Django model fields, including support for `Optional`, `Union`, `Literal`, and generic collections.
+- **Extensible & Modular**: The library is structured into distinct modules for `pydantic`, `dataclass`, and `typedclass` handling, allowing for clear separation of concerns. You can dive into the core logic in `src/pydantic2django/core/`.
 
 ## Full Documentation
 
@@ -35,16 +39,16 @@ Consider [django-pydantic-field](https://github.com/surenkov/django-pydantic-fie
 ## Installation
 
 ```bash
-pip install pydantic2django
+pip install django-typed2django
 ```
 
 ## How It Works
 
 Pydantic2Django operates using a three-stage pipeline:
 
-1.  **Discovery**: It scans specified Python packages to find and identify source models (Pydantic, dataclass, etc.).
-2.  **Factory**: For each discovered model, it analyzes its fields, type hints, and relationships to create an in-memory representation of a Django model.
-3.  **Generator**: It uses the in-memory representation and Jinja2 templates to generate the final Python code for your `models.py` file, including all necessary imports, model classes, and field definitions.
+1. **Discovery**: It scans specified Python packages to find and identify source models (Pydantic, dataclass, etc.).
+2. **Factory**: For each discovered model, it analyzes its fields, type hints, and relationships to create an in-memory representation of a Django model.
+3. **Generator**: It uses the in-memory representation and Jinja2 templates to generate the final Python code for your `models.py` file, including all necessary imports, model classes, and field definitions.
 
 ## Usage
 
@@ -75,7 +79,7 @@ You can generate the Django models with a simple script:
 
 ```python
 # scripts/generate_django_models.py
-from pydantic2django.pydantic import StaticPydanticModelGenerator
+from typed2django.pydantic.generator import StaticPydanticModelGenerator
 
 # Create a generator for Pydantic models
 generator = StaticPydanticModelGenerator(
@@ -92,7 +96,7 @@ print("Django models generated successfully!")
 
 This will create `my_app/models.py` containing `User` and `Product` Django models, complete with a `ForeignKey` relationship.
 
-> **Note**: For dataclasses, you would use `DataclassDjangoModelGenerator` from `pydantic2django.dataclass`.
+> **Note**: For dataclasses, you would use `DataclassDjangoModelGenerator` from `typed2django.dataclass`.
 
 ### Example 2: Using the Generated Models
 
