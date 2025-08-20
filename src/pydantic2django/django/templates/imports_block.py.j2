@@ -11,13 +11,29 @@ from dataclasses import dataclass, field
 from django.db import models
 from pydantic import BaseModel
 
-# typed2django imports
-from typed2django.django.models import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject, Dataclass2DjangoBaseClass
-from typed2django.core.context import ModelContext, FieldContext
+# typed2django base classes (import only those relevant to the current conversion)
+{% if generation_source_type == 'pydantic' %}
+from typed2django.django.models import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject
+{% elif generation_source_type == 'dataclass' %}
+from typed2django.django.models import Dataclass2DjangoBaseClass
+{% elif generation_source_type in ['xml', 'xmlschema'] %}
+from typed2django.django.models import Xml2DjangoBaseClass
+{% else %}
+# Fallback: import commonly used bases
+from typed2django.django.models import Pydantic2DjangoBaseClass, Dataclass2DjangoBaseClass
+{% endif %}
+
+# Context types for optional context class generation
+from pydantic2django.core.context import ModelContext, FieldContext
 
 # Additional type imports from typing module
-{% if typing_imports %}
-from typing import {{ typing_imports|join(', ') }}
+{% if extra_type_imports %}
+from typing import {{ extra_type_imports|join(', ') }}
+{% endif %}
+
+# Django validators (conditionally included)
+{% if validator_imports %}
+from django.core.validators import {{ validator_imports|join(', ') }}
 {% endif %}
 
 # Original Pydantic model imports

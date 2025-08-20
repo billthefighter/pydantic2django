@@ -120,6 +120,10 @@ class TestComprehensiveSchemaGeneration:
             kwargs_str
         ), f"RegexValidator not found in email field kwargs: {kwargs_str}"
 
+    def test_validators_are_imported(self, generated_code: str):
+        """Ensure that when RegexValidator is used, the import is present."""
+        assert "from django.core.validators import RegexValidator" in generated_code
+
     # @pytest.mark.xfail(reason="Enum class generation from simpleType not yet implemented")
     def test_author_status_enum_class_generated(self, generated_code: str):
         """Tests that the TextChoices enum for AuthorStatus is generated correctly."""

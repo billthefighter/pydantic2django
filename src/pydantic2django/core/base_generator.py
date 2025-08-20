@@ -64,6 +64,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self.verbose = verbose
         self.discovery_instance = discovery_instance
         self.model_factory_instance = model_factory_instance
+        # Base model class must be provided explicitly by subclass at call site.
         self.base_model_class = base_model_class
         self.class_name_prefix = class_name_prefix
         self.carriers: list[ConversionCarrier[SourceModelType]] = []  # Stores results from model factory
@@ -97,7 +98,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         # Add more common filters if needed
 
         # Add base model import
-        self.import_handler._add_type_import(base_model_class)
+        self.import_handler._add_type_import(self.base_model_class)
 
     # --- Abstract Methods to be Implemented by Subclasses ---
 
@@ -126,6 +127,15 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
     @abstractmethod
     def _get_model_definition_extra_context(self, carrier: ConversionCarrier[SourceModelType]) -> dict:
         """Provide extra context specific to the source type for model_definition.py.j2."""
+        pass
+
+    @abstractmethod
+    def _get_default_base_model_class(self) -> type[models.Model]:
+        """Return the required base Django model class for this generator.
+
+        Subclasses implement this so they can easily and explicitly resolve
+        the correct base and pass it into the base initializer.
+        """
         pass
 
     # --- Common Methods ---
@@ -304,12 +314,6 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
                 # Add import for the parent if it's not the configured base_model_class
                 if parent_class != self.base_model_class:
                     self.import_handler._add_type_import(parent_class)
-
-        # --- Prepare Context Class Info ---
-        context_class_name = ""
-        if carrier.model_context and carrier.model_context.context_fields:
-            # Standard naming convention
-            context_class_name = f"{django_model_name}Context"
 
         # --- Get Subclass Specific Context ---
         extra_context = self._get_model_definition_extra_context(carrier)

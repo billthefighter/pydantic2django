@@ -3,6 +3,8 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
+from django.apps import apps as django_apps
+from django.core.exceptions import AppRegistryNotReady
 from django.db import models
 
 # Core imports
@@ -11,10 +13,7 @@ from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 
-# Base Django model (assuming a common one might be used, or default to models.Model)
-# Import the correct base class for dataclasses
-from pydantic2django.django.models import Dataclass2DjangoBaseClass
-
+# Base Django model will be provided via _get_default_base_model_class
 # from pydantic2django.factory import DjangoModelFactoryCarrier # Old carrier, use ConversionCarrier
 # Dataclass specific imports
 from .discovery import DataclassDiscovery, DataclassType
@@ -44,8 +43,6 @@ class DataclassDjangoModelGenerator(
         field_factory_instance: Optional[DataclassFieldFactory] = None,  # Add field factory param
         relationship_accessor: Optional[RelationshipConversionAccessor] = None,  # Accept accessor
         module_mappings: Optional[dict[str, str]] = None,
-        # Default base class can be models.Model or a custom one
-        base_model_class: type[models.Model] = Dataclass2DjangoBaseClass,  # Use the correct base for dataclasses
     ):
         # 1. Initialize Dataclass-specific discovery
         self.dataclass_discovery_instance = discovery_instance or DataclassDiscovery()
@@ -78,7 +75,7 @@ class DataclassDjangoModelGenerator(
             discovery_instance=self.dataclass_discovery_instance,
             model_factory_instance=self.dataclass_model_factory,
             module_mappings=module_mappings,
-            base_model_class=base_model_class,
+            base_model_class=self._get_default_base_model_class(),
         )
         logger.info("DataclassDjangoModelGenerator initialized using BaseStaticGenerator.")
 
@@ -158,6 +155,22 @@ class DataclassDjangoModelGenerator(
             # Add other specific details if needed, ensuring they access carrier correctly
             # Example: "source_model_module": carrier.source_model.__module__ if carrier.source_model else ""
         }
+
+    def _get_default_base_model_class(self) -> type[models.Model]:
+        """Return the default Django base model for Dataclass conversion."""
+        if not django_apps.ready:
+            raise AppRegistryNotReady(
+                "Django apps are not loaded. Call django.setup() or run within a configured Django context before "
+                "instantiating DataclassDjangoModelGenerator."
+            )
+        try:
+            from typed2django.django.models import Dataclass2DjangoBaseClass as _Base
+
+            return _Base
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ImportError(
+                "typed2django.django.models.Dataclass2DjangoBaseClass is required for Dataclass generation."
+            ) from exc
 
     # --- Potentially Override generate_models_file if needed ---
     # For dataclasses, the base generate_models_file might be sufficient as there's no

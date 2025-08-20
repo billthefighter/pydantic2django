@@ -3,12 +3,17 @@ import logging
 from collections.abc import Callable
 from typing import Optional, cast
 
+from django.apps import apps as django_apps
+from django.core.exceptions import AppRegistryNotReady
 from django.db import models
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 # Import other Pydantic-specific needs
 from pydantic2django.core.base_generator import BaseStaticGenerator
+
+# Import the new mapper
+from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.context import ContextClassGenerator
 
 # Core imports - Adjusted path for ConversionCarrier
@@ -16,17 +21,14 @@ from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 from pydantic2django.core.typing import TypeHandler
 
-# Import the new mapper
-from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
-
 # TypeMapper for field generation hints
 # Import base classes and specific components
 from pydantic2django.pydantic.discovery import PydanticDiscovery
-from pydantic2django.pydantic.factory import PydanticFieldFactory, PydanticModelFactory, create_pydantic_factory
+from pydantic2django.pydantic.factory import create_pydantic_factory
 
 # Import the original factories needed by PydanticModelFactory
 # from pydantic2django.factory import DjangoFieldFactory as OriginalDjangoFieldFactory
-from ..django.models import Pydantic2DjangoBaseClass
+# Note: default base class will be resolved via _get_default_base_model_class
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,6 @@ class StaticPydanticModelGenerator(
         verbose: bool = False,
         discovery_module: Optional[PydanticDiscovery] = None,
         module_mappings: Optional[dict[str, str]] = None,
-        base_model_class: type[models.Model] = Pydantic2DjangoBaseClass,
         # Pydantic specific factories can be passed or constructed here
         # NOTE: Injecting factory instances is less preferred now due to mapper dependency
         # field_factory_instance: Optional[PydanticFieldFactory] = None,
@@ -84,7 +85,7 @@ class StaticPydanticModelGenerator(
             discovery_instance=self.pydantic_discovery_instance,  # Pass the specific discovery instance
             model_factory_instance=self.pydantic_model_factory,  # Pass the newly created model factory
             module_mappings=module_mappings,
-            base_model_class=base_model_class,
+            base_model_class=self._get_default_base_model_class(),
             # Jinja setup is handled by base class
         )
 
@@ -143,7 +144,8 @@ class StaticPydanticModelGenerator(
             # --- Pydantic Specific ---
             "context_definitions": self.context_definitions,  # Populated in generate_models_file override
             "all_models": [  # This seems redundant if django_model_names covers __all__
-                f"'{name}'" for name in django_model_names  # Use Django names for __all__ consistency?
+                f"'{name}'"
+                for name in django_model_names  # Use Django names for __all__ consistency?
             ],
             "context_class_names": self.context_class_names,  # Populated in generate_models_file override
             "model_has_context": self.model_has_context,  # Populated in generate_models_file override
@@ -199,6 +201,25 @@ class StaticPydanticModelGenerator(
             "field_definitions": carrier.django_field_definitions,
         }
 
+    def _get_default_base_model_class(self) -> type[models.Model]:
+        """Return the default Django base model for Pydantic conversion.
+
+        Raises a clear ImportError if the base cannot be imported.
+        """
+        if not django_apps.ready:
+            raise AppRegistryNotReady(
+                "Django apps are not loaded. Call django.setup() or run within a configured Django context before "
+                "instantiating StaticPydanticModelGenerator."
+            )
+        try:
+            from typed2django.django.models import Pydantic2DjangoBaseClass as _Base
+
+            return _Base
+        except Exception as exc:  # pragma: no cover - defensive path
+            raise ImportError(
+                "typed2django.django.models.Pydantic2DjangoBaseClass is required for Pydantic generation."
+            ) from exc
+
     # --- Override generate_models_file to handle Pydantic context class generation ---
 
     def generate_models_file(self) -> str:
@@ -253,7 +274,6 @@ class StaticPydanticModelGenerator(
 
             try:
                 django_model_def = ""
-                has_django_model = False
                 django_model_name_cleaned = ""
 
                 # --- A. Generate Django Model Definition (if applicable) ---
@@ -271,7 +291,6 @@ class StaticPydanticModelGenerator(
                             model_definitions.append(django_model_def)
                             django_model_name_cleaned = self._clean_generic_type(carrier.django_model.__name__)
                             django_model_names.append(f"'{django_model_name_cleaned}'")
-                            has_django_model = True
                         else:
                             logger.warning(f"Base generate_model_definition returned empty for {model_name}, skipping.")
                     else:

@@ -69,6 +69,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         self.nested_relationship_strategy = nested_relationship_strategy
         self.list_relationship_style = list_relationship_style
         self.nesting_depth_threshold = max(0, int(nesting_depth_threshold))
+        # Track which Django validators are needed based on restrictions encountered
+        self.used_validators: set[str] = set()
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -171,6 +173,11 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
 
                 # Use RawCode to ensure validator is not quoted as string
                 kwargs["validators"] = [RawCode(f"RegexValidator(r'{simple_type.restriction.pattern}')")]
+                # Note usage for later import emission
+                try:
+                    self.used_validators.add("RegexValidator")
+                except Exception:
+                    pass
             if simple_type.restriction.max_length:
                 kwargs["max_length"] = int(simple_type.restriction.max_length)
             # Add other restrictions as needed (e.g., min_length)
