@@ -1,0 +1,109 @@
+name: Publish to PyPI on version change
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'pyproject.toml'
+      - 'packages/**/pyproject.toml'
+      - '.github/workflows/publish-pypi.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Read versions
+        id: versions
+        run: |
+          ROOT_VERSION=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read())['project']['version'])")
+          P2D_VERSION=$ROOT_VERSION
+          P2D_PYDANTIC_VERSION=$(python -c "import tomllib,sys;\nimport pathlib;\np=pathlib.Path('packages/pydantic/pyproject.toml');\nprint(tomllib.loads(p.read_bytes())['project']['version']) if p.exists() else print('')")
+          P2D_XMLSCHEMA_VERSION=$(python -c "import tomllib,sys;\nimport pathlib;\np=pathlib.Path('packages/xmlschema/pyproject.toml');\nprint(tomllib.loads(p.read_bytes())['project']['version']) if p.exists() else print('')")
+          echo "root_version=${ROOT_VERSION}" >> $GITHUB_OUTPUT
+          echo "pydantic_version=${P2D_PYDANTIC_VERSION}" >> $GITHUB_OUTPUT
+          echo "xmlschema_version=${P2D_XMLSCHEMA_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check
+        run: |
+          TAG=v${{ steps.versions.outputs.root_version }}
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null 2>&1; then
+            echo "Version tag ${TAG} already exists. Skipping publish."
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version detected: ${TAG}"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build root distribution
+        if: steps.check.outputs.should_publish == 'true'
+        run: |
+          python -m build
+
+      - name: Upload root to PyPI (OIDC)
+        if: steps.check.outputs.should_publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+      - name: Build pydantic variant (if versions match)
+        if: steps.check.outputs.should_publish == 'true' && steps.versions.outputs.pydantic_version == steps.versions.outputs.root_version && steps.versions.outputs.pydantic_version != ''
+        working-directory: packages/pydantic
+        run: |
+          python -m build
+
+      - name: Upload pydantic variant to PyPI (OIDC)
+        if: steps.check.outputs.should_publish == 'true' && steps.versions.outputs.pydantic_version == steps.versions.outputs.root_version && steps.versions.outputs.pydantic_version != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/pydantic/dist
+          skip-existing: true
+
+      - name: Build xmlschema variant (if versions match)
+        if: steps.check.outputs.should_publish == 'true' && steps.versions.outputs.xmlschema_version == steps.versions.outputs.root_version && steps.versions.outputs.xmlschema_version != ''
+        working-directory: packages/xmlschema
+        run: |
+          python -m build
+
+      - name: Upload xmlschema variant to PyPI (OIDC)
+        if: steps.check.outputs.should_publish == 'true' && steps.versions.outputs.xmlschema_version == steps.versions.outputs.root_version && steps.versions.outputs.xmlschema_version != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/xmlschema/dist
+          skip-existing: true
+
+      - name: Create and push git tag
+        if: steps.check.outputs.should_publish == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=v${{ steps.versions.outputs.root_version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

@@ -1,0 +1,38 @@
+[project]
+name = "pydantic2django-xmlschema"
+version = "1.0.0"
+description = "Pydantic2Django minimal distribution for XML Schema-based generation (core + django + xmlschema)"
+readme = "../../README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },
+]
+license = { text = "MIT" }
+classifiers = [
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "django>=4.0",
+    "lxml>=4.9.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "../../src"}
+
+[tool.setuptools.packages.find]
+where = ["../../src"]
+include = [
+    "pydantic2django",
+    "pydantic2django.core",
+    "pydantic2django.core.*",
+    "pydantic2django.django",
+    "pydantic2django.django.*",
+    "pydantic2django.xmlschema",
+    "pydantic2django.xmlschema.*",
+]
