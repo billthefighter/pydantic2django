@@ -5,7 +5,7 @@ This package provides utilities for generating Django models from Pydantic model
 and converting between them.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 # Don't import modules that might cause circular imports
 # We'll import them directly in the files that need them

@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from django.db import models
 from pydantic import BaseModel
 
-# Pydantic2Django imports
-from pydantic2django.django.models import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject, Dataclass2DjangoBaseClass
-from pydantic2django.core.context import ModelContext, FieldContext
+# typed2django imports
+from typed2django.django.models import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject, Dataclass2DjangoBaseClass
+from typed2django.core.context import ModelContext, FieldContext
 
 # Additional type imports from typing module
 {% if typing_imports %}
