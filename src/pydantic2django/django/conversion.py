@@ -625,6 +625,9 @@ def generate_pydantic_class(
                         field_info_kwargs["json_schema_extra"]["choices"] = resolved_choices
                         logger.debug(f"    Resolved lazy proxies in choices for field '{field_name}'")
 
+                # Ensure optional Django fields are not required in Pydantic if no explicit default provided
+                if dj_field.null and "default" not in field_info_kwargs:
+                    field_info_kwargs["default"] = None
                 field_instance = Field(**field_info_kwargs)
             except TypeError as field_exc:
                 logger.error(f"Invalid FieldInfo kwargs for '{field_name}': {field_info_kwargs}. Error: {field_exc}")
@@ -736,13 +739,13 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
             )
             # Try resolving by rebuilding all models in the cache that are actual classes
             # This assumes dependencies were generated and cached correctly.
-            updated_refs = False
+            # Rebuild cached models to attempt resolving ForwardRefs
             for name, model_or_ref in self._generation_cache.items():
                 if isinstance(model_or_ref, type) and issubclass(model_or_ref, BaseModel):
                     try:
                         model_or_ref.model_rebuild(force=True)
                         # logger.debug(f"Rebuilt cached model {name} to potentially resolve ForwardRefs")
-                        updated_refs = True  # Mark that we attempted updates
+                        # Successfully rebuilt a cached model; continue rebuilding others
                     except Exception as e:
                         logger.warning(f"Failed to rebuild cached model {name} during ForwardRef resolution: {e}")
 
@@ -948,7 +951,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
                     else:
                         raise ValueError(
                             f"Cannot save '{django_field.name}': Related object with PK {related_pk} not found and field is not nullable."
-                        )
+                        ) from None
             else:
                 logger.error(
                     f"Cannot set FK '{django_field.name}': Nested Pydantic model missing PK '{related_pk_name}'."
@@ -958,7 +961,7 @@ class DjangoPydanticConverter(Generic[DjangoModelT]):
                 else:
                     raise ValueError(
                         f"Cannot save non-nullable FK '{django_field.name}': Nested Pydantic model missing PK."
-                    )
+                    ) from None
 
         elif isinstance(pydantic_value, dict):
             # Handle dictionary input - extract PK

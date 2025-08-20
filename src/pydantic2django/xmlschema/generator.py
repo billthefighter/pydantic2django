@@ -12,7 +12,6 @@ from django.db import models
 
 from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.factories import ConversionCarrier
-from pydantic2django.django.models import Xml2DjangoBaseClass
 
 from .discovery import XmlSchemaDiscovery
 from .factory import XmlSchemaFieldInfo, XmlSchemaModelFactory
@@ -34,13 +33,32 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         filter_function: Callable[[XmlSchemaComplexType], bool] | None = None,
         verbose: bool = False,
         module_mappings: dict[str, str] | None = None,
-        base_model_class: type[models.Model] = Xml2DjangoBaseClass,
+        # Default to models.Model to avoid importing Django-dependent base classes at import time
+        base_model_class: type[models.Model] = models.Model,
         class_name_prefix: str = "",
         # Relationship handling for nested complex types
         nested_relationship_strategy: str = "auto",  # one of: "fk", "json", "auto"
         list_relationship_style: str = "child_fk",  # one of: "child_fk", "m2m", "json"
         nesting_depth_threshold: int = 1,
     ):
+        # Resolve preferred base model class: use Xml2DjangoBaseClass when Django settings are configured
+        resolved_base_model: type[models.Model] = base_model_class
+        if base_model_class is models.Model:
+            try:
+                from django.conf import settings as dj_settings  # noqa: WPS433 (runtime import)
+
+                if getattr(dj_settings, "configured", False):
+                    try:
+                        from pydantic2django.django.models import Xml2DjangoBaseClass  # type: ignore
+
+                        resolved_base_model = Xml2DjangoBaseClass
+                    except Exception:
+                        resolved_base_model = models.Model
+                else:
+                    resolved_base_model = models.Model
+            except Exception:
+                resolved_base_model = models.Model
+
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
             app_label=app_label,
@@ -55,7 +73,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             app_label=app_label,
             discovery_instance=discovery,
             model_factory_instance=model_factory,
-            base_model_class=base_model_class,
+            base_model_class=resolved_base_model,
             class_name_prefix=class_name_prefix,
             module_mappings=module_mappings,
             verbose=verbose,

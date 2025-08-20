@@ -852,19 +852,17 @@ class BidirectionalTypeMapper:
                 f"Field '{dj_field.name}' has choices, but they weren't added to json_schema_extra by the mapping unit."
             )
 
-        # Set default=None for optional fields that don't have an explicit default
-        if is_optional and "default" not in field_info_kwargs:
-            field_info_kwargs["default"] = None
-            logger.debug(f"Set default=None for Optional field '{dj_field.name}'")
         # Clean up redundant `default=None` for Optional fields handled by Pydantic v2.
-        # Only pop default=None if the field is Optional (and not an AutoPK, though autoPK sets default=None anyway)
-        elif is_optional and field_info_kwargs.get("default") is None:
-            # Check if it's already explicitly default=None from AutoPK handling
-            if not is_auto_pk:
+        # Do not force-add default=None; only keep explicit defaults (e.g., for AutoPK).
+        if is_optional:
+            if field_info_kwargs.get("default") is None and not is_auto_pk:
+                # Remove implicit default=None for Optional fields
                 field_info_kwargs.pop("default", None)
                 logger.debug(f"Removed redundant default=None for Optional field '{dj_field.name}'")
-            else:
-                logger.debug(f"Keeping explicit default=None for AutoPK field '{dj_field.name}'")
+            elif is_auto_pk and "default" not in field_info_kwargs:
+                # Keep default=None for AutoPK if not already set
+                field_info_kwargs["default"] = None
+                logger.debug(f"Set default=None for AutoPK Optional field '{dj_field.name}'")
 
         logger.debug(
             f"Final Pydantic mapping for '{dj_field.name}': Type={final_pydantic_type}, Kwargs={field_info_kwargs}"

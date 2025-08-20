@@ -167,3 +167,26 @@ def test_nested_elements_as_json(nested_xsd_path, tmp_path):
     # ParentType should store nested child and items as JSON
     assert_field_definition_xml(code, "child", "JSONField", {"null": "True", "blank": "True"}, model_name="ParentType")
     assert_field_definition_xml(code, "items", "JSONField", {"null": "True", "blank": "True"}, model_name="ParentType")
+
+
+def test_generated_imports_use_correct_modules(simple_xsd_path, tmp_path):
+    """Ensure generated code imports from pydantic2django.django.models and core.context.
+
+    Guards against regressions where templates emitted
+    pydantic2django.django.base_django_model or core.context_storage.
+    """
+    output_file = tmp_path / "models.py"
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(simple_xsd_path)],
+        output_path=str(output_file),
+        app_label="test_app",
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+
+    assert "from pydantic2django.django.base_django_model" not in code
+    assert "from pydantic2django.django.models" in code
+
+    assert "from pydantic2django.core.context_storage" not in code
+    assert "from pydantic2django.core.context import ModelContext, FieldContext" in code
