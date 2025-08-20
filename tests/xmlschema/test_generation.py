@@ -190,3 +190,77 @@ def test_generated_imports_use_correct_modules(simple_xsd_path, tmp_path):
 
     assert "from pydantic2django.core.context_storage" not in code
     assert "from pydantic2django.core.context import ModelContext, FieldContext" in code
+
+
+def test_enum_choices_and_validators_and_integer_no_max_length(tmp_path):
+    """Validate enum choices/default emission and validator imports; ensure no max_length on ints."""
+    xsd_path = Path(__file__).parent / "fixtures" / "comprehensive_schema.xsd"
+    output_file = tmp_path / "models.py"
+    app_label = "comp_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(xsd_path)],
+        output_path=str(output_file),
+        app_label=app_label,
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+
+    # Enum choices should be emitted as bare AuthorStatus.choices (not quoted) with default enum member
+    assert "class AuthorType(Xml2DjangoBaseClass):" in code
+    assert_field_definition_xml(
+        code,
+        "status",
+        "CharField",
+        {"choices": "Status.choices", "default": "Status.ACTIVE"},
+        model_name="AuthorType",
+    )
+
+    # RegexValidator import should be present due to emailType pattern
+    assert "from django.core.validators import RegexValidator" in code
+
+    # Integer fields must not include max_length
+    assert "IntegerField(" in code or "PositiveIntegerField(" in code
+    int_lines = [
+        line for line in code.splitlines() if "IntegerField(" in line or "PositiveIntegerField(" in line
+    ]
+    for line in int_lines:
+        assert "max_length=" not in line
+
+
+def test_element_id_primary_key(tmp_path):
+    """Ensure element-based xs:ID becomes primary_key=True."""
+    xsd_content = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://ex.com" xmlns:tns="http://ex.com" elementFormDefault="qualified">
+        <xs:complexType name="ThingType">
+            <xs:sequence>
+                <xs:element name="id" type="xs:ID"/>
+                <xs:element name="name" type="xs:string"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:schema>
+    """.strip()
+    xsd_file = tmp_path / "inline_id_schema.xsd"
+    xsd_file.write_text(xsd_content)
+
+    output_file = tmp_path / "models.py"
+    app_label = "id_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(xsd_file)],
+        output_path=str(output_file),
+        app_label=app_label,
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+    # Expect id field to be primary_key=True CharField
+    assert_field_definition_xml(
+        code,
+        "id",
+        "CharField",
+        {"primary_key": "True"},
+        model_name="ThingType",
+    )

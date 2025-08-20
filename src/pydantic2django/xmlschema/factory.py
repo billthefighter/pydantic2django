@@ -143,9 +143,12 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         # Get or create a shared enum class for this simpleType
         enum_class_name, is_new = self._get_or_create_enum_class(simple_type, field_info, carrier)
 
+        # Use RawCode so choices/default emit without quotes
+        from ..django.utils.serialization import RawCode
+
         kwargs = {
             "max_length": max_length,
-            "choices": f"{enum_class_name}.choices",
+            "choices": RawCode(f"{enum_class_name}.choices"),
         }
 
         default_val = None
@@ -155,7 +158,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             default_val = field_info.attribute.default_value
 
         if default_val:
-            kwargs["default"] = f"{enum_class_name}.{default_val.upper()}"
+            kwargs["default"] = RawCode(f"{enum_class_name}.{default_val.upper()}")
 
         return models.CharField, kwargs
 
@@ -165,12 +168,12 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         field_info: XmlSchemaFieldInfo,
     ):
         """Apply validators and other constraints from simpleType restrictions."""
-        kwargs = {"max_length": 255}  # Default, can be overridden
+        # Import RawCode for proper validator serialization
+        from ..django.utils.serialization import RawCode
+
+        kwargs = {"max_length": 255}  # Default for string-like; will be dropped for numeric fields
         if simple_type.restriction:
             if simple_type.restriction.pattern:
-                # Import RawCode for proper validator serialization
-                from ..django.utils.serialization import RawCode
-
                 # Use RawCode to ensure validator is not quoted as string
                 kwargs["validators"] = [RawCode(f"RegexValidator(r'{simple_type.restriction.pattern}')")]
                 # Note usage for later import emission
@@ -180,7 +183,42 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     pass
             if simple_type.restriction.max_length:
                 kwargs["max_length"] = int(simple_type.restriction.max_length)
-            # Add other restrictions as needed (e.g., min_length)
+            # Numeric bounds -> validators
+            min_val = simple_type.restriction.min_inclusive
+            max_val = simple_type.restriction.max_inclusive
+            min_ex = simple_type.restriction.min_exclusive
+            max_ex = simple_type.restriction.max_exclusive
+            validators_list = kwargs.setdefault("validators", [])
+            if min_val is not None:
+                validators_list.append(
+                    RawCode(f"MinValueValidator({int(min_val) if isinstance(min_val, int) else min_val})")
+                )
+                try:
+                    self.used_validators.add("MinValueValidator")
+                except Exception:
+                    pass
+            if max_val is not None:
+                validators_list.append(
+                    RawCode(f"MaxValueValidator({int(max_val) if isinstance(max_val, int) else max_val})")
+                )
+                try:
+                    self.used_validators.add("MaxValueValidator")
+                except Exception:
+                    pass
+            if min_ex is not None:
+                adj = int(min_ex) + 1 if isinstance(min_ex, int) else min_ex
+                validators_list.append(RawCode(f"MinValueValidator({adj})"))
+                try:
+                    self.used_validators.add("MinValueValidator")
+                except Exception:
+                    pass
+            if max_ex is not None:
+                adj = int(max_ex) - 1 if isinstance(max_ex, int) else max_ex
+                validators_list.append(RawCode(f"MaxValueValidator({adj})"))
+                try:
+                    self.used_validators.add("MaxValueValidator")
+                except Exception:
+                    pass
 
         # Determine the base Django field type
         base_field_class = self.FIELD_TYPE_MAP.get(simple_type.base_type, models.CharField)
@@ -193,6 +231,19 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 base_field_class = models.TextField
                 # TextField doesn't accept max_length, so remove it if it was defaulted
                 kwargs.pop("max_length", None)
+
+        # Remove max_length for numeric fields and optionally map precision
+        if issubclass(base_field_class, (models.IntegerField, models.BigIntegerField, models.SmallIntegerField)):
+            kwargs.pop("max_length", None)
+        if issubclass(base_field_class, models.DecimalField):
+            kwargs.pop("max_length", None)
+            # Map precision if available
+            total = simple_type.restriction.total_digits if simple_type.restriction else None
+            frac = simple_type.restriction.fraction_digits if simple_type.restriction else None
+            if total is not None:
+                kwargs["max_digits"] = int(total)
+            if frac is not None:
+                kwargs["decimal_places"] = int(frac)
 
         if field_info.element and (field_info.element.nillable or field_info.element.min_occurs == 0):
             kwargs["null"] = True
@@ -243,14 +294,24 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     return self._make_json_field_kwargs(element)
                 # FK on parent to child
                 kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
-                if element.min_occurs == 0 or element.nillable:
-                    kwargs["null"] = True
-                    kwargs["blank"] = True
+                # Whenever using SET_NULL, enforce null/blank to satisfy Django system checks
+                kwargs["null"] = True
+                kwargs["blank"] = True
                 return models.ForeignKey, kwargs
 
         # Default simple-type mapping
         field_class = self.FIELD_TYPE_MAP.get(element.base_type, models.CharField)
         kwargs = {}
+
+        # Treat element-based xs:ID as a primary key using CharField
+        if element.base_type == XmlSchemaType.ID:
+            field_class = models.CharField
+            kwargs["max_length"] = 255
+            kwargs["primary_key"] = True
+            # ID fields should not be nullable
+            kwargs.pop("null", None)
+            kwargs.pop("blank", None)
+            return field_class, kwargs
 
         if element.nillable or element.min_occurs == 0:
             kwargs["null"] = True
