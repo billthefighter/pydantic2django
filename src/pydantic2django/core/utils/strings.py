@@ -37,12 +37,12 @@ def sanitize_string(value: Union[str, Promise, Any]) -> str:
             # logger.warning(f"Could not convert value of type {type(value)} to string in sanitize_string")
             processed_value = ""
 
-    # Basic sanitization: escape backslashes and single quotes
+    # Basic sanitization: escape backslashes and quotes, and normalize newlines
     # This is crucial for safely embedding the string in generated Python code
     sanitized = processed_value.replace("\\", "\\\\")  # Escape backslashes first
+    sanitized = sanitized.replace("\n", "\\n").replace("\r", "")  # Normalize newlines
     sanitized = sanitized.replace("'", "\\'")  # Escape single quotes
-    # Add more specific sanitization if needed (e.g., removing newlines)
-    # sanitized = sanitized.replace("\n", " ").replace("\r", "")
+    sanitized = sanitized.replace('"', '\\"')  # Escape double quotes for double-quoted strings
 
     return sanitized
 
@@ -57,7 +57,6 @@ def balanced(s: str) -> bool:
     Returns:
         True if balanced, False otherwise.
     """
-    balance = 0
     bracket_map = {")": "(", "]": "[", "}": "{"}
     opening_brackets = set(bracket_map.values())
     stack = []

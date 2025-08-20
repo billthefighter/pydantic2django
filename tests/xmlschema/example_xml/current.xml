@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MTConnectStreams xmlns:m="urn:mtconnect.org:MTConnectStreams:1.7" xmlns="urn:mtconnect.org:MTConnectStreams:1.7" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:mtconnect.org:MTConnectStreams:1.7 http://schemas.mtconnect.org/schemas/MTConnectStreams_1.7.xsd">
+  <Header creationTime="2024-10-07T20:30:03Z" sender="variaxis" instanceId="1727462118" version="1.8.0.2" deviceModelChangeTime="2024-09-27T18:35:19.379223Z" bufferSize="131072" nextSequence="3193949" firstSequence="3062877" lastSequence="3193948"/>
+  <Streams>
+    <DeviceStream name="Agent" uuid="0b49a3a0-18ca-0139-8748-2cde48001122">
+      <ComponentStream component="Adapter" name="127.0.0.1:7878" componentId="_24956f03ad">
+        <Samples>
+          <AssetUpdateRate dataItemId="_24956f03ad_asset_update_rate" sequence="129" statistic="AVERAGE" timestamp="2024-09-27T18:35:19.040586Z">UNAVAILABLE</AssetUpdateRate>
+          <ObservationUpdateRate dataItemId="_24956f03ad_observation_update_rate" sequence="128" statistic="AVERAGE" timestamp="2024-09-27T18:35:19.040568Z">UNAVAILABLE</ObservationUpdateRate>
+        </Samples>
+        <Events>
+          <AdapterSoftwareVersion dataItemId="_24956f03ad_adapter_software_version" sequence="137" timestamp="2024-09-27T18:35:19.377263Z">1.7.1.3</AdapterSoftwareVersion>
+          <AdapterURI dataItemId="_24956f03ad_adapter_uri" sequence="127" timestamp="2024-09-27T18:35:19.040556Z">shdr://127.0.0.1:7878</AdapterURI>
+          <ConnectionStatus dataItemId="_24956f03ad_connection_status" sequence="133" timestamp="2024-09-27T18:35:19.099113Z">ESTABLISHED</ConnectionStatus>
+          <MTConnectVersion dataItemId="_24956f03ad_mtconnect_version" sequence="138" timestamp="2024-09-27T18:35:19.37771Z">1.7</MTConnectVersion>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component="Agent" name="Agent" componentId="agent_2cde48001122">
+        <Events>
+          <AssetChanged dataItemId="agent_2cde48001122_asset_chg" sequence="6" timestamp="2024-09-27T18:35:18.754973Z">UNAVAILABLE</AssetChanged>
+          <AssetRemoved dataItemId="agent_2cde48001122_asset_rem" sequence="5" timestamp="2024-09-27T18:35:18.739993Z">UNAVAILABLE</AssetRemoved>
+          <Availability dataItemId="agent_avail" sequence="131" timestamp="2024-09-27T18:35:19.04061Z">AVAILABLE</Availability>
+          <DeviceAdded dataItemId="device_added" sequence="135" timestamp="2024-09-27T18:35:19.374172Z">7bc32736-820f-24eb-288d-04ae2155e684</DeviceAdded>
+          <DeviceChanged dataItemId="device_changed" sequence="136" timestamp="2024-09-27T18:35:19.375731Z">7bc32736-820f-24eb-288d-04ae2155e684</DeviceChanged>
+          <DeviceRemoved dataItemId="device_removed" sequence="134" timestamp="2024-09-27T18:35:19.362008Z">00000000-0000-0000-0000-000000000000</DeviceRemoved>
+        </Events>
+      </ComponentStream>
+    </DeviceStream>
+    <DeviceStream name="Mazak" uuid="7bc32736-820f-24eb-288d-04ae2155e684">
+      <ComponentStream component="Axes" name="base" componentId="a">
+        <Condition>
+          <Normal dataItemId="servo_cond" sequence="139" timestamp="2024-09-27T18:35:19.379405Z" type="ACTUATOR"></Normal>
+          <Normal dataItemId="spindle_cond" sequence="148" timestamp="2024-09-27T18:35:19.379658Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Rotary" name="C3" componentId="ar">
+        <Samples>
+          <Angle dataItemId="Aabs" sequence="69" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994675Z">UNAVAILABLE</Angle>
+          <AngularVelocity dataItemId="Afrt" sequence="3190054" timestamp="2024-10-07T20:08:59.737969Z">0</AngularVelocity>
+          <Load dataItemId="Aload" sequence="3190055" timestamp="2024-10-07T20:08:59.737969Z">1</Load>
+          <Angle dataItemId="Apos" sequence="48" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994283Z">UNAVAILABLE</Angle>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="aaxisstate" sequence="3190056" timestamp="2024-10-07T20:08:59.737969Z">STOPPED</AxisState>
+          <RotaryMode dataItemId="arfunc" sequence="40" timestamp="2024-09-27T18:35:18.994205Z">UNAVAILABLE</RotaryMode>
+        </Events>
+        <Condition>
+          <Normal dataItemId="Atravel" sequence="154" timestamp="2024-09-27T18:35:19.379805Z" type="ANGLE"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Rotary" name="C" componentId="c">
+        <Samples>
+          <Angle dataItemId="Cabs" sequence="61" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994574Z">UNAVAILABLE</Angle>
+          <AngularVelocity dataItemId="Cfrt" sequence="2344403" timestamp="2024-10-04T16:30:57.656699Z">0</AngularVelocity>
+          <Load dataItemId="Cload" sequence="2344680" timestamp="2024-10-04T16:31:24.013075Z">0</Load>
+          <Angle dataItemId="Cpos" sequence="43" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994231Z">UNAVAILABLE</Angle>
+          <Load dataItemId="Sload" sequence="3189999" timestamp="2024-10-07T20:08:55.506432Z">0</Load>
+          <RotaryVelocity dataItemId="Srpm" sequence="3189998" subType="ACTUAL" timestamp="2024-10-07T20:08:55.506432Z">0</RotaryVelocity>
+          <Temperature compositionId="Cmotor" dataItemId="Stemp" sequence="3193813" timestamp="2024-10-07T20:29:18.922471Z">25</Temperature>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="caxisstate" sequence="66" timestamp="2024-09-27T18:35:18.994648Z">UNAVAILABLE</AxisState>
+          <RotaryMode dataItemId="crfunc" sequence="191" timestamp="2024-09-27T18:35:19.380442Z">SPINDLE</RotaryMode>
+        </Events>
+        <Condition>
+          <Normal dataItemId="Ctravel" sequence="155" timestamp="2024-09-27T18:35:19.380102Z" type="ANGLE"></Normal>
+          <Normal dataItemId="Sload_cond" sequence="3190000" timestamp="2024-10-07T20:08:55.506603Z" type="LOAD"/>
+          <Unavailable dataItemId="Stemp_cond" sequence="65" timestamp="2024-09-27T18:35:18.994623Z" type="TEMPERATURE"/>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Rotary" name="C2" componentId="c2">
+        <Samples>
+          <Angle dataItemId="C2abs" sequence="8" subType="ACTUAL" timestamp="2024-09-27T18:35:18.978961Z">UNAVAILABLE</Angle>
+          <AngularVelocity dataItemId="C2frt" sequence="70" timestamp="2024-09-27T18:35:18.994684Z">UNAVAILABLE</AngularVelocity>
+          <Load dataItemId="C2load" sequence="72" timestamp="2024-09-27T18:35:18.994701Z">UNAVAILABLE</Load>
+          <Angle dataItemId="C2pos" sequence="59" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994555Z">UNAVAILABLE</Angle>
+          <Load dataItemId="S2load" sequence="29" timestamp="2024-09-27T18:35:18.994071Z">UNAVAILABLE</Load>
+          <RotaryVelocity dataItemId="S2rpm" sequence="74" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994718Z">UNAVAILABLE</RotaryVelocity>
+          <Temperature compositionId="C2motor" dataItemId="S2temp" sequence="60" timestamp="2024-09-27T18:35:18.994564Z">UNAVAILABLE</Temperature>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="c2axisstate" sequence="76" timestamp="2024-09-27T18:35:18.994742Z">UNAVAILABLE</AxisState>
+          <RotaryMode dataItemId="c2rfunc" sequence="26" timestamp="2024-09-27T18:35:18.994038Z">UNAVAILABLE</RotaryMode>
+        </Events>
+        <Condition>
+          <Unavailable dataItemId="C2travel" sequence="73" timestamp="2024-09-27T18:35:18.99471Z" type="ANGLE"/>
+          <Unavailable dataItemId="S2load_cond" sequence="20" timestamp="2024-09-27T18:35:18.979097Z" type="LOAD"/>
+          <Unavailable dataItemId="S2temp_cond" sequence="75" timestamp="2024-09-27T18:35:18.994732Z" type="TEMPERATURE"/>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Controller" name="controller" componentId="cont">
+        <Events>
+          <EmergencyStop dataItemId="estop" sequence="4765" timestamp="2024-09-27T18:58:33.500216Z">ARMED</EmergencyStop>
+          <PalletId dataItemId="pallet_num" sequence="159" timestamp="2024-09-27T18:35:19.380442Z">1</PalletId>
+        </Events>
+        <Condition>
+          <Normal dataItemId="comms_cond" sequence="140" timestamp="2024-09-27T18:35:19.379444Z" type="COMMUNICATIONS"></Normal>
+          <Warning dataItemId="logic_cond" nativeCode="343" nativeSeverity="50" sequence="3192823" timestamp="2024-10-07T20:23:59.832797Z" type="LOGIC_PROGRAM">SAVING ENERGY MODE              ( , ,  )</Warning>
+          <Warning dataItemId="system_cond" nativeCode="468" nativeSeverity="25" sequence="3170753" timestamp="2024-10-07T19:34:40.470486Z" type="SYSTEM">MAINTENANCE CHECK WARNING ( 13, ,  )</Warning>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Coolant" name="coolant" componentId="coolant">
+        <Samples>
+          <Concentration dataItemId="CONCENTRATION" sequence="118" timestamp="2024-09-27T18:35:18.995255Z">UNAVAILABLE</Concentration>
+          <Temperature dataItemId="cooltemp" sequence="117" timestamp="2024-09-27T18:35:18.995244Z">UNAVAILABLE</Temperature>
+        </Samples>
+        <Condition>
+          <Normal dataItemId="coolant_cond" sequence="146" timestamp="2024-09-27T18:35:19.37961Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Device" name="Mazak" componentId="d1">
+        <Events>
+          <Availability dataItemId="avail" sequence="156" timestamp="2024-09-27T18:35:19.380233Z">AVAILABLE</Availability>
+          <AssetChanged assetType="CuttingTool" dataItemId="d1_asset_chg" sequence="3190125" timestamp="2024-10-07T20:09:19.123733Z">M8011TL174N1.43</AssetChanged>
+          <AssetRemoved assetType="CuttingTool" dataItemId="d1_asset_rem" sequence="1170891" timestamp="2024-10-01T17:27:08.12878Z">M8011TL174N1.80</AssetRemoved>
+          <EquipmentMode dataItemId="emdelay" sequence="3190060" subType="DELAY" timestamp="2024-10-07T20:08:59.737969Z">ON</EquipmentMode>
+          <EquipmentMode dataItemId="emloaded" sequence="3189972" subType="LOADED" timestamp="2024-10-07T20:08:51.588204Z">OFF</EquipmentMode>
+          <EquipmentMode dataItemId="emoperating" sequence="208" subType="OPERATING" timestamp="2024-09-27T18:35:19.380442Z">ON</EquipmentMode>
+          <EquipmentMode dataItemId="empowered" sequence="209" subType="POWERED" timestamp="2024-09-27T18:35:19.380442Z">ON</EquipmentMode>
+          <EquipmentMode dataItemId="emworking" sequence="3190059" subType="WORKING" timestamp="2024-10-07T20:08:59.737969Z">OFF</EquipmentMode>
+          <FunctionalMode dataItemId="functionalmode" sequence="12" timestamp="2024-09-27T18:35:18.979018Z">UNAVAILABLE</FunctionalMode>
+          <Application dataItemId="gui" sequence="185" timestamp="2024-09-27T18:35:19.380442Z">MAZATROL</Application>
+          <Application dataItemId="guimfg" sequence="186" subType="MANUFACTURER" timestamp="2024-09-27T18:35:19.380442Z">MAZAK-MITSUBISHI</Application>
+          <Application dataItemId="guiversion" sequence="187" subType="VERSION" timestamp="2024-09-27T18:35:19.380442Z">2011W004-A9</Application>
+          <OperatingSystem dataItemId="operatingsystem" sequence="182" timestamp="2024-09-27T18:35:19.380442Z">WINDOWS</OperatingSystem>
+          <OperatingSystem dataItemId="osmfg" sequence="184" subType="MANUFACTURER" timestamp="2024-09-27T18:35:19.380442Z">MICROSOFT</OperatingSystem>
+          <OperatingSystem dataItemId="osversion" sequence="183" subType="VERSION" timestamp="2024-09-27T18:35:19.380442Z">6.2.9200</OperatingSystem>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component="Door" name="door" componentId="door1">
+        <Events>
+          <DoorState dataItemId="doorstate" sequence="3168174" timestamp="2024-10-07T19:28:47.460769Z">CLOSED</DoorState>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component="Electric" name="electric" componentId="elec">
+        <Condition>
+          <Normal dataItemId="electric_cond" sequence="145" timestamp="2024-09-27T18:35:19.379586Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Hydraulic" name="hydraulic" componentId="hydraulic">
+        <Condition>
+          <Normal dataItemId="hydra_cond" sequence="144" timestamp="2024-09-27T18:35:19.379562Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Lubrication" name="lubrication" componentId="lubrication">
+        <Condition>
+          <Normal dataItemId="lubrication_cond" sequence="147" timestamp="2024-09-27T18:35:19.379634Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Path" name="path" componentId="path1">
+        <Samples>
+          <PathFeedrate dataItemId="Fact" sequence="3190061" subType="ACTUAL" timestamp="2024-10-07T20:08:59.889098Z">0</PathFeedrate>
+          <CuttingSpeed dataItemId="cspeed" sequence="105" subType="ACTUAL" timestamp="2024-09-27T18:35:18.995055Z">UNAVAILABLE</CuttingSpeed>
+          <Orientation dataItemId="orientation" sequence="3190057" timestamp="2024-10-07T20:08:59.737969Z">0 0 0</Orientation>
+          <PathPosition dataItemId="pathpos" sequence="3190058" timestamp="2024-10-07T20:08:59.737969Z">255 510 284.9448</PathPosition>
+        </Samples>
+        <Events>
+          <PathFeedrateOverride dataItemId="Fovr" sequence="2093220" subType="PROGRAMMED" timestamp="2024-10-04T00:47:39.491726Z">100</PathFeedrateOverride>
+          <PathFeedrateOverride dataItemId="Frapidovr" sequence="3182228" subType="RAPID" timestamp="2024-10-07T19:54:53.723441Z">50</PathFeedrateOverride>
+          <PartCount dataItemId="PartCountAct" sequence="160" subType="ALL" timestamp="2024-09-27T18:35:19.380442Z">0</PartCount>
+          <PartCount dataItemId="PartCountTarget" sequence="161" subType="TARGET" timestamp="2024-09-27T18:35:19.380442Z">0</PartCount>
+          <RotaryVelocityOverride dataItemId="Sovr" sequence="3193948" timestamp="2024-10-07T20:30:02.945213Z">100</RotaryVelocityOverride>
+          <ToolGroup dataItemId="Tool_group" sequence="170" timestamp="2024-09-27T18:35:19.380442Z">0</ToolGroup>
+          <ToolNumber dataItemId="Tool_number" sequence="3189286" timestamp="2024-10-07T20:07:41.430664Z">44</ToolNumber>
+          <ActiveAxes dataItemId="activeaxes" sequence="188" timestamp="2024-09-27T18:35:19.380442Z">X Y Z A C V</ActiveAxes>
+          <Program dataItemId="activeprog" sequence="3190051" subType="ACTIVE" timestamp="2024-10-07T20:08:59.737969Z">UNAVAILABLE</Program>
+          <ProgramComment dataItemId="activeprogram_cmt" sequence="3190052" subType="ACTIVE" timestamp="2024-10-07T20:08:59.737969Z">UNAVAILABLE</ProgramComment>
+          <ControllerModeOverride dataItemId="cmodryrun" sequence="212" subType="DRY_RUN" timestamp="2024-09-27T18:35:19.380442Z">OFF</ControllerModeOverride>
+          <ControllerModeOverride dataItemId="cmomachineaxislock" sequence="213" subType="MACHINE_AXIS_LOCK" timestamp="2024-09-27T18:35:19.380442Z">OFF</ControllerModeOverride>
+          <ControllerModeOverride dataItemId="cmosingleblock" sequence="3168340" subType="SINGLE_BLOCK" timestamp="2024-10-07T19:29:50.079638Z">OFF</ControllerModeOverride>
+          <VariableDataSet count="149" dataItemId="cvars" sequence="1954464" timestamp="2024-10-03T17:41:22.380134Z">
+            <Entry key="105">1</Entry>
+            <Entry key="106">600000</Entry>
+            <Entry key="107">-0.0329</Entry>
+            <Entry key="108">-18.0563</Entry>
+            <Entry key="109">-18.03565</Entry>
+            <Entry key="110">0</Entry>
+            <Entry key="111">600</Entry>
+            <Entry key="113">0.0371136012031785</Entry>
+            <Entry key="114">0.00104981490913544</Entry>
+            <Entry key="115">8.16804999999999</Entry>
+            <Entry key="116">213.2596</Entry>
+            <Entry key="117">3000</Entry>
+            <Entry key="118">71.1269464889651</Entry>
+            <Entry key="119">2540</Entry>
+            <Entry key="120">1</Entry>
+            <Entry key="121">1</Entry>
+            <Entry key="122">-387.5813</Entry>
+            <Entry key="123">0.05</Entry>
+            <Entry key="124">-20.00175</Entry>
+            <Entry key="125">-16.99965</Entry>
+            <Entry key="126">259.91805</Entry>
+            <Entry key="127">18.3671</Entry>
+            <Entry key="128">4.38935</Entry>
+            <Entry key="129">1</Entry>
+            <Entry key="130">0.0017750000000003</Entry>
+            <Entry key="131">13.95885</Entry>
+            <Entry key="132">0.000399999999999956</Entry>
+            <Entry key="133">13.9573</Entry>
+            <Entry key="135">-20.001</Entry>
+            <Entry key="136">-17</Entry>
+            <Entry key="137">46.65845</Entry>
+            <Entry key="138">46.65845</Entry>
+            <Entry key="142">46.65845</Entry>
+            <Entry key="143">8.16804999999999</Entry>
+            <Entry key="145">8.16804999999999</Entry>
+            <Entry key="146">8.16804999999999</Entry>
+            <Entry key="149">0</Entry>
+            <Entry key="150">1</Entry>
+            <Entry key="151">-66.52332</Entry>
+            <Entry key="152">56.5290633333333</Entry>
+            <Entry key="153">-15.63782</Entry>
+            <Entry key="154">9.75548666666668</Entry>
+            <Entry key="155">20.01453</Entry>
+            <Entry key="156">-47.0779166666667</Entry>
+            <Entry key="157">35.02013</Entry>
+            <Entry key="158">-105.285496666667</Entry>
+            <Entry key="159">27.12648</Entry>
+            <Entry key="186">-510.005383333333</Entry>
+            <Entry key="187">-529.9952</Entry>
+            <Entry key="188">150.514473200497</Entry>
+            <Entry key="191">0.00631466666675351</Entry>
+            <Entry key="192">-0.00091999999995096</Entry>
+            <Entry key="193">210.3836890113</Entry>
+            <Entry key="198">33</Entry>
+            <Entry key="199">-12</Entry>
+            <Entry key="600">1.453625</Entry>
+            <Entry key="601">1.4548</Entry>
+            <Entry key="602">0.000562500000000021</Entry>
+            <Entry key="603">-0.00055000000000005</Entry>
+            <Entry key="604">0</Entry>
+            <Entry key="606">0.2</Entry>
+            <Entry key="608">0</Entry>
+            <Entry key="609">2540</Entry>
+            <Entry key="610">1.4547569580457</Entry>
+            <Entry key="611">1.45515581884076</Entry>
+            <Entry key="612">1.45446611180897</Entry>
+            <Entry key="613">1.4545</Entry>
+            <Entry key="614">1.45462035503385</Entry>
+            <Entry key="615">1.45476431440621</Entry>
+            <Entry key="616">1.45496431276788</Entry>
+            <Entry key="617">1.45441545069606</Entry>
+            <Entry key="618">1.46124285714285</Entry>
+            <Entry key="619">1.5</Entry>
+            <Entry key="900">0</Entry>
+            <Entry key="901">147.1</Entry>
+            <Entry key="902">140.2</Entry>
+            <Entry key="903">0</Entry>
+            <Entry key="904">0.2</Entry>
+            <Entry key="905">149.7</Entry>
+            <Entry key="906">146.8</Entry>
+            <Entry key="907">141.6</Entry>
+            <Entry key="908">147</Entry>
+            <Entry key="909">143.7</Entry>
+            <Entry key="910">147.2</Entry>
+            <Entry key="911">150.1</Entry>
+            <Entry key="912">156.1</Entry>
+            <Entry key="913">156</Entry>
+            <Entry key="914">151.7</Entry>
+            <Entry key="915">144.2</Entry>
+            <Entry key="916">143.8</Entry>
+            <Entry key="917">153.6</Entry>
+            <Entry key="918">155.2</Entry>
+            <Entry key="919">145.6</Entry>
+            <Entry key="920">143.4</Entry>
+            <Entry key="921">150.4</Entry>
+            <Entry key="922">153.2</Entry>
+            <Entry key="923">147.6</Entry>
+            <Entry key="924">137.5</Entry>
+            <Entry key="925">141.1</Entry>
+            <Entry key="926">143.4</Entry>
+            <Entry key="927">150.3</Entry>
+            <Entry key="928">137</Entry>
+            <Entry key="929">141.1</Entry>
+            <Entry key="930">147.1</Entry>
+            <Entry key="932">161.5</Entry>
+            <Entry key="933">148.5</Entry>
+            <Entry key="934">153.1</Entry>
+            <Entry key="936">148.5</Entry>
+            <Entry key="937">141.5</Entry>
+            <Entry key="938">140</Entry>
+            <Entry key="939">140.5</Entry>
+            <Entry key="940">149.1</Entry>
+            <Entry key="941">148.8</Entry>
+            <Entry key="942">151.8</Entry>
+            <Entry key="943">143.8</Entry>
+            <Entry key="944">144</Entry>
+            <Entry key="945">135.1</Entry>
+            <Entry key="946">140.9</Entry>
+            <Entry key="947">140.7</Entry>
+            <Entry key="948">145.7</Entry>
+            <Entry key="949">140.6</Entry>
+            <Entry key="950">139.9</Entry>
+            <Entry key="951">156.6</Entry>
+            <Entry key="952">129.9</Entry>
+            <Entry key="954">113.6</Entry>
+            <Entry key="955">92.5</Entry>
+            <Entry key="956">141.7</Entry>
+            <Entry key="957">137.2</Entry>
+            <Entry key="959">148.5</Entry>
+            <Entry key="961">134.3</Entry>
+            <Entry key="962">142.2</Entry>
+            <Entry key="963">142.2</Entry>
+            <Entry key="964">155.2</Entry>
+            <Entry key="965">149.9</Entry>
+            <Entry key="966">110.5</Entry>
+            <Entry key="967">128.5</Entry>
+            <Entry key="968">117.5</Entry>
+            <Entry key="969">132.6</Entry>
+            <Entry key="970">149.9</Entry>
+            <Entry key="971">138.5</Entry>
+            <Entry key="972">139</Entry>
+            <Entry key="973">140.1</Entry>
+            <Entry key="975">23</Entry>
+            <Entry key="980">-13.9534833333333</Entry>
+            <Entry key="981">-4.5651</Entry>
+            <Entry key="982">-0.000383333333333149</Entry>
+            <Entry key="983">9.1302</Entry>
+            <Entry key="984">13.9538666666667</Entry>
+            <Entry key="985">-4.5651</Entry>
+          </VariableDataSet>
+          <Execution dataItemId="execution" sequence="3190048" timestamp="2024-10-07T20:08:59.737969Z">READY</Execution>
+          <ChuckState dataItemId="hd1chuckstate" sequence="82" timestamp="2024-09-27T18:35:18.994804Z">UNAVAILABLE</ChuckState>
+          <LineLabel dataItemId="linelabel" sequence="3190049" timestamp="2024-10-07T20:08:59.737969Z">0</LineLabel>
+          <LineNumber dataItemId="linenumber" sequence="3190050" subType="INCREMENTAL" timestamp="2024-10-07T20:08:59.737969Z">0</LineNumber>
+          <ControllerMode dataItemId="mode" sequence="2089984" timestamp="2024-10-04T00:40:42.420045Z">AUTOMATIC</ControllerMode>
+          <Program dataItemId="program" sequence="3168241" subType="MAIN" timestamp="2024-10-07T19:29:19.613133Z">SHOP-918_SETUP_1</Program>
+          <ProgramComment dataItemId="program_cmt" sequence="164" subType="MAIN" timestamp="2024-09-27T18:35:19.380442Z"></ProgramComment>
+          <WaitState dataItemId="waitstate" sequence="1493884" timestamp="2024-10-02T17:39:22.642786Z">UNAVAILABLE</WaitState>
+          <WorkOffset dataItemId="woffset" sequence="167" timestamp="2024-09-27T18:35:19.380442Z">G54</WorkOffset>
+          <Rotation dataItemId="workoffsetrot" sequence="169" timestamp="2024-09-27T18:35:19.380442Z">0 0 0</Rotation>
+          <Translation dataItemId="workoffsettrans" sequence="168" timestamp="2024-09-27T18:35:19.380442Z">-255 -510 -428.95</Translation>
+        </Events>
+        <Condition>
+          <Normal dataItemId="motion_cond" sequence="1953674" timestamp="2024-10-03T17:37:01.394401Z" type="MOTION_PROGRAM"/>
+          <Normal dataItemId="path_system" sequence="150" timestamp="2024-09-27T18:35:19.379705Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Personnel" name="personnel" componentId="personnel">
+        <Events>
+          <User dataItemId="operator" sequence="120" timestamp="2024-09-27T18:35:18.995283Z">UNAVAILABLE</User>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component="Pneumatic" name="pneumatic" componentId="pneumatic">
+        <Condition>
+          <Normal dataItemId="pneu_cond" sequence="143" timestamp="2024-09-27T18:35:19.379537Z" type="SYSTEM"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Stock" name="stock" componentId="procstock">
+        <Events>
+          <Material dataItemId="stock" sequence="121" timestamp="2024-09-27T18:35:18.995291Z">UNAVAILABLE</Material>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component="Environmental" name="environmental" componentId="room">
+        <Samples>
+          <Temperature dataItemId="rmtmp1" sequence="25" timestamp="2024-09-27T18:35:18.994025Z">UNAVAILABLE</Temperature>
+        </Samples>
+      </ComponentStream>
+      <ComponentStream component="WorkEnvelope" name="workenvelope" componentId="workenvelope">
+        <Condition>
+          <Unavailable dataItemId="envelope_cond" sequence="113" timestamp="2024-09-27T18:35:18.995131Z" type="SYSTEM"/>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Linear" name="X" componentId="x">
+        <Samples>
+          <Position dataItemId="Xabs" sequence="32" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994108Z">UNAVAILABLE</Position>
+          <AxisFeedrate dataItemId="Xfrt" sequence="3190026" timestamp="2024-10-07T20:08:57.894964Z">0</AxisFeedrate>
+          <Load dataItemId="Xload" sequence="3190035" timestamp="2024-10-07T20:08:58.670968Z">2</Load>
+          <Position dataItemId="Xpos" sequence="34" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994135Z">UNAVAILABLE</Position>
+          <Temperature compositionId="Xmotor" dataItemId="servotemp1" sequence="3190679" timestamp="2024-10-07T20:12:19.476416Z">36</Temperature>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="xaxisstate" sequence="3190027" timestamp="2024-10-07T20:08:57.894964Z">STOPPED</AxisState>
+        </Events>
+        <Condition>
+          <Normal dataItemId="Xtravel" sequence="151" timestamp="2024-09-27T18:35:19.379729Z" type="POSITION"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Linear" name="Y" componentId="y">
+        <Samples>
+          <Position dataItemId="Yabs" sequence="41" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994213Z">UNAVAILABLE</Position>
+          <AxisFeedrate dataItemId="Yfrt" sequence="3190037" timestamp="2024-10-07T20:08:58.670968Z">0</AxisFeedrate>
+          <Load dataItemId="Yload" sequence="3190074" timestamp="2024-10-07T20:09:03.82991Z">7</Load>
+          <Position dataItemId="Ypos" sequence="42" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994222Z">UNAVAILABLE</Position>
+          <Temperature compositionId="Ymotor" dataItemId="servotemp2" sequence="3170994" timestamp="2024-10-07T19:35:18.943549Z">35</Temperature>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="yaxisstate" sequence="3190038" timestamp="2024-10-07T20:08:58.670968Z">STOPPED</AxisState>
+        </Events>
+        <Condition>
+          <Normal dataItemId="Ytravel" sequence="152" timestamp="2024-09-27T18:35:19.379752Z" type="POSITION"></Normal>
+        </Condition>
+      </ComponentStream>
+      <ComponentStream component="Linear" name="Z" componentId="z">
+        <Samples>
+          <Position dataItemId="Zabs" sequence="50" subType="ACTUAL" timestamp="2024-09-27T18:35:18.9943Z">UNAVAILABLE</Position>
+          <AxisFeedrate dataItemId="Zfrt" sequence="3190019" timestamp="2024-10-07T20:08:56.976359Z">0</AxisFeedrate>
+          <Load dataItemId="Zload" sequence="3193940" timestamp="2024-10-07T20:30:00.829245Z">47</Load>
+          <Position dataItemId="Zpos" sequence="51" subType="ACTUAL" timestamp="2024-09-27T18:35:18.994308Z">UNAVAILABLE</Position>
+          <Temperature compositionId="Zmotor" dataItemId="servotemp3" sequence="3190555" timestamp="2024-10-07T20:11:39.380496Z">49</Temperature>
+        </Samples>
+        <Events>
+          <AxisState dataItemId="zaxisstate" sequence="3190020" timestamp="2024-10-07T20:08:56.976359Z">STOPPED</AxisState>
+        </Events>
+        <Condition>
+          <Normal dataItemId="Ztravel" sequence="153" timestamp="2024-09-27T18:35:19.379776Z" type="POSITION"></Normal>
+        </Condition>
+      </ComponentStream>
+    </DeviceStream>
+  </Streams>
+</MTConnectStreams>

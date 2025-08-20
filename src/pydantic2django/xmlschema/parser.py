@@ -368,13 +368,11 @@ class XmlSchemaParser:
         for child in element:
             tag_name = self._get_local_name(child.tag)
             if tag_name == "restriction":
-                simple_type.restriction = self._parse_restriction(child)
-                if simple_type.restriction and simple_type.restriction.base:
-                    type_local_name = self._get_local_name(simple_type.restriction.base)
+                simple_type.restrictions = self._parse_restriction(child)
+                if simple_type.restrictions and simple_type.restrictions.base:
+                    type_local_name = self._get_local_name(simple_type.restrictions.base)
                     if type_local_name in self.type_mappings:
                         simple_type.base_type = self.type_mappings[type_local_name]
-                if simple_type.restriction and simple_type.restriction.enumeration:
-                    simple_type.enumeration = simple_type.restriction.enumeration
             # TODO: Add support for list and union simpleTypes
 
         return simple_type
@@ -437,8 +435,19 @@ class XmlSchemaParser:
         self, simple_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
         """Parse simpleContent, which adds attributes to a simple type."""
-        # TODO: Implement simpleContent parsing if needed
-        logger.warning(f"simpleContent in {complex_type.name} is not fully supported yet.")
+        # Minimal support: capture attributes declared on the extension node
+        # so that types like HeaderType (attributes-only) are not filtered out.
+        try:
+            ext = simple_content.find(f"{{{self.XS_NAMESPACE}}}extension")
+            if ext is None:
+                logger.warning(f"simpleContent in {complex_type.name} has no extension; limited support")
+                return
+            for attr_elem in ext.findall(f"{{{self.XS_NAMESPACE}}}attribute"):
+                attribute = self._parse_attribute(attr_elem, schema_def)
+                if attribute:
+                    complex_type.attributes[attribute.name] = attribute
+        except Exception:
+            logger.warning(f"simpleContent in {complex_type.name} is not fully supported yet.")
 
     def _get_local_name(self, qname: str) -> str:
         """Extract the local name from a qualified name (e.g., {http://...}string -> string)."""

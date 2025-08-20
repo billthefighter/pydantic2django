@@ -33,7 +33,9 @@ from typing import {{ extra_type_imports|join(', ') }}
 
 # Django validators (conditionally included)
 {% if validator_imports %}
-from django.core.validators import {{ validator_imports|join(', ') }}
+{% for name in validator_imports %}
+from django.core.validators import {{ name }}
+{% endfor %}
 {% endif %}
 
 # Original Pydantic model imports

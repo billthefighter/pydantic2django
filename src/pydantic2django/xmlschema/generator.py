@@ -13,6 +13,7 @@ from django.db import models
 from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.factories import ConversionCarrier
 
+from . import register_generated_model
 from .discovery import XmlSchemaDiscovery
 from .factory import XmlSchemaFieldInfo, XmlSchemaModelFactory
 from .models import XmlSchemaComplexType
@@ -250,6 +251,22 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         """
         # Discover and create carriers first via base implementation pieces
         self.discover_models()
+        # Inform the field factory which models are actually included so it can
+        # avoid generating relations to filtered-out models (fallback to JSON).
+        try:
+            # Prefer local (unqualified) complex type names to match factory lookups
+            # filtered_models keys may be qualified as "{namespace}.{name}", so derive plain names
+            included_local_names = {
+                getattr(m, "name", str(m))
+                for m in self.discovery_instance.filtered_models.values()  # type: ignore[attr-defined]
+            }
+            # Also include any already-qualified keys for maximum compatibility
+            included_qualified_keys = set(self.discovery_instance.filtered_models.keys())  # type: ignore[attr-defined]
+            included_names = included_local_names | included_qualified_keys
+            # type: ignore[attr-defined]
+            self.model_factory_instance.field_factory.included_model_names = included_names  # noqa: E501
+        except Exception:
+            pass
         models_to_process = self._get_models_in_processing_order()
 
         # Reset state for this run (mirror BaseStaticGenerator)
@@ -275,6 +292,33 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             except Exception as e:
                 logger.error(f"Error finalizing XML relationships: {e}")
 
+        # Register generated model classes for in-memory lookup by ingestors
+        try:
+            for carrier in self.carriers:
+                if carrier.django_model is not None:
+                    register_generated_model(self.app_label, carrier.django_model)
+                    try:
+                        logger.info(
+                            "Registered generated model %s (abstract=%s) for app '%s'",
+                            carrier.django_model.__name__,
+                            getattr(getattr(carrier.django_model, "_meta", None), "abstract", None),
+                            self.app_label,
+                        )
+                    except Exception:
+                        pass
+                    # Prevent dynamic classes from polluting Django's global app registry
+                    try:
+                        from django.apps import apps as django_apps  # Local import to avoid hard dependency
+
+                        model_lower = getattr(getattr(carrier.django_model, "_meta", None), "model_name", None)
+                        if model_lower:
+                            django_apps.all_models.get(self.app_label, {}).pop(model_lower, None)
+                    except Exception:
+                        # Best-effort cleanup only
+                        pass
+        except Exception as e:
+            logger.debug(f"Non-fatal: failed to register generated models for app '{self.app_label}': {e}")
+
         # Proceed with standard definition rendering
         model_definitions = []
         django_model_names = []
@@ -292,6 +336,27 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                     )
 
         unique_model_definitions = self._deduplicate_definitions(model_definitions)
+        # Ensure that every advertised model name in __all__ has a corresponding class definition.
+        try:
+            import re as _re
+
+            joined_defs = "\n".join(unique_model_definitions)
+            existing_names = {m.group(1) for m in _re.finditer(r"^\s*class\s+(\w+)\(", joined_defs, _re.MULTILINE)}
+            advertised_names = [
+                self._clean_generic_type(getattr(c.django_model, "__name__", ""))
+                for c in self.carriers
+                if c.django_model is not None
+            ]
+            for name in advertised_names:
+                if name and name not in existing_names:
+                    minimal_def = (
+                        f'"""\nDjango model for {name}.\n"""\n\n'
+                        f"class {name}({self.base_model_class.__name__}):\n    # No fields defined for this model.\n    pass\n\n    class Meta:\n        app_label = '{self.app_label}'\n        abstract = False\n\n"
+                    )
+                    unique_model_definitions.append(minimal_def)
+        except Exception:
+            pass
+
         imports = self.import_handler.deduplicate_imports()
         template_context = self._prepare_template_context(unique_model_definitions, django_model_names, imports)
         template_context.update(

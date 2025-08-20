@@ -1,6 +1,6 @@
 [project]
 name = "django-typed2django"
-version = "1.0.5"
+version = "1.0.6"
 description = "Convert Pydantic models to Django models dynamically"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,6 +42,7 @@ dev = [
     "websockets>=15.0.1",
     "sqlalchemy>=2.0.40",
     "torch>=2.2.0",
+    "pillow>=10.0.0",
 ]
 docs = [
     "mkdocs>=1.6.0",
@@ -98,8 +99,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = [
     "--ds=tests.settings",
-    "--cov=pydantic2django",
-    "--cov-report=term-missing"
 ]
 
 # Add Mypy configuration for src layout

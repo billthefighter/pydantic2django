@@ -95,6 +95,10 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
 
         # Register common custom filters
         self.jinja_env.filters["format_type_string"] = TypeHandler.format_type_string
+        # Provide an escaping filter for embedding strings safely in generated Python code
+        from ..core.utils.strings import sanitize_string as _escape_py_str  # Local import to avoid cycles
+
+        self.jinja_env.filters["escape_py_str"] = _escape_py_str
         # Add more common filters if needed
 
         # Add base model import

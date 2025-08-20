@@ -47,3 +47,4 @@ poetry.lock
 
 test_db.sqlite3
 site/*
+*.DS_Store

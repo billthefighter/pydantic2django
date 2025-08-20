@@ -183,22 +183,19 @@ class BaseModelFactory(ABC, Generic[SourceModelType, SourceFieldType]):
         meta_attrs = {
             "app_label": carrier.meta_app_label,
             "db_table": f"{carrier.meta_app_label}_{source_name.lower()}",
-            "abstract": False,
+            # Keep dynamic models abstract so Django does not register them in the
+            # global app registry. This avoids conflicts with concrete generated models
+            # imported later (e.g., during makemigrations in tests).
+            "abstract": True,
             "managed": True,
             "verbose_name": source_model_name_cleaned,
             "verbose_name_plural": source_model_name_cleaned + "s",
             "ordering": ["pk"],
         }
 
-        base_meta_obj = getattr(carrier.base_django_model, "Meta", None) if carrier.base_django_model else None
-
-        if base_meta_obj:
-            logger.debug(f"Creating Meta inheriting from {carrier.base_django_model.__name__}'s Meta")
-            final_meta_attrs = {**meta_attrs}  # Ensure our settings override base
-            carrier.django_meta_class = type("Meta", (base_meta_obj,), final_meta_attrs)
-        else:
-            logger.debug("Creating new Meta class")
-            carrier.django_meta_class = type("Meta", (), meta_attrs)
+        # Create Meta, not inheriting from base Meta to ensure abstract stays True
+        logger.debug("Creating new Meta class for dynamic model (abstract=True)")
+        carrier.django_meta_class = type("Meta", (), meta_attrs)
 
     def _assemble_django_model_class(self, carrier: ConversionCarrier[SourceModelType]):
         """Assemble the final Django model class using type()."""

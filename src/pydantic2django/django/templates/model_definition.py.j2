@@ -3,7 +3,7 @@
 {% for enum_class in enum_classes %}
 class {{ enum_class.name }}(models.TextChoices):
     {% for choice in enum_class.choices %}
-    {{ choice.name }} = "{{ choice.value }}", "{{ choice.label }}"
+    {{ choice.name }} = "{{ choice.value | escape_py_str }}", "{{ choice.label | escape_py_str }}"
     {% endfor %}
 
 

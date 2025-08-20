@@ -253,6 +253,25 @@ class XmlSchemaSimpleType:
     def __name__(self) -> str:
         return self.name
 
+    # --- Backward-compatibility aliases/proxies ---
+    @property
+    def restriction(self) -> XmlSchemaRestriction | None:  # pragma: no cover - compatibility shim
+        return self.restrictions
+
+    @restriction.setter
+    def restriction(self, value: XmlSchemaRestriction | None) -> None:  # pragma: no cover - compatibility shim
+        self.restrictions = value
+
+    @property
+    def enumeration(self) -> list[tuple[str, str]]:  # pragma: no cover - compatibility shim
+        return self.restrictions.enumeration if self.restrictions and self.restrictions.enumeration else []
+
+    @enumeration.setter
+    def enumeration(self, values: list[tuple[str, str]]) -> None:  # pragma: no cover - compatibility shim
+        if self.restrictions is None:
+            self.restrictions = XmlSchemaRestriction()
+        self.restrictions.enumeration = list(values)
+
 
 @dataclass
 class XmlSchemaDefinition:

@@ -64,6 +64,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         nested_relationship_strategy: str = "auto",
         list_relationship_style: str = "child_fk",
         nesting_depth_threshold: int = 1,
+        included_model_names: set[str] | None = None,
     ):
         super().__init__()
         self.nested_relationship_strategy = nested_relationship_strategy
@@ -71,6 +72,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         self.nesting_depth_threshold = max(0, int(nesting_depth_threshold))
         # Track which Django validators are needed based on restrictions encountered
         self.used_validators: set[str] = set()
+        # Limit FK generation only to models that will actually be generated
+        self.included_model_names: set[str] | None = included_model_names
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -105,10 +108,25 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             # Resolve simple types
             simple_type = self._resolve_simple_type(source_field.type_name, schema_def)
             if simple_type:
-                if simple_type.restriction and simple_type.restriction.enumeration:
+                restr = getattr(simple_type, "restrictions", None)
+                if restr and getattr(restr, "enumeration", None):
                     field_class, kwargs = self._create_enum_field(simple_type, field_info, model_name, carrier)
-                elif simple_type.restriction:
+                else:
+                    # Always apply base-type mapping and any available restrictions
                     field_class, kwargs = self._apply_simple_type_restrictions(simple_type, field_info)
+            # Inline restrictions on element/attribute (no named simpleType)
+            elif getattr(source_field, "restrictions", None):
+                # Build a temporary simple type holder to reuse restriction logic
+                tmp_simple = XmlSchemaSimpleType(
+                    name=field_info.name,
+                    base_type=getattr(source_field, "base_type", None),
+                    restrictions=getattr(source_field, "restrictions", None),
+                )
+                restr = tmp_simple.restrictions
+                if restr and getattr(restr, "enumeration", None):
+                    field_class, kwargs = self._create_enum_field(tmp_simple, field_info, model_name, carrier)
+                else:
+                    field_class, kwargs = self._apply_simple_type_restrictions(tmp_simple, field_info)
             elif field_info.element:
                 field_class, kwargs = self._create_element_field(field_info.element, model_name, carrier)
             elif field_info.attribute:
@@ -134,11 +152,13 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         carrier: ConversionCarrier,
     ):
         """Create a CharField with choices for an enumeration."""
-        max_length = (
-            max(len(val) for val, _ in simple_type.restriction.enumeration)
-            if simple_type.restriction and simple_type.restriction.enumeration
-            else 255
-        )
+        restr = getattr(simple_type, "restrictions", None)
+        max_length = 255
+        if restr and getattr(restr, "enumeration", None):
+            try:
+                max_length = max(len(val) for val, _ in restr.enumeration)
+            except Exception:
+                max_length = 255
 
         # Get or create a shared enum class for this simpleType
         enum_class_name, is_new = self._get_or_create_enum_class(simple_type, field_info, carrier)
@@ -172,22 +192,23 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         from ..django.utils.serialization import RawCode
 
         kwargs = {"max_length": 255}  # Default for string-like; will be dropped for numeric fields
-        if simple_type.restriction:
-            if simple_type.restriction.pattern:
+        restr = getattr(simple_type, "restrictions", None)
+        if restr:
+            if getattr(restr, "pattern", None):
                 # Use RawCode to ensure validator is not quoted as string
-                kwargs["validators"] = [RawCode(f"RegexValidator(r'{simple_type.restriction.pattern}')")]
+                kwargs["validators"] = [RawCode(f"RegexValidator(r'{restr.pattern}')")]
                 # Note usage for later import emission
                 try:
                     self.used_validators.add("RegexValidator")
                 except Exception:
                     pass
-            if simple_type.restriction.max_length:
-                kwargs["max_length"] = int(simple_type.restriction.max_length)
+            if getattr(restr, "max_length", None):
+                kwargs["max_length"] = int(restr.max_length)
             # Numeric bounds -> validators
-            min_val = simple_type.restriction.min_inclusive
-            max_val = simple_type.restriction.max_inclusive
-            min_ex = simple_type.restriction.min_exclusive
-            max_ex = simple_type.restriction.max_exclusive
+            min_val = getattr(restr, "min_inclusive", None)
+            max_val = getattr(restr, "max_inclusive", None)
+            min_ex = getattr(restr, "min_exclusive", None)
+            max_ex = getattr(restr, "max_exclusive", None)
             validators_list = kwargs.setdefault("validators", [])
             if min_val is not None:
                 validators_list.append(
@@ -223,11 +244,9 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         # Determine the base Django field type
         base_field_class = self.FIELD_TYPE_MAP.get(simple_type.base_type, models.CharField)
 
-        if simple_type.base_type == XmlSchemaType.STRING and (
-            not simple_type.restriction or not simple_type.restriction.max_length
-        ):
+        if simple_type.base_type == XmlSchemaType.STRING and (not restr or not getattr(restr, "max_length", None)):
             # If a pattern is present, it's likely a constrained string that should be a CharField
-            if not (simple_type.restriction and simple_type.restriction.pattern):
+            if not (restr and getattr(restr, "pattern", None)):
                 base_field_class = models.TextField
                 # TextField doesn't accept max_length, so remove it if it was defaulted
                 kwargs.pop("max_length", None)
@@ -238,8 +257,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         if issubclass(base_field_class, models.DecimalField):
             kwargs.pop("max_length", None)
             # Map precision if available
-            total = simple_type.restriction.total_digits if simple_type.restriction else None
-            frac = simple_type.restriction.fraction_digits if simple_type.restriction else None
+            total = getattr(restr, "total_digits", None)
+            frac = getattr(restr, "fraction_digits", None)
             if total is not None:
                 kwargs["max_digits"] = int(total)
             if frac is not None:
@@ -266,11 +285,16 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         # Handle references to complex types (nested objects)
         if element.base_type is None and element.type_name and schema_def:
             target_type_name = element.type_name.split(":")[-1]
-            if target_type_name in schema_def.complex_types:
+            # Only create relations to complex types that are slated for generation
+            allowed = True
+            if self.included_model_names is not None and target_type_name not in self.included_model_names:
+                allowed = False
+
+            if allowed and target_type_name in schema_def.complex_types:
                 strategy = self._decide_nested_strategy(current_depth=1)
                 # Repeating complex elements
                 if element.is_list:
-                    if strategy == "json" or self.list_relationship_style == "json":
+                    if strategy == "json" or self.list_relationship_style == "json" or not allowed:
                         return self._make_json_field_kwargs(element)
                     if self.list_relationship_style == "m2m":
                         kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "blank": True}
@@ -290,7 +314,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     return self._make_json_field_kwargs(element) if strategy == "json" else (None, {})
 
                 # Single nested complex element
-                if strategy == "json":
+                if strategy == "json" or not allowed:
                     return self._make_json_field_kwargs(element)
                 # FK on parent to child
                 kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
@@ -316,6 +340,23 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         if element.nillable or element.min_occurs == 0:
             kwargs["null"] = True
             kwargs["blank"] = True
+
+        # Apply inline restrictions if present (including enums, patterns, bounds)
+        if element.restrictions:
+            tmp_simple = XmlSchemaSimpleType(
+                name=element.name,
+                base_type=element.base_type,
+                restrictions=element.restrictions,
+            )
+            restr = element.restrictions
+            if getattr(restr, "enumeration", None):
+                return self._create_enum_field(
+                    tmp_simple, XmlSchemaFieldInfo(name=element.name, element=element), model_name, carrier
+                )
+            # Otherwise apply restriction mapping (validators, lengths, numeric bounds)
+            return self._apply_simple_type_restrictions(
+                tmp_simple, XmlSchemaFieldInfo(name=element.name, element=element)
+            )
 
         if field_class == models.CharField:
             if element.nillable:
@@ -377,6 +418,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
     ) -> tuple[type[models.ForeignKey], dict]:
         """Creates a ForeignKey field from an IDREF attribute or element."""
         schema_def = carrier.source_model.schema_def
+        # Default to CASCADE; may be overridden to SET_NULL if optional
         kwargs = {"on_delete": models.CASCADE}
 
         # Find the keyref that applies to this field
@@ -429,6 +471,18 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 else:
                     kwargs["related_name"] = f"{model_name.lower()}s"
 
+        # Determine optionality to adjust on_delete/null/blank
+        is_optional = False
+        if field_info.attribute is not None:
+            is_optional = field_info.attribute.use == "optional"
+        elif field_info.element is not None:
+            is_optional = field_info.element.nillable or field_info.element.min_occurs == 0
+
+        if is_optional:
+            kwargs["on_delete"] = models.SET_NULL
+            kwargs["null"] = True
+            kwargs["blank"] = True
+
         # Fallback if keyref resolution fails
         if "to" not in kwargs:
             kwargs["to"] = f"'{carrier.meta_app_label}.OtherModel'"
@@ -470,8 +524,9 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             return enum_class_name, False
 
         choices = []
-        if simple_type.restriction and simple_type.restriction.enumeration:
-            for value, label in simple_type.restriction.enumeration:
+        restr = getattr(simple_type, "restrictions", None)
+        if restr and getattr(restr, "enumeration", None):
+            for value, label in restr.enumeration:
                 # Use the value to form the enum member name, label for human-readable
                 enum_member_name = value.replace("-", " ").upper().replace(" ", "_")
                 choices.append({"name": enum_member_name, "value": value, "label": label})
@@ -514,8 +569,16 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
     def _handle_field_result(self, result: FieldConversionResult, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Handle the result of field conversion and add to appropriate carrier containers."""
         if result.django_field:
-            # Avoid generating a plain 'id' field unless it's a primary key; rename to prevent Django E004
+            # Normalize XML names to Django-style snake_case
             out_field_name = result.field_name
+            try:
+                import re
+
+                s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", out_field_name)
+                out_field_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+            except Exception:
+                pass
+            # Avoid generating a plain 'id' field unless it's a primary key; rename to prevent Django E004
             try:
                 if out_field_name.lower() == "id" and not getattr(result.django_field, "primary_key", False):
                     out_field_name = "xml_id"
@@ -552,6 +615,20 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
             pending = carrier.context_data.pop("_pending_child_fk", [])
             if pending:
                 self._pending_child_fk.extend(pending)
+
+        # Ensure a concrete model exists even if no fields were produced, to satisfy relations.
+        if not carrier.django_fields and not carrier.relationship_fields:
+            try:
+                # Add a primary key to register a concrete model
+                carrier.django_fields["id"] = models.AutoField(primary_key=True)
+                # Also register a definition string for static emission
+                from ..django.utils.serialization import generate_field_definition_string
+
+                pk_def = generate_field_definition_string(models.AutoField, {"primary_key": True}, self.app_label)
+                carrier.django_field_definitions["id"] = pk_def
+            except Exception:
+                # As a fallback, keep it context-only
+                pass
 
     def _build_model_context(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Builds the final ModelContext for the Django model."""
@@ -601,3 +678,22 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
             fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
             field_name = f"{parent_name.lower()}"
             child_carrier.django_field_definitions[field_name] = fk_def
+
+    # --- Override meta class creation to keep dynamic models abstract (avoid registry conflicts) ---
+    def _create_django_meta(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
+        """Create the Meta class for the generated Django model (abstract for dynamic xmlschema models)."""
+        source_name = getattr(carrier.source_model, "__name__", "UnknownSourceModel")
+        source_model_name_cleaned = source_name.replace("_", " ")
+        meta_attrs = {
+            "app_label": self.app_label,
+            "db_table": f"{self.app_label}_{source_name.lower()}",
+            # Keep abstract to avoid polluting Django's app registry during generation
+            "abstract": True,
+            "managed": True,
+            "verbose_name": source_model_name_cleaned,
+            "verbose_name_plural": source_model_name_cleaned + "s",
+            "ordering": ["pk"],
+        }
+
+        logger.debug("Creating Meta class for xmlschema model (abstract=True)")
+        carrier.django_meta_class = type("Meta", (), meta_attrs)
