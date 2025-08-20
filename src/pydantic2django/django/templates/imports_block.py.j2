@@ -11,16 +11,11 @@ from dataclasses import dataclass, field
 from django.db import models
 from pydantic import BaseModel
 
-# typed2django base classes (import only those relevant to the current conversion)
+# Base model import (resolved by the generator)
+from {{ base_model_module }} import {{ base_model_name }}
 {% if generation_source_type == 'pydantic' %}
-from typed2django.django.models import Pydantic2DjangoBaseClass, Pydantic2DjangoStorePydanticObject
-{% elif generation_source_type == 'dataclass' %}
-from typed2django.django.models import Dataclass2DjangoBaseClass
-{% elif generation_source_type in ['xml', 'xmlschema'] %}
-from typed2django.django.models import Xml2DjangoBaseClass
-{% else %}
-# Fallback: import commonly used bases
-from typed2django.django.models import Pydantic2DjangoBaseClass, Dataclass2DjangoBaseClass
+# Optional store/helper for Pydantic round-trips
+from typed2django.django.models import Pydantic2DjangoStorePydanticObject
 {% endif %}
 
 # Context types for optional context class generation
