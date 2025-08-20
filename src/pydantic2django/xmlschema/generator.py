@@ -113,13 +113,20 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
 
     def _get_default_base_model_class(self) -> type[models.Model]:
         """Return the default Django base model for XML Schema conversion."""
+        # Prefer local pydantic2django base; fall back to typed2django if present
         try:
-            from typed2django.django.models import Xml2DjangoBaseClass as _Base
+            from pydantic2django.django.models import Xml2DjangoBaseClass as _Base
+
+            return _Base
+        except Exception:
+            pass
+        try:
+            from typed2django.django.models import Xml2DjangoBaseClass as _Base  # type: ignore[import-not-found]
 
             return _Base
         except Exception as exc:  # pragma: no cover - defensive
             raise ImportError(
-                "typed2django.django.models.Xml2DjangoBaseClass is required for XML Schema generation."
+                "pydantic2django.django.models.Xml2DjangoBaseClass (or typed2django equivalent) is required for XML Schema generation."
             ) from exc
 
     def _get_models_in_processing_order(self) -> list[XmlSchemaComplexType]:
