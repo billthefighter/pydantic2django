@@ -1,10 +1,11 @@
 """Base Django model class with Pydantic conversion capabilities."""
+
 import dataclasses
 import importlib
 import inspect
 import logging
 import uuid
-from typing import Any, ClassVar, Generic, Optional, TypeVar, cast
+from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from django.db import models
 from pydantic import BaseModel
@@ -159,7 +160,7 @@ class TypedClass2DjangoBase(CommonBaseModel):
     Inherits common fields and methods from CommonBaseModel.
     """
 
-    _expected_typedclass_type: ClassVar[Optional[type]] = None  # For type checking specific generic classes
+    _expected_typedclass_type: ClassVar[type | None] = None  # For type checking specific generic classes
 
     class Meta(CommonBaseModel.Meta):
         abstract = True
@@ -465,7 +466,7 @@ class Dataclass2DjangoBase(CommonBaseModel):
     """
 
     # Add specific attributes or methods for dataclasses if needed later
-    _expected_dataclass_type: ClassVar[Optional[type]] = None
+    _expected_dataclass_type: ClassVar[type | None] = None
 
     class Meta(CommonBaseModel.Meta):
         abstract = True
@@ -504,7 +505,7 @@ class Pydantic2DjangoBase(CommonBaseModel):
     Inherits common fields and methods from CommonBaseModel.
     """
 
-    _expected_pydantic_type: ClassVar[Optional[type[BaseModel]]] = None
+    _expected_pydantic_type: ClassVar[type[BaseModel] | None] = None
 
     class Meta(CommonBaseModel.Meta):
         abstract = True
@@ -747,7 +748,7 @@ class Pydantic2DjangoStorePydanticObject(Pydantic2DjangoBase):
             logger.error(f"An unexpected error occurred creating Django model for '{class_name}': {e}", exc_info=True)
             raise ValueError(f"Unexpected error creating Django model for '{class_name}'") from e
 
-    def to_pydantic(self, context: Optional[dict[str, Any]] = None) -> Any:
+    def to_pydantic(self, context: dict[str, Any] | None = None) -> Any:
         """
         Convert the stored data back to a Pydantic object.
 
@@ -1198,7 +1199,7 @@ class Pydantic2DjangoBaseClass(Pydantic2DjangoBase, Generic[PydanticT]):
                 setattr(self, field_name, serialized_value)
             # Else: Field exists on Django model but not on Pydantic model, leave it unchanged.
 
-    def to_pydantic(self, context: Optional[ModelContext] = None) -> PydanticT:
+    def to_pydantic(self, context: ModelContext | None = None) -> PydanticT:
         """
         Convert this Django model instance back to a Pydantic object.
 
@@ -1325,9 +1326,9 @@ class Xml2DjangoBaseClass(models.Model):
     schema_source = models.CharField(max_length=255, null=True, blank=True, help_text="Source XSD file")
 
     # XML Schema metadata (can be overridden in generated models)
-    _xml_namespace: ClassVar[Optional[str]] = None
-    _xml_schema_location: ClassVar[Optional[str]] = None
-    _xml_type_name: ClassVar[Optional[str]] = None
+    _xml_namespace: ClassVar[str | None] = None
+    _xml_schema_location: ClassVar[str | None] = None
+    _xml_type_name: ClassVar[str | None] = None
 
     class Meta:
         abstract = True
@@ -1437,7 +1438,7 @@ class Xml2DjangoBaseClass(models.Model):
         else:
             return value
 
-    def to_xml_string(self, root_element_name: Optional[str] = None, include_declaration: bool = True) -> str:
+    def to_xml_string(self, root_element_name: str | None = None, include_declaration: bool = True) -> str:
         """
         Convert Django model instance to XML string.
 
@@ -1518,3 +1519,27 @@ class Xml2DjangoBaseClass(models.Model):
                 data[f"@{attr_name}"] = attr_value
 
         return cls.from_xml_dict(data)
+
+
+# --- Optional TimescaleDB integration base ---
+# Provides a combined abstract base that includes TimescaleDB support when available.
+try:
+    # django-timescaledb package import path
+    from timescale.db.models.models import (
+        TimescaleModel,  # type: ignore[import-not-found]
+    )
+except Exception:  # pragma: no cover - optional dependency
+    # Fallback no-op mixin when TimescaleDB is not installed
+    class TimescaleModel:  # type: ignore[no-redef]
+        pass
+
+
+class XmlTimescaleBase(Xml2DjangoBaseClass, TimescaleModel):
+    """Abstract base class combining XML helpers with TimescaleDB features.
+
+    Inherits from `Xml2DjangoBaseClass` and `timescale.db.models.models.TimescaleModel`.
+    When the TimescaleDB package is not installed, `TimescaleModel` is a no-op mixin.
+    """
+
+    class Meta:
+        abstract = True

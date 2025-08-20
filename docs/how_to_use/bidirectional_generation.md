@@ -161,6 +161,29 @@ addr = Address.from_xml_dict({"street": "123 Main", "zipCode": "94107"})
 xml = addr.to_xml_string()
 ```
 
+#### Overriding the base model class
+
+All generators keep their intended base class on `gen.base_model_class`. You can override it before calling `generate()` to inject your own abstract base or enable integrations.
+
+Example: enable TimescaleDB hypertables for XML-generated models using the provided `XmlTimescaleBase` (which combines `Xml2DjangoBaseClass` and `TimescaleModel`):
+
+```python
+from pydantic2django.django.models import XmlTimescaleBase
+from pydantic2django.xmlschema.generator import XmlSchemaDjangoModelGenerator
+
+gen = XmlSchemaDjangoModelGenerator(
+    schema_files=["..."],
+    output_path="generated_models.py",
+    app_label="xsd_app",
+)
+gen.base_model_class = XmlTimescaleBase
+gen.generate()
+```
+
+If a generator exposes a `base_model_class=` constructor argument, you can pass it directly. Otherwise, assigning to `gen.base_model_class` prior to `generate()` is supported.
+
+Note: TimescaleDB expects a `time` column; see the `django-timescaledb` README for details (`https://github.com/jamessewell/django-timescaledb?tab=readme-ov-file`).
+
 ---
 
 ## Django ⇄ Pydantic (dynamic)

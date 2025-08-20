@@ -2,6 +2,7 @@
 XML Schema Django model generator.
 Main entry point for generating Django models from XML Schema files.
 """
+
 import logging
 import re
 from collections.abc import Callable
@@ -39,6 +40,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         nested_relationship_strategy: str = "auto",  # one of: "fk", "json", "auto"
         list_relationship_style: str = "child_fk",  # one of: "child_fk", "m2m", "json"
         nesting_depth_threshold: int = 1,
+        # Optional override for the Django base model class
+        base_model_class: type[models.Model] | None = None,
     ):
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
@@ -54,7 +57,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             app_label=app_label,
             discovery_instance=discovery,
             model_factory_instance=model_factory,
-            base_model_class=self._get_default_base_model_class(),
+            base_model_class=base_model_class or self._get_default_base_model_class(),
             class_name_prefix=class_name_prefix,
             module_mappings=module_mappings,
             verbose=verbose,
@@ -308,7 +311,9 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         pass
                     # Prevent dynamic classes from polluting Django's global app registry
                     try:
-                        from django.apps import apps as django_apps  # Local import to avoid hard dependency
+                        from django.apps import (
+                            apps as django_apps,  # Local import to avoid hard dependency
+                        )
 
                         model_lower = getattr(getattr(carrier.django_model, "_meta", None), "model_name", None)
                         if model_lower:

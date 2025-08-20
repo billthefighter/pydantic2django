@@ -106,3 +106,56 @@ u = conv.to_pydantic(dj)
 - Check in the generated file and migrations, or generate as part of your build before `makemigrations` (be consistent across environments).
 - If you regenerate frequently, consider a small script or management command to run the generator.
 - Keep `pydantic2django` installed in runtime environments if your generated file imports base classes (e.g., `Pydantic2DjangoBaseClass`).
+
+---
+
+### Override the generated base class
+
+By default, generated models inherit a source-specific base (e.g., `Pydantic2DjangoBaseClass`, `Dataclass2DjangoBaseClass`, `Xml2DjangoBaseClass`). You can override the base to add mixins, managers, or TimescaleDB support.
+
+- Define your custom abstract base:
+
+```python
+from django.db import models
+from pydantic2django.django.models import Xml2DjangoBaseClass
+
+class MyXmlBase(Xml2DjangoBaseClass):
+    class Meta:
+        abstract = True
+
+    # your common fields/methods here
+```
+
+- Use it with a generator before calling `generate()`:
+
+```python
+from pydantic2django.xmlschema.generator import XmlSchemaDjangoModelGenerator
+
+gen = XmlSchemaDjangoModelGenerator(
+    schema_files=["path/to/schema.xsd"],
+    output_path="myapp/models_generated.py",
+    app_label="myapp",
+)
+gen.base_model_class = MyXmlBase  # override the base
+gen.generate()
+```
+
+- TimescaleDB example (hypertable-ready base):
+
+```python
+# Combines Xml2DjangoBaseClass with TimescaleModel from django-timescaledb
+from pydantic2django.django.models import XmlTimescaleBase
+from pydantic2django.xmlschema.generator import XmlSchemaDjangoModelGenerator
+
+gen = XmlSchemaDjangoModelGenerator(
+    schema_files=["path/to/streams.xsd"],
+    output_path="myapp/models_generated.py",
+    app_label="myapp",
+)
+gen.base_model_class = XmlTimescaleBase
+gen.generate()
+```
+
+Notes:
+- The Timescale base expects a `time` column; see `django-timescaledb` docs for details (`https://github.com/jamessewell/django-timescaledb?tab=readme-ov-file`).
+- If the generator supports a constructor parameter `base_model_class`, you can pass it directly instead of setting the attribute after construction. If not, setting `gen.base_model_class` before `generate()` is sufficient.
