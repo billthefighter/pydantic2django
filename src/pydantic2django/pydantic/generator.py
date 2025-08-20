@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class StaticPydanticModelGenerator(
     BaseStaticGenerator[type[BaseModel], FieldInfo]
-):  # TModel=BaseModel, TFieldInfo=FieldInfo
+):  # TModel=type[BaseModel], TFieldInfo=FieldInfo
     """
     Generates Django models and their context classes from Pydantic models.
     Inherits common logic from BaseStaticGenerator.
@@ -46,7 +46,7 @@ class StaticPydanticModelGenerator(
         output_path: str = "generated_models.py",  # Keep original default
         packages: Optional[list[str]] = None,
         app_label: str = "django_app",  # Keep original default
-        filter_function: Optional[Callable[[type[BaseModel]], bool]] = None,
+        filter_function: Callable[..., bool] | None = None,
         verbose: bool = False,
         discovery_module: Optional[PydanticDiscovery] = None,
         module_mappings: Optional[dict[str, str]] = None,

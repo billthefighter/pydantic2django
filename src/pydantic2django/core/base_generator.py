@@ -5,7 +5,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import Generic, Optional, TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 import jinja2
 from django.db import models
@@ -33,11 +33,11 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self,
         output_path: str,
         app_label: str,
-        filter_function: Optional[Callable[[type[SourceModelType]], bool]],
+        filter_function: Callable[[type[SourceModelType]], bool] | None,
         verbose: bool,
         discovery_instance: BaseDiscovery[SourceModelType],
         model_factory_instance: BaseModelFactory[SourceModelType, FieldInfoType],
-        module_mappings: Optional[dict[str, str]],
+        module_mappings: dict[str, str] | None,
         base_model_class: type[models.Model],
         packages: list[str] | None = None,
         class_name_prefix: str = "Django",
@@ -204,7 +204,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
                 logger.info("  (No models found or passed filter)")
             logger.info("Dependency analysis complete.")
 
-    def setup_django_model(self, source_model: SourceModelType) -> Optional[ConversionCarrier[SourceModelType]]:
+    def setup_django_model(self, source_model: SourceModelType) -> ConversionCarrier[SourceModelType] | None:
         """
         Uses the model factory to create a Django model representation from a source model.
 
