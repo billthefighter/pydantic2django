@@ -9,9 +9,6 @@ class {{ enum_class.name }}(models.TextChoices):
 
 {% endfor %}
 {% endif %}
-"""
-Django model for {{ pydantic_model_name }}.
-"""
 
 class {{ model_name }}({{ base_model_name }}):
     """
