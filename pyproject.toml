@@ -1,11 +1,11 @@
 [project]
 name = "django-typed2django"
-version = "1.0.7"
+version = "1.0.8"
 description = "Convert Pydantic models to Django models dynamically"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" },
+    { name = "Lucas Whipple", email = "lucas@lodbrok.app" },
 ]
 license = { text = "MIT" }
 classifiers = [
