@@ -12,6 +12,7 @@ from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.bidirectional_mapper import BidirectionalTypeMapper
 from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
+from pydantic2django.django.timescale.heuristics import TimescaleRole  # type: ignore
 
 # Base Django model will be provided via _get_default_base_model_class
 # from pydantic2django.factory import DjangoModelFactoryCarrier # Old carrier, use ConversionCarrier
@@ -78,6 +79,8 @@ class DataclassDjangoModelGenerator(
             base_model_class=self._get_default_base_model_class(),
         )
         logger.info("DataclassDjangoModelGenerator initialized using BaseStaticGenerator.")
+        # Timescale classification results cached per run (name -> role)
+        self._timescale_roles: dict[str, TimescaleRole] = {}
 
     # --- Implement abstract methods from BaseStaticGenerator ---
 
@@ -155,6 +158,57 @@ class DataclassDjangoModelGenerator(
             # Add other specific details if needed, ensuring they access carrier correctly
             # Example: "source_model_module": carrier.source_model.__module__ if carrier.source_model else ""
         }
+
+    # Choose Timescale base per model (lazy roles computation)
+    def setup_django_model(self, source_model: DataclassType) -> ConversionCarrier | None:  # type: ignore[override]
+        try:
+            from pydantic2django.django.timescale.bases import DataclassTimescaleBase
+            from pydantic2django.django.timescale.heuristics import (
+                classify_dataclass_types,
+                should_use_timescale_base,
+            )
+        except Exception:
+            classify_dataclass_types = None  # type: ignore
+            should_use_timescale_base = None  # type: ignore
+            DataclassTimescaleBase = None  # type: ignore
+
+        # Compute roles lazily if not present
+        if not getattr(self, "_timescale_roles", None):
+            roles: dict[str, TimescaleRole] = {}
+            try:
+                models_to_score = []
+                try:
+                    models_to_score = self._get_models_in_processing_order() or []
+                except Exception:
+                    pass
+                if not models_to_score:
+                    models_to_score = [source_model]
+                if classify_dataclass_types:
+                    roles = classify_dataclass_types(models_to_score)
+            except Exception:
+                roles = {}
+            self._timescale_roles = roles
+
+        # Select base class
+        base_cls: type[models.Model] = self.base_model_class
+        try:
+            name = source_model.__name__
+            if should_use_timescale_base and DataclassTimescaleBase:
+                if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
+                    base_cls = DataclassTimescaleBase
+        except Exception:
+            pass
+
+        prev_base = self.base_model_class
+        self.base_model_class = base_cls
+        try:
+            carrier = super().setup_django_model(source_model)
+        finally:
+            self.base_model_class = prev_base
+
+        if carrier is not None:
+            carrier.context_data["_timescale_roles"] = getattr(self, "_timescale_roles", {})
+        return carrier
 
     def _get_default_base_model_class(self) -> type[models.Model]:
         """Return the default Django base model for Dataclass conversion."""

@@ -61,7 +61,7 @@ class BaseDiscovery(abc.ABC, Generic[TModel]):
                 package = importlib.import_module(package_name)
                 logger.debug(f"Scanning package: {package_name}")
 
-                for importer, modname, ispkg in pkgutil.walk_packages(
+                for _importer, modname, _ispkg in pkgutil.walk_packages(
                     path=package.__path__ if hasattr(package, "__path__") else None,
                     prefix=package.__name__ + ".",
                     onerror=lambda name: logger.warning(f"Error accessing module {name}"),

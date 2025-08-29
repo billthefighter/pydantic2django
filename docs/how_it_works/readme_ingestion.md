@@ -35,6 +35,10 @@ Future extensions:
 - Post-pass to resolve `xs:key` / `xs:keyref` (e.g., ID/IDREF) lookups
 - Configurable relationship strategies at ingest time (e.g., JSON/M2M)
 
+### Note on Timescale soft references
+
+When generation replaces illegal hypertable→hypertable FKs with soft references (e.g., `UUIDField(db_index=True)`), the ingestor will persist the identifier value. If you need strong integrity across hypertables, add an application-level validator or a periodic job that checks the referenced IDs exist (or maintain a regular “latest snapshot” table which hypertables can FK to).
+
 ## Pydantic and Dataclasses
 
 - Ingestion is simpler:

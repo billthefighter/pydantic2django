@@ -20,6 +20,7 @@ from pydantic2django.core.context import ContextClassGenerator
 from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.core.relationships import RelationshipConversionAccessor
 from pydantic2django.core.typing import TypeHandler
+from pydantic2django.django.timescale.heuristics import TimescaleRole  # type: ignore
 
 # TypeMapper for field generation hints
 # Import base classes and specific components
@@ -98,6 +99,8 @@ class StaticPydanticModelGenerator(
         self.model_has_context: dict[str, bool] = {}
         self.context_class_names: list[str] = []
         self.seen_context_classes: set[str] = set()
+        # Timescale classification results cached per run (name -> role)
+        self._timescale_roles: dict[str, TimescaleRole] = {}
 
     # --- Implement Abstract Methods from Base ---
 
@@ -367,6 +370,57 @@ class StaticPydanticModelGenerator(
         # 10. Render the main template
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(**template_context)
+
+    # Choose Timescale base per model (lazy roles computation)
+    def setup_django_model(self, source_model: type[BaseModel]) -> ConversionCarrier | None:  # type: ignore[override]
+        try:
+            from pydantic2django.django.timescale.bases import PydanticTimescaleBase
+            from pydantic2django.django.timescale.heuristics import (
+                classify_pydantic_models,
+                should_use_timescale_base,
+            )
+        except Exception:
+            classify_pydantic_models = None  # type: ignore
+            should_use_timescale_base = None  # type: ignore
+            PydanticTimescaleBase = None  # type: ignore
+
+        # Compute roles lazily if not present
+        if not getattr(self, "_timescale_roles", None):
+            roles: dict[str, TimescaleRole] = {}
+            try:
+                models_to_score = []
+                try:
+                    models_to_score = self._get_models_in_processing_order() or []
+                except Exception:
+                    pass
+                if not models_to_score:
+                    models_to_score = [source_model]
+                if classify_pydantic_models:
+                    roles = classify_pydantic_models(models_to_score)
+            except Exception:
+                roles = {}
+            self._timescale_roles = roles
+
+        # Select base class
+        base_cls: type[models.Model] = self.base_model_class
+        try:
+            name = source_model.__name__
+            if should_use_timescale_base and PydanticTimescaleBase:
+                if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
+                    base_cls = PydanticTimescaleBase
+        except Exception:
+            pass
+
+        prev_base = self.base_model_class
+        self.base_model_class = base_cls
+        try:
+            carrier = super().setup_django_model(source_model)
+        finally:
+            self.base_model_class = prev_base
+
+        if carrier is not None:
+            carrier.context_data["_timescale_roles"] = getattr(self, "_timescale_roles", {})
+        return carrier
 
     # --- Remove methods now implemented in BaseStaticGenerator ---
     # generate(self) -> str: ...
