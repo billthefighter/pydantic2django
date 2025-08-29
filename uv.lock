@@ -540,11 +540,18 @@ wheels = [
 ]
 
 [[package]]
+name = "django-timescaledb"
+version = "0.2.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/9f/88107d46771b0236a80db0ab4324650b73973187141f214b24f46b7c4cf2/django-timescaledb-0.2.13.tar.gz", hash = "sha256:3a2dcdf224af318c6c813c7fbf323fa73ae9bd12d33cdf7540e34344ae62f739", size = 13264, upload_time = "2023-02-07T13:15:57.529Z" }
+
+[[package]]
 name = "django-typed2django"
-version = "1.0.9"
+version = "1.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "django" },
+    { name = "django-timescaledb" },
     { name = "email-validator" },
     { name = "lxml" },
     { name = "mkdocs-autolinks-plugin" },
@@ -589,6 +596,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "django", specifier = ">=4.0" },
+    { name = "django-timescaledb", specifier = ">=0.2.13" },
     { name = "email-validator", specifier = ">=2.1.0" },
     { name = "lxml", specifier = ">=6.0.1" },
     { name = "mkdocs-autolinks-plugin", specifier = ">=0.7.1" },

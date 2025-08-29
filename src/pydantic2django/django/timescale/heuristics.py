@@ -77,7 +77,7 @@ def _score_xml_features(xml_complex_type) -> int:
     """
     score = 0
     # time-ish fields
-    time_keys = {"time", "timestamp", "sequence", "effectiveTime", "sampleRate"}
+    time_keys = {"time", "timestamp", "sequence", "effectiveTime", "sampleRate", "date", "datetime"}
     try:
         for attr_name in getattr(xml_complex_type, "attributes", {}).keys():
             if any(k.lower() in attr_name.lower() for k in time_keys):
@@ -120,6 +120,45 @@ def classify_xml_complex_types(
     result: dict[str, TimescaleRole] = {}
     overrides = overrides or {}
 
+    # Build a quick lookup of complex types by name for descendant analysis
+    name_to_model: dict[str, Any] = {}
+    for m in models:
+        try:
+            n = getattr(m, "name", None) or getattr(m, "__name__", str(m))
+            name_to_model[n] = m
+        except Exception:
+            continue
+
+    def _has_direct_time_feature(xct: Any) -> bool:
+        try:
+            time_keys = {"time", "timestamp", "sequence", "effectiveTime", "sampleRate"}
+            for attr_name in getattr(xct, "attributes", {}).keys():
+                if any(k.lower() in attr_name.lower() for k in time_keys):
+                    return True
+            for el in getattr(xct, "elements", []) or []:
+                if any(k.lower() in getattr(el, "name", "").lower() for k in time_keys):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _child_complex_types(xct: Any) -> list[Any]:
+        children: list[Any] = []
+        try:
+            for el in getattr(xct, "elements", []) or []:
+                # Prefer an inline complex_type, otherwise resolve by type_name
+                child = getattr(el, "complex_type", None)
+                if child is None:
+                    tname = getattr(el, "type_name", None)
+                    if tname and tname in name_to_model:
+                        child = name_to_model[tname]
+                if child is not None:
+                    children.append(child)
+        except Exception:
+            pass
+        return children
+
+    # First pass: base scoring
     for m in models:
         name = getattr(m, "name", None) or getattr(m, "__name__", str(m))
         if name in overrides:
@@ -129,6 +168,39 @@ def classify_xml_complex_types(
         score = _score_name(name) + _score_xml_features(m)
         role = TimescaleRole.HYPERTABLE if score >= cfg.threshold else TimescaleRole.DIMENSION
         result[name] = role
+
+    # Second pass: demote container types without direct time fields and promote leaf children with time fields
+    for m in models:
+        name = getattr(m, "name", None) or getattr(m, "__name__", str(m))
+        try:
+            # Skip if this type already has direct time features
+            if _has_direct_time_feature(m):
+                continue
+
+            # Find descendant complex types that have direct time features
+            stack = _child_complex_types(m)
+            leaf_time_types: set[str] = set()
+            seen: set[int] = set()
+            while stack:
+                node = stack.pop()
+                if id(node) in seen:
+                    continue
+                seen.add(id(node))
+                if _has_direct_time_feature(node):
+                    leaf_time_types.add(getattr(node, "name", getattr(node, "__name__", str(node))))
+                else:
+                    stack.extend(_child_complex_types(node))
+
+            if leaf_time_types:
+                # If this container was initially classified hypertable, demote it
+                if result.get(name) == TimescaleRole.HYPERTABLE:
+                    result[name] = TimescaleRole.DIMENSION
+                # Ensure all leaf time-bearing types are hypertables
+                for tname in leaf_time_types:
+                    result[tname] = TimescaleRole.HYPERTABLE
+        except Exception:
+            # Be defensive: never fail classification due to structure issues
+            continue
 
     return result
 

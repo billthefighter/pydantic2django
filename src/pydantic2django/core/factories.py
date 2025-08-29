@@ -216,10 +216,13 @@ class BaseModelFactory(ABC, Generic[SourceModelType, SourceFieldType]):
 
         bases = (carrier.base_django_model,) if carrier.base_django_model else (models.Model,)
 
+        # Even if no fields were generated (e.g., collisions with base removed them),
+        # we still assemble the model class so that later phases (e.g., relationship finalization)
+        # can inject fields and meta indexes onto the carrier.
         if not carrier.django_fields and not carrier.relationship_fields:
-            logger.info(f"No Django fields generated for {source_name}, skipping model class creation.")
-            carrier.django_model = None
-            return
+            logger.info(
+                f"No Django fields generated for {source_name}, assembling bare model class to allow later injections."
+            )
 
         model_name = f"{carrier.class_name_prefix}{source_name}"
         logger.debug(f"Assembling model class '{model_name}' with bases {bases} and attrs: {list(model_attrs.keys())}")
