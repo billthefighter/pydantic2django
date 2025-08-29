@@ -14,6 +14,7 @@ from ..core.factories import (
     ConversionCarrier,
     FieldConversionResult,
 )
+from ..django.timescale.heuristics import should_soft_reference
 from .models import (
     XmlSchemaAttribute,
     XmlSchemaComplexType,
@@ -316,9 +317,18 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 # Single nested complex element
                 if strategy == "json" or not allowed:
                     return self._make_json_field_kwargs(element)
-                # FK on parent to child
+                # FK on parent to child, unless hypertable -> hypertable
+                roles = carrier.context_data.get("_timescale_roles", {})
+                src_name = str(getattr(carrier.source_model, "__name__", model_name))
+                if should_soft_reference(src_name, str(target_type_name), roles):
+                    # Soft reference field with index; default to UUID representation
+                    soft_kwargs = {"null": True, "blank": True}
+                    try:
+                        soft_kwargs["db_index"] = True
+                    except Exception:
+                        pass
+                    return models.UUIDField, soft_kwargs
                 kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
-                # Whenever using SET_NULL, enforce null/blank to satisfy Django system checks
                 kwargs["null"] = True
                 kwargs["blank"] = True
                 return models.ForeignKey, kwargs
@@ -415,7 +425,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         field_info: XmlSchemaFieldInfo,
         model_name: str,
         carrier: ConversionCarrier[XmlSchemaComplexType],
-    ) -> tuple[type[models.ForeignKey], dict]:
+    ) -> tuple[type[models.Field], dict]:
         """Creates a ForeignKey field from an IDREF attribute or element."""
         schema_def = carrier.source_model.schema_def
         # Default to CASCADE; may be overridden to SET_NULL if optional
@@ -461,6 +471,14 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     # Final fallback - use the selector target name + "Type"
                     target_model_name = f"{selector_target}Type"
 
+                # Decide on FK vs soft reference using Timescale classification
+                roles = carrier.context_data.get("_timescale_roles", {})
+                src_name = str(getattr(carrier.source_model, "__name__", model_name))
+                if should_soft_reference(src_name, str(target_model_name), roles):
+                    # Emit a soft reference field (UUID) instead of FK
+                    soft_kwargs = {"null": True, "blank": True, "db_index": True}
+                    # Return UUIDField tuple indicator by piggy-backing the return contract
+                    return models.UUIDField, soft_kwargs
                 kwargs["to"] = f"{carrier.meta_app_label}.{target_model_name}"
 
                 # Use the keyref selector to generate a better related_name
@@ -667,17 +685,32 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
             if not rn_base.endswith("s"):
                 rn_base = rn_base + "s"
             related_name = rn_base
-            fk_kwargs = {
-                "to": f"{app_label}.{parent_name}",
-                "on_delete": "models.CASCADE",
-                "related_name": related_name,
-            }
-            # Generate definition string and register as field definition
-            from ..django.utils.serialization import generate_field_definition_string
+            # Use Timescale roles to decide FK vs soft reference
+            roles = child_carrier.context_data.get("_timescale_roles", {})
+            child_name_str = str(child_name) if child_name else ""
+            parent_name_str = str(parent_name) if parent_name else ""
+            if should_soft_reference(child_name_str, parent_name_str, roles):
+                # Soft reference: UUID field with index
+                soft_kwargs = {"db_index": True}
+                # Soft refs on child->parent are often required; keep nullable off by default? Use safe default True.
+                soft_kwargs["null"] = True
+                soft_kwargs["blank"] = True
+                from ..django.utils.serialization import generate_field_definition_string
 
-            fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
-            field_name = f"{parent_name.lower()}"
-            child_carrier.django_field_definitions[field_name] = fk_def
+                soft_def = generate_field_definition_string(models.UUIDField, soft_kwargs, app_label)
+                field_name = f"{parent_name.lower()}"
+                child_carrier.django_field_definitions[field_name] = soft_def
+            else:
+                fk_kwargs = {
+                    "to": f"{app_label}.{parent_name}",
+                    "on_delete": "models.CASCADE",
+                    "related_name": related_name,
+                }
+                from ..django.utils.serialization import generate_field_definition_string
+
+                fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
+                field_name = f"{parent_name.lower()}"
+                child_carrier.django_field_definitions[field_name] = fk_def
 
     # --- Override meta class creation to keep dynamic models abstract (avoid registry conflicts) ---
     def _create_django_meta(self, carrier: ConversionCarrier[XmlSchemaComplexType]):

@@ -159,3 +159,19 @@ gen.generate()
 Notes:
 - The Timescale base expects a `time` column; see `django-timescaledb` docs for details (`https://github.com/jamessewell/django-timescaledb?tab=readme-ov-file`).
 - If the generator supports a constructor parameter `base_model_class`, you can pass it directly instead of setting the attribute after construction. If not, setting `gen.base_model_class` before `generate()` is sufficient.
+
+---
+
+## TimescaleDB integration (automatic classification)
+
+The XML generator can automatically classify types into hypertables (time-series facts) and dimensions (regular tables) and will:
+
+- Use `XmlTimescaleBase` for hypertables and the regular `Xml2DjangoBaseClass` for dimensions.
+- Convert illegal hypertable→hypertable relationships into soft references (`UUIDField(db_index=True)`), keeping schemas Timescale-safe.
+
+What you need:
+
+- Optionally install `django-timescaledb` to enable hypertable behavior; otherwise the Timescale mixin is a no-op.
+- Run migrations as usual. Hypertables will be created where supported by `django-timescaledb`.
+
+Tip: If you want to override the classification for specific types, you can pre/post-process the roles map returned by `classify_xml_complex_types(...)` in a custom generator wrapper before invoking `generate()`.

@@ -206,3 +206,22 @@ The `RelationshipConversionAccessor` is used by the type mapping system to:
 - Resolve `to` targets (including self-references and app labels)
 
 See the relationship checks and resolution within the mapper where it calls into the accessor to determine known models and resolve target Django models.
+
+---
+
+## TimescaleDB constraints and soft references
+
+TimescaleDB does not support ForeignKeys that point to hypertables. To respect this:
+
+- The XML generator classifies models as either hypertable (time-series facts) or dimension (regular tables).
+- Relationship rules during generation:
+  - **Hypertable → Regular**: generate a normal `ForeignKey`.
+  - **Regular → Regular**: generate a normal `ForeignKey`.
+  - **Hypertable → Hypertable**: generate a soft reference field instead of a `ForeignKey` (e.g., `UUIDField(db_index=True)`), and leave referential validation to application code or background jobs.
+
+Heuristics and helpers live under `pydantic2django.django.timescale`:
+
+- `classify_xml_complex_types(...)` produces a `{name: role}` map.
+- `should_soft_reference(source_name, target_name, roles)` returns `True` for hypertable→hypertable edges.
+
+This keeps schemas Timescale-safe while preserving joinability to dimensions and the ability to validate soft references at the application layer.

@@ -25,6 +25,7 @@ This library supports:
 - **Automatic Django Model Generation**: Scans your project to discover data classes and generates a complete, ready-to-use `models.py` file.
 - **Bidirectional Data Mapping**: The generated Django models, or models inheriting from the provided base classes, include methods like `.from_pydantic()` and `.to_pydantic()` for easy and reliable data conversion.
 - **Relationship Management**: Intelligently detects relationships between your source models and automatically creates the corresponding `ForeignKey` and `ManyToManyField` fields in Django.
+- **Timescale-aware Generation (optional)**: Provides heuristics and safe wiring for TimescaleDB so hypertables never use illegal hypertable→hypertable FKs (replaced with indexed soft references), while preserving legal FK patterns.
 - **Type Hint Aware**: Leverages type hints to create the most appropriate Django model fields, including support for `Optional`, `Union`, `Literal`, and generic collections.
 - **Extensible & Modular**: The library is structured into distinct modules for `pydantic`, `dataclass`, and `typedclass` handling, allowing for clear separation of concerns. You can dive into the core logic in `src/pydantic2django/core/`.
 
@@ -32,7 +33,7 @@ This library supports:
 
 For the complete documentation site, visit the GitHub Pages deployment: [pydantic2django docs](https://billthefighter.github.io/pydantic2django/).
 
-## Alternativves
+## Alternatives
 
 Consider [django-pydantic-field](https://github.com/surenkov/django-pydantic-field) which has lots of cool features but not quite as much scope (and, commensurately, not as much complexity) as this library.
 
@@ -140,6 +141,43 @@ generator = StaticPydanticModelGenerator(
 )
 ```
 
+## TimescaleDB Integration (Optional)
+
+Pydantic2Django can help you generate models that follow TimescaleDB’s constraints and best practices.
+
+- **Safe FK policy**
+  - Hypertable → Dimension: FK allowed.
+  - Dimension → Dimension: FK allowed.
+  - Hypertable → Hypertable: Not allowed by TimescaleDB. The generator replaces these with an indexed soft reference field (e.g., `UUIDField(db_index=True, null=True, blank=True)`), leaving referential checks to the application/background jobs.
+
+- **Heuristics to classify hypertables vs dimensions** (XML path)
+  - Classified by signals like: presence of time/timestamp/sequence fields; unbounded list growth; event/observation-like names (e.g., `Samples`, `Events`, `Condition`); negative weight for definition/metadata types (e.g., `*Definition*`, `*Parameters*`, `Header`).
+  - The XML generator chooses a per-model base:
+    - Hypertable types use `pydantic2django.django.timescale.bases.XmlTimescaleBase`.
+    - Dimension types use `pydantic2django.django.models.Xml2DjangoBaseClass`.
+  - Illegal hypertable→hypertable relations are automatically converted to soft references.
+
+- **Using Timescale bases in other paths**
+  - Pydantic and Dataclass paths can opt-in by setting the base explicitly before generation:
+
+```python
+from pydantic import BaseModel
+from pydantic2django.django.timescale.bases import PydanticTimescaleBase
+from pydantic2django.pydantic.generator import StaticPydanticModelGenerator
+
+class SampleObservation(BaseModel):
+    device_id: str
+    timestamp: int
+    value: float
+
+gen = StaticPydanticModelGenerator(output_path="models.py", packages=["my_pkg"], app_label="my_app")
+# Force Timescale-enabled base for generated models (treat as hypertables)
+gen.base_model_class = PydanticTimescaleBase
+gen.generate_models_file()
+```
+
+For XML schemas, Timescale handling is automatic via heuristics. For non-XML paths, choose a Timescale base where appropriate.
+
 ## Experimental Features
 
 ### Generic Python Class Conversion
@@ -153,8 +191,15 @@ Due to its experimental nature, it relies heavily on clear type hints in `__init
 Run the tests with:
 
 ```bash
-python -m unittest discover tests
+poetry run pytest -q
 ```
+
+## Contributing
+
+Contributions are welcome! Please read the contributing guide: [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+- All pull requests must pass the full test suite locally and in CI to demonstrate no regressions, or include a clear explanation for why automated tests are not appropriate for the change (with manual validation steps or rationale).
+- Aim to maintain backward compatibility, keep dependencies minimal, and follow PEP 8 with type hints.
 
 ## License
 

@@ -13,6 +13,12 @@ from django.db import models
 
 from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.factories import ConversionCarrier
+from pydantic2django.django.timescale.bases import XmlTimescaleBase
+from pydantic2django.django.timescale.heuristics import (
+    TimescaleRole,
+    classify_xml_complex_types,
+    should_use_timescale_base,
+)
 
 from . import register_generated_model
 from .discovery import XmlSchemaDiscovery
@@ -63,6 +69,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             verbose=verbose,
             filter_function=filter_function,
         )
+        # Timescale classification results cached per run
+        self._timescale_roles: dict[str, TimescaleRole] = {}
 
     def _get_model_definition_extra_context(self, carrier: ConversionCarrier) -> dict:
         """
@@ -281,6 +289,12 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             pass
         models_to_process = self._get_models_in_processing_order()
 
+        # Classify models for Timescale usage (hypertable vs dimension)
+        try:
+            self._timescale_roles = classify_xml_complex_types(models_to_process)
+        except Exception:
+            self._timescale_roles = {}
+
         # Reset state for this run (mirror BaseStaticGenerator)
         self.carriers = []
         self.import_handler.extra_type_imports.clear()
@@ -417,6 +431,41 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         template_context["validator_imports"] = sorted(used_validators)
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(**template_context)
+
+    # Override to choose Timescale base per model and pass roles map to factory
+    def setup_django_model(self, source_model: XmlSchemaComplexType) -> ConversionCarrier | None:  # type: ignore[override]
+        source_model_name = getattr(source_model, "__name__", getattr(source_model, "name", str(source_model)))
+        try:
+            use_ts_base = should_use_timescale_base(source_model_name, self._timescale_roles)
+        except Exception:
+            use_ts_base = False
+
+        base_class: type[models.Model]
+        if use_ts_base:
+            base_class = XmlTimescaleBase
+        else:
+            base_class = self.base_model_class
+
+        carrier = ConversionCarrier(
+            source_model=source_model,
+            meta_app_label=self.app_label,
+            base_django_model=base_class,
+            class_name_prefix=self.class_name_prefix,
+            strict=False,
+        )
+
+        # Make roles map available to field factory for FK decisions
+        carrier.context_data["_timescale_roles"] = self._timescale_roles
+
+        try:
+            self.model_factory_instance.make_django_model(carrier)
+            if carrier.django_model:
+                self.carriers.append(carrier)
+                return carrier
+            return None
+        except Exception:
+            logger.exception("Error creating Django model for %s", source_model_name)
+            return None
 
     def _write_to_file(self, content: str):
         with open(self.output_path, "w") as f:
