@@ -178,7 +178,8 @@ def classify_xml_complex_types(
                 continue
 
             # Find descendant complex types that have direct time features
-            stack = _child_complex_types(m)
+            first_children = _child_complex_types(m)
+            stack = list(first_children)
             leaf_time_types: set[str] = set()
             seen: set[int] = set()
             while stack:
@@ -198,6 +199,11 @@ def classify_xml_complex_types(
                 # Ensure all leaf time-bearing types are hypertables
                 for tname in leaf_time_types:
                     result[tname] = TimescaleRole.HYPERTABLE
+            else:
+                # No leaf time types found. If it clearly acts as a container (has any child complex types)
+                # and lacks direct time, classify as dimension defensively to avoid container hypertables
+                if first_children and result.get(name) == TimescaleRole.HYPERTABLE:
+                    result[name] = TimescaleRole.DIMENSION
         except Exception:
             # Be defensive: never fail classification due to structure issues
             continue

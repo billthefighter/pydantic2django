@@ -148,6 +148,12 @@ def test_generate_models_from_assets_xsd_and_apply_migrations(tmp_path: Path, mo
     )
     gen.generate_models_file()
 
+    # Assert StreamsType is NOT generated as a Timescale model base
+    gen_text = output_models.read_text()
+    assert "class StreamsType(XmlTimescaleBase)" not in gen_text
+    # Prefer explicit non-timescale base inheritance for StreamsType
+    assert "class StreamsType(Xml2DjangoBaseClass)" in gen_text
+
     # Run migrations and ensure success (no FK/unique error)
     r1 = _run(proj, [sys.executable, 'manage.py', 'makemigrations', app_label])
     assert r1.returncode == 0, r1.stderr
@@ -156,3 +162,80 @@ def test_generate_models_from_assets_xsd_and_apply_migrations(tmp_path: Path, mo
     stdout_stderr = r2.stdout + "\n" + r2.stderr
     assert r2.returncode == 0, stdout_stderr
     assert 'no unique constraint matching given keys' not in stdout_stderr
+
+
+def test_hypertable_create_model_embeds_unique_id_and_fk_add_succeeds(tmp_path: Path, monkeypatch):
+    # DB env
+    for k, v in {
+        'DB_HOST': os.getenv('DB_HOST', 'localhost'),
+        'DB_PORT': os.getenv('DB_PORT', '5432'),
+        'DB_NAME': os.getenv('DB_NAME', 'lodbrok_db'),
+        'DB_USER': os.getenv('DB_USER', 'postgres'),
+        'DB_PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
+    }.items():
+        monkeypatch.setenv(k, v)
+
+    # Unique DB to avoid contamination
+    test_db = f"p2ddb_{uuid4().hex[:8]}"
+    monkeypatch.setenv('DB_NAME', test_db)
+    _ensure_db_and_extension(test_db)
+
+    app_label = "ts_defensive"
+    proj = _write_min_proj(tmp_path, app_label)
+    output_models = proj / app_label / "models.py"
+    # Phase 1: create a hypertable model with constraint embedded in Meta (mirrors template output)
+    model_phase1 = textwrap.dedent(
+        f'''
+        from django.db import models
+        from timescale.db.models.fields import TimescaleDateTimeField
+        from pydantic2django.django.timescale.bases import XmlTimescaleBase
+
+        class StreamsType(XmlTimescaleBase):
+            time = TimescaleDateTimeField(interval='1 day')
+
+            class Meta:
+                app_label = '{app_label}'
+                abstract = False
+                constraints = [
+                    models.UniqueConstraint(fields=['id'], name='{app_label}_streamstype_id_unique')
+                ]
+        '''
+    )
+    output_models.write_text(model_phase1)
+
+    # Phase 1: make initial migrations and assert UniqueConstraint is part of CreateModel
+    r1 = _run(proj, [sys.executable, 'manage.py', 'makemigrations', app_label])
+    assert r1.returncode == 0, r1.stderr
+
+    # Locate migration file
+    mig_dir = proj / app_label / "migrations"
+    mig_files = sorted([p for p in mig_dir.iterdir() if p.name.endswith(".py") and p.name != "__init__.py"])
+    assert mig_files, "No migration files generated"
+    mig1 = mig_files[0]
+    mig_text = mig1.read_text()
+    # Expect UniqueConstraint embedded in CreateModel (check by constraint name)
+    assert f"{app_label}_streamstype_id_unique" in mig_text
+
+    r2 = _run(proj, [sys.executable, 'manage.py', 'migrate', '--skip-checks'])
+    assert r2.returncode == 0, r2.stdout + "\n" + r2.stderr
+
+    # Phase 2: add a new model in the SAME app with FK to the hypertable; ensure migrate succeeds
+    ref_model = textwrap.dedent(
+        f'''
+        from django.db import models
+        from pydantic2django.django.models import Xml2DjangoBaseClass
+
+        class RefType(Xml2DjangoBaseClass):
+            target = models.ForeignKey('{app_label}.StreamsType', on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = '{app_label}'
+                abstract = False
+        '''
+    )
+    output_models.write_text(model_phase1 + "\n\n" + ref_model)
+
+    r3 = _run(proj, [sys.executable, 'manage.py', 'makemigrations', app_label])
+    assert r3.returncode == 0, r3.stderr
+    r4 = _run(proj, [sys.executable, 'manage.py', 'migrate', '--skip-checks'])
+    assert r4.returncode == 0, r4.stdout + "\n" + r4.stderr

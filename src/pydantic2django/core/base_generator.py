@@ -371,6 +371,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             "model_name": django_model_name,
             "pydantic_model_name": source_model_name,
             "base_model_name": base_model_name,
+            "is_timescale_model": bool(str(base_model_name).endswith("TimescaleBase")),
             "meta": meta_options,
             "app_label": self.app_label,
             "multi_fk_field_names": multi_fk_field_names,  # Pass names for validation hint
