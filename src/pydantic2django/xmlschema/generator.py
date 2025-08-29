@@ -84,6 +84,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         return {
             "field_definitions": field_definitions,
             "enum_classes": enum_classes.values(),
+            # Extra Meta emission (e.g., indexes)
+            "meta_indexes": carrier.context_data.get("meta_indexes", []),
         }
 
     # All rendering logic is now handled by the BaseStaticGenerator using the implemented abstract methods.

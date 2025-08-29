@@ -277,11 +277,13 @@ def generate_field_definition_string(
 
         # Special handling for on_delete
         elif key == "on_delete":
-            if callable(value) and hasattr(value, "__name__"):
+            # Allow RawCode override for on_delete
+            if isinstance(value, RawCode):
+                param_parts.append(f"on_delete={value.code}")
+            elif callable(value) and hasattr(value, "__name__"):
                 param_parts.append(f"on_delete=models.{value.__name__}")
             else:
-                # Handle cases where it might already be a string or other repr?
-                # Defaulting to CASCADE if unresolvable for now
+                # Default to CASCADE if unresolvable
                 param_parts.append("on_delete=models.CASCADE")
                 logger.warning(f"Could not serialize on_delete value: {value}. Defaulting to CASCADE.")
         # General kwarg serialization

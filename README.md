@@ -191,7 +191,7 @@ Due to its experimental nature, it relies heavily on clear type hints in `__init
 Run the tests with:
 
 ```bash
-poetry run pytest -q
+uv run pytest -q
 ```
 
 ## Contributing
