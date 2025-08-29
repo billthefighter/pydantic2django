@@ -243,6 +243,18 @@ def should_soft_reference(source_model_name: str, target_model_name: str, roles:
     return is_hypertable(source_model_name, roles) and is_hypertable(target_model_name, roles)
 
 
+def should_invert_fk(source_model_name: str, target_model_name: str, roles: dict[str, TimescaleRole]) -> bool:
+    """Return True if FK should be inverted to point from hypertable -> dimension.
+
+    Policy:
+    - If source is a dimension (not hypertable) and target is a hypertable, invert.
+    - This avoids illegal/fragile FKs to hypertables (PK dropped on hypertable creation),
+      while preserving joinability by referencing the dimension from the hypertable instead.
+    - Hypertable -> hypertable remains disallowed (handled by should_soft_reference).
+    """
+    return (not is_hypertable(source_model_name, roles)) and is_hypertable(target_model_name, roles)
+
+
 def should_use_timescale_base(model_name: str, roles: dict[str, TimescaleRole]) -> bool:
     """Return ``True`` if the model should inherit from a Timescale-enabled base.
 

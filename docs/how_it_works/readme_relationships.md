@@ -209,7 +209,7 @@ See the relationship checks and resolution within the mapper where it calls into
 
 ---
 
-## TimescaleDB constraints and soft references
+## TimescaleDB constraints, soft references, and FK inversion
 
 TimescaleDB does not support ForeignKeys that point to hypertables. To respect this:
 
@@ -217,11 +217,15 @@ TimescaleDB does not support ForeignKeys that point to hypertables. To respect t
 - Relationship rules during generation:
   - **Hypertable → Regular**: generate a normal `ForeignKey`.
   - **Regular → Regular**: generate a normal `ForeignKey`.
-  - **Hypertable → Hypertable**: generate a soft reference field instead of a `ForeignKey` (e.g., `UUIDField(db_index=True)`), and leave referential validation to application code or background jobs.
+  - **Hypertable → Hypertable**: generate a soft reference (e.g., `UUIDField(db_index=True)`) and leave referential validation to application code or background jobs.
+  - **Regular → Hypertable (inverted)**: invert the relationship and emit the `ForeignKey` on the hypertable back to the regular dimension with `on_delete=SET_NULL, null=True, blank=True`.
+    - Also auto-generate indexes on the hypertable to preserve performance:
+      - `Index(fields=['<dimension_field>'])`
+      - `Index(fields=['<dimension_field>', '-time'])` when a `time` field exists on the hypertable.
 
 Heuristics and helpers live under `pydantic2django.django.timescale`:
 
 - `classify_xml_complex_types(...)` produces a `{name: role}` map.
 - `should_soft_reference(source_name, target_name, roles)` returns `True` for hypertable→hypertable edges.
 
-This keeps schemas Timescale-safe while preserving joinability to dimensions and the ability to validate soft references at the application layer.
+This keeps schemas Timescale-safe while preserving joinability to dimensions and the ability to validate soft references at the application layer. The inversion avoids invalid FKs to hypertables after hypertable creation drops the primary key on the base table.

@@ -12,7 +12,7 @@ All generators write a single `generated_models.py` that contains Django model c
 ### Prerequisites
 
 - Configure Django before using any generator (minimal example shown below).
-- Python 3.11+, Pydantic v2, Poetry/pytest per project guidelines.
+- Python 3.11+, Pydantic v2, UV/pytest per project guidelines.
 
 ```python
 import django

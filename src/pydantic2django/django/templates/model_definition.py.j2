@@ -39,6 +39,13 @@ class {{ model_name }}({{ base_model_name }}):
     class Meta:
         app_label = '{{ app_label }}'
         abstract = False
+        {% if meta_indexes %}
+        indexes = [
+        {% for idx in meta_indexes %}
+            {{ idx }}{% if not loop.last %},{% endif %}
+        {% endfor %}
+        ]
+        {% endif %}
 
     {% if context_fields %}
     def to_pydantic(self, context: Optional["{{ context_class_name }}"]) -> {{ pydantic_model_name }}:

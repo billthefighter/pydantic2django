@@ -4,7 +4,7 @@ Thank you for your interest in contributing! This project bridges Python data mo
 
 ## Requirements
 - Python 3.11+
-- Poetry for dependency management
+- UV for dependency management
 - Pytest for testing
 - Follow PEP 8 and use type hints throughout
 
@@ -21,22 +21,22 @@ Additionally, PRs should:
 - Document public APIs with concise docstrings.
 
 ## Getting Started (Development)
-1. Install Poetry if needed: https://python-poetry.org/
+1. Install uv if needed: https://docs.astral.sh/uv/
 2. Install dependencies:
    ```bash
-   poetry install
+   uv sync
    ```
 3. Run tests:
    ```bash
-   poetry run pytest -q
+   uv run pytest -q
    ```
 4. (Optional) Type-check (mypy is configured):
    ```bash
-   poetry run mypy
+   uv run mypy
    ```
 
 ## PR Checklist (Quick Reference)
-- [ ] All tests pass locally: `poetry run pytest -q`
+- [ ] All tests pass locally: `uv run pytest -q`
 - [ ] Tests added/updated for new or changed behavior, or justification provided why tests are not appropriate
 - [ ] Backward compatibility preserved (or breaking change is clearly documented and justified)
 - [ ] Minimal dependencies; no unnecessary additions

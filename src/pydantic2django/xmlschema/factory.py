@@ -14,7 +14,7 @@ from ..core.factories import (
     ConversionCarrier,
     FieldConversionResult,
 )
-from ..django.timescale.heuristics import should_soft_reference
+from ..django.timescale.heuristics import should_invert_fk, should_soft_reference
 from .models import (
     XmlSchemaAttribute,
     XmlSchemaComplexType,
@@ -66,6 +66,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         list_relationship_style: str = "child_fk",
         nesting_depth_threshold: int = 1,
         included_model_names: set[str] | None = None,
+        invert_fk_to_timescale: bool = True,
     ):
         super().__init__()
         self.nested_relationship_strategy = nested_relationship_strategy
@@ -75,6 +76,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         self.used_validators: set[str] = set()
         # Limit FK generation only to models that will actually be generated
         self.included_model_names: set[str] | None = included_model_names
+        # Control whether to invert FKs targeting hypertables (hypertable -> dimension)
+        self.invert_fk_to_timescale = invert_fk_to_timescale
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -320,6 +323,7 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 # FK on parent to child, unless hypertable -> hypertable
                 roles = carrier.context_data.get("_timescale_roles", {})
                 src_name = str(getattr(carrier.source_model, "__name__", model_name))
+                # Hypertable->Hypertable => soft reference
                 if should_soft_reference(src_name, str(target_type_name), roles):
                     # Soft reference field with index; default to UUID representation
                     soft_kwargs = {"null": True, "blank": True}
@@ -328,6 +332,19 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     except Exception:
                         pass
                     return models.UUIDField, soft_kwargs
+                # Dimension->Hypertable => optionally invert FK to hypertable
+                if self.invert_fk_to_timescale and should_invert_fk(src_name, str(target_type_name), roles):
+                    # Record pending inverted FK to inject later on the hypertable model
+                    pending_inv = carrier.context_data.setdefault("_pending_inverted_fk", [])
+                    pending_inv.append(
+                        {
+                            "hypertable": str(target_type_name),
+                            "dimension": src_name,
+                            "field_name": src_name.lower(),
+                        }
+                    )
+                    # Do not create a FK on the dimension side
+                    return None, {}
                 kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
                 kwargs["null"] = True
                 kwargs["blank"] = True
@@ -670,8 +687,7 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
         After all models are built, inject ForeignKey fields into child models
         for repeating nested complex elements (one-to-many parent->child).
         """
-        if not self._pending_child_fk:
-            return
+        # Process pending child FKs first (if any)
         for rel in self._pending_child_fk:
             child_name = rel.get("child")
             parent_name = rel.get("parent")
@@ -711,6 +727,41 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
                 fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
                 field_name = f"{parent_name.lower()}"
                 child_carrier.django_field_definitions[field_name] = fk_def
+
+        # Handle inverted Timescale relationships: add FK on hypertable -> dimension
+        # and emit recommended indexes
+        for carrier in carriers_by_name.values():
+            pending_inverted = carrier.context_data.get("_pending_inverted_fk", [])
+            for inv in pending_inverted:
+                hyper = inv.get("hypertable")
+                dim = inv.get("dimension")
+                field_name = inv.get("field_name", (dim or "").lower())
+                hyper_carrier = carriers_by_name.get(str(hyper))
+                if not hyper_carrier or not hyper_carrier.django_model:
+                    logger.warning(f"Could not inject inverted FK: missing hypertable carrier for {hyper}")
+                    continue
+                # Build FK kwargs: SET_NULL safe policy
+                from ..django.utils.serialization import RawCode
+
+                fk_kwargs = {
+                    "to": f"{app_label}.{dim}",
+                    "on_delete": RawCode("models.SET_NULL"),
+                    "null": True,
+                    "blank": True,
+                }
+                from ..django.utils.serialization import generate_field_definition_string
+
+                fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
+                hyper_carrier.django_field_definitions[field_name] = fk_def
+
+                # Auto-indexes: (dimension_id) and (dimension_id, -time) if time field exists
+                idx_list: list[str] = hyper_carrier.context_data.setdefault("meta_indexes", [])
+                # Single-column index on FK
+                idx_list.append(f"models.Index(fields=['{field_name}'])")
+                # Composite with time if defined on the hypertable
+                has_time = "time" in hyper_carrier.django_field_definitions or "time" in hyper_carrier.django_fields
+                if has_time:
+                    idx_list.append(f"models.Index(fields=['{field_name}', '-time'])")
 
     # --- Override meta class creation to keep dynamic models abstract (avoid registry conflicts) ---
     def _create_django_meta(self, carrier: ConversionCarrier[XmlSchemaComplexType]):
