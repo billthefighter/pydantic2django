@@ -39,19 +39,18 @@ def test_generator_uses_timescale_base_for_hypertables(monkeypatch):
     assert carrier_d.base_django_model is Xml2DjangoBaseClass
 
 
-def test_timescale_base_adds_unique_constraint_on_id():
+def test_timescale_base_does_not_add_redundant_unique_constraint_on_pk():
     class StreamsType(XmlTimescaleBase):
         class Meta:  # type: ignore[misc]
             app_label = "test_app"
 
         time = models.DateTimeField()
 
-    # Ensure a UniqueConstraint on id is present so FKs can target it post-hypertable
+    # Ensure NO redundant UniqueConstraint on id is added by the base
     print("Constraints on StreamsType:", StreamsType._meta.constraints)
     unique_constraints = [c for c in StreamsType._meta.constraints if isinstance(c, models.UniqueConstraint)]
-    assert any(list(getattr(c, "fields", [])) == ["id"] for c in unique_constraints), (
-        "XmlTimescaleBase subclasses must carry a UniqueConstraint on id to survive"
-        " Timescale hypertable PK drop."
+    assert not any(list(getattr(c, "fields", [])) == ["id"] for c in unique_constraints), (
+        "Timescale base should not emit UniqueConstraint on primary key 'id'."
     )
 
 

@@ -39,11 +39,6 @@ class {{ model_name }}({{ base_model_name }}):
     class Meta:
         app_label = '{{ app_label }}'
         abstract = False
-        {% if is_timescale_model %}
-        constraints = [
-            models.UniqueConstraint(fields=['id'], name='{{ app_label }}_{{ model_name | lower }}_id_unique')
-        ]
-        {% endif %}
         {% if meta_indexes %}
         indexes = [
         {% for idx in meta_indexes %}
