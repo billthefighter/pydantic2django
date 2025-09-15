@@ -30,6 +30,56 @@ This document describes the ingestion mechanism used to create Django model inst
   - Single nested complex types → stored as FK on parent
   - Repeated nested complex types (`maxOccurs="unbounded"`) → child instances created with FK to parent (`child_fk` strategy)
 
+### Singleton-style reuse and warmup
+
+Long-lived processes can avoid repeated schema discovery/model registration using process-wide helpers in `pydantic2django.xmlschema.ingestor`:
+
+- `warmup_xmlschema_models(schema_files, app_label=...)`
+  - Pre-generates and registers XML-derived Django model classes in an in-memory registry
+  - No-op on subsequent calls for the same `(app_label, schema file set + mtimes)`
+
+- `get_shared_ingestor(schema_files=..., app_label=...)`
+  - Returns a shared `XmlInstanceIngestor` keyed by `(app_label, normalized schema paths, schema mtimes)`
+  - Reuses the same instance across calls; entries are cached with an LRU + TTL policy
+  - Default cache policy: LRU maxsize=4, TTL=600s; configurable via `set_ingestor_cache()`
+  - Public controls:
+    - `set_ingestor_cache(maxsize: int | None = None, ttl_seconds: float | None = None)`
+    - `clear_ingestor_cache()` to clear (useful in tests)
+    - `ingestor_cache_stats()` for diagnostics
+
+Example (task runner):
+
+```python
+from pydantic2django.xmlschema.ingestor import warmup_xmlschema_models, get_shared_ingestor
+
+SCHEMAS = [
+    "/abs/path/MTConnectStreams_1.7.xsd",
+    "/abs/path/MTConnectDevices_1.7.xsd",
+    "/abs/path/MTConnectAssets_1.7.xsd",
+    "/abs/path/MTConnectError_1.7.xsd",
+]
+APP_LABEL = "tests"
+
+# At process start
+warmup_xmlschema_models(SCHEMAS, app_label=APP_LABEL)
+
+# In each task
+ingestor = get_shared_ingestor(schema_files=SCHEMAS, app_label=APP_LABEL)
+root = ingestor.ingest_from_file("/abs/path/example.xml", save=False)
+```
+
+Notes:
+- `save=True` requires concrete, migrated models in an installed app
+- Warmup/registry enables object instantiation without DB tables for dry-runs and analysis paths
+- You can tune cache behavior globally at process start:
+
+```python
+from pydantic2django.xmlschema.ingestor import set_ingestor_cache
+
+# Keep up to 8 different ingestors for 10 minutes each
+set_ingestor_cache(maxsize=8, ttl_seconds=600)
+```
+
 Future extensions:
 - Namespace-scoped matching beyond simple local-name stripping
 - Post-pass to resolve `xs:key` / `xs:keyref` (e.g., ID/IDREF) lookups

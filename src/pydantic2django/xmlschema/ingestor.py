@@ -20,8 +20,12 @@ Future extensions (not implemented here):
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from django.apps import apps as django_apps
 
@@ -30,6 +34,157 @@ from .discovery import XmlSchemaDiscovery
 from .models import XmlSchemaComplexType, XmlSchemaDefinition, XmlSchemaElement
 
 logger = logging.getLogger(__name__)
+
+
+# --- Process-wide cache for singleton-style reuse (LRU + TTL) ---
+CacheKey = tuple[str, tuple[str, ...], tuple[float, ...]]
+
+
+class _LruTtlCache:
+    """Simple LRU cache with TTL semantics for shared XmlInstanceIngestor instances."""
+
+    def __init__(self, maxsize: int = 4, ttl_seconds: float = 600.0, now: Callable[[], float] | None = None) -> None:
+        self._data: OrderedDict[CacheKey, tuple[float, XmlInstanceIngestor]] = OrderedDict()
+        self._maxsize = int(maxsize)
+        self._ttl = float(ttl_seconds)
+        self._lock = threading.Lock()
+        self._now = now or time.time
+
+    def set_params(self, *, maxsize: int | None = None, ttl_seconds: float | None = None) -> None:
+        with self._lock:
+            if maxsize is not None:
+                self._maxsize = int(maxsize)
+            if ttl_seconds is not None:
+                self._ttl = float(ttl_seconds)
+            self._prune_locked()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def get(self, key: CacheKey) -> XmlInstanceIngestor | None:
+        with self._lock:
+            if key not in self._data:
+                return None
+            created_at, value = self._data.get(key, (0.0, None))  # type: ignore[assignment]
+            assert value is not None
+            if (self._now() - created_at) > self._ttl:
+                self._data.pop(key, None)
+                return None
+            self._data.move_to_end(key)
+            return value
+
+    def put(self, key: CacheKey, value: XmlInstanceIngestor) -> None:
+        with self._lock:
+            self._data[key] = (self._now(), value)
+            self._data.move_to_end(key)
+            self._prune_locked()
+
+    def _prune_locked(self) -> None:
+        # Expired
+        now = self._now()
+        expired = [k for k, (t, _v) in self._data.items() if (now - t) > self._ttl]
+        for k in expired:
+            self._data.pop(k, None)
+        # LRU overflow
+        while len(self._data) > self._maxsize:
+            self._data.popitem(last=False)
+
+    def stats(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "size": len(self._data),
+                "maxsize": self._maxsize,
+                "ttl_seconds": self._ttl,
+                "keys": list(self._data.keys()),
+            }
+
+
+_INGESTOR_CACHE = _LruTtlCache()
+_WARMED_KEYS: set[CacheKey] = set()
+
+
+def _normalize_schema_files(schema_files: list[str | Path]) -> list[str]:
+    return [str(Path(p).resolve()) for p in schema_files]
+
+
+def _schema_key(app_label: str, schema_files: list[str | Path]) -> CacheKey:
+    files = _normalize_schema_files(schema_files)
+    mtimes = []
+    for f in files:
+        try:
+            mtimes.append(Path(f).stat().st_mtime)
+        except Exception:
+            mtimes.append(0.0)
+    return (app_label, tuple(files), tuple(mtimes))
+
+
+def warmup_xmlschema_models(schema_files: list[str | Path], *, app_label: str) -> None:
+    """
+    Pre-generate and register XML-derived Django models once per (app_label, schema set).
+
+    This runs the generator to populate the in-memory registry used by the ingestor,
+    avoiding repeated generation when used in long-lived processes (e.g., workers).
+    """
+    try:
+        from .generator import XmlSchemaDjangoModelGenerator
+    except Exception:
+        # Generator not available or optional deps missing; skip warmup.
+        return
+
+    key = _schema_key(app_label, schema_files)
+    if key in _WARMED_KEYS:
+        return
+
+    try:
+        gen = XmlSchemaDjangoModelGenerator(
+            schema_files=[Path(p) for p in _normalize_schema_files(schema_files)],
+            app_label=app_label,
+            output_path="__discard__.py",
+            verbose=False,
+        )
+        _ = gen.generate_models_file()
+        _WARMED_KEYS.add(key)
+        logger.info("Warmed XML models for app '%s' with %d schema files", app_label, len(schema_files))
+    except Exception as exc:
+        logger.debug("Warmup failed for app '%s': %s", app_label, exc)
+
+
+def get_shared_ingestor(*, schema_files: list[str | Path], app_label: str) -> XmlInstanceIngestor:
+    """
+    Get or create a shared XmlInstanceIngestor for a given (app_label, schema set).
+
+    Reuses the same ingestor instance across calls if the schema files (paths and mtimes)
+    are unchanged, eliminating repeated discovery and setup work.
+    """
+    key = _schema_key(app_label, schema_files)
+    cached = _INGESTOR_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # Optional pre-warm to ensure classes are registered
+    warmup_xmlschema_models(schema_files, app_label=app_label)
+
+    inst = XmlInstanceIngestor(
+        schema_files=[Path(p) for p in _normalize_schema_files(schema_files)], app_label=app_label
+    )
+    _INGESTOR_CACHE.put(key, inst)
+    return inst
+
+
+def set_ingestor_cache(maxsize: int | None = None, ttl_seconds: float | None = None) -> None:
+    """Configure global shared-ingestor cache (LRU size and TTL)."""
+    _INGESTOR_CACHE.set_params(maxsize=maxsize, ttl_seconds=ttl_seconds)
+
+
+def clear_ingestor_cache() -> None:
+    """Clear all cached ingestors (helpful for tests)."""
+    _INGESTOR_CACHE.clear()
+
+
+def ingestor_cache_stats() -> dict[str, Any]:
+    """Return internal cache stats for diagnostics."""
+    return _INGESTOR_CACHE.stats()
 
 
 class XmlInstanceIngestor:
@@ -106,7 +261,7 @@ class XmlInstanceIngestor:
         elem: Any,
         complex_type: XmlSchemaComplexType,
         model_cls: type,
-        parent_instance: Optional[Any],
+        parent_instance: Any | None,
     ) -> Any:
         """
         Create and save a Django model instance from an XML element according to its complex type.
@@ -149,6 +304,7 @@ class XmlInstanceIngestor:
             field_values[dj_name] = first.text
 
         # Instantiate without relationships first
+        instance: Any
         if self._save_objects:
             instance = model_cls.objects.create(**field_values)
         else:
@@ -203,7 +359,7 @@ class XmlInstanceIngestor:
                 # Default generation style 'child_fk': inject FK on child named after parent class in lowercase
                 parent_fk_field = instance.__class__.__name__.lower()
                 for child_elem in elements:
-                    child_instance = self._build_instance_from_element(
+                    child_instance: Any = self._build_instance_from_element(
                         child_elem, target_complex_type, target_model_cls, parent_instance=instance
                     )
                     # Set parent FK on child; save update if field exists
@@ -242,7 +398,7 @@ class XmlInstanceIngestor:
         return instance
 
     # --- Helpers ---
-    def _resolve_root_complex_type(self, root_local_name: str) -> Optional[XmlSchemaComplexType]:
+    def _resolve_root_complex_type(self, root_local_name: str) -> XmlSchemaComplexType | None:
         # Try global elements with explicit type
         for schema in self._schemas:
             element = schema.elements.get(root_local_name)
@@ -258,14 +414,14 @@ class XmlInstanceIngestor:
                 return ct
         return None
 
-    def _find_complex_type(self, type_name: str) -> Optional[XmlSchemaComplexType]:
+    def _find_complex_type(self, type_name: str) -> XmlSchemaComplexType | None:
         for schema in self._schemas:
             ct = schema.find_complex_type(type_name, namespace=schema.target_namespace)
             if ct:
                 return ct
         return None
 
-    def _get_model_for_complex_type(self, complex_type: XmlSchemaComplexType) -> Optional[type]:
+    def _get_model_for_complex_type(self, complex_type: XmlSchemaComplexType) -> type | None:
         model_name = complex_type.name
         try:
             return django_apps.get_model(f"{self.app_label}.{model_name}")

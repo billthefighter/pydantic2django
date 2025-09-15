@@ -1,6 +1,6 @@
 [project]
 name = "django-typed2django"
-version = "1.0.13"
+version = "1.0.14"
 description = "Convert Various non-Django models to Django models dynamically"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,6 +45,7 @@ dev = [
     "sqlalchemy>=2.0.40",
     "torch>=2.2.0",
     "pillow>=10.0.0",
+    "pyinstrument>=5.1.1",
 ]
 docs = [
     "mkdocs>=1.6.0",
