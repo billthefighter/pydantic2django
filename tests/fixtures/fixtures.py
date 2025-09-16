@@ -10,6 +10,7 @@ from enum import Enum
 
 import pytest
 from django.db import models
+from pydantic2django.django.models import Xml2DjangoBaseClass
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 import uuid
 from django.core.exceptions import ValidationError
@@ -558,3 +559,28 @@ def user_django_model():
     # The fixture still makes sense to return the main 'User' model,
     # but Address, Profile, Tag are now also available at module level if needed directly.
     return User
+
+
+# --- XML Schema test models (discovered via AppConfig.ready) ---
+
+
+class ParentType(Xml2DjangoBaseClass):
+    owner = models.CharField(max_length=255)
+    # FK to child will be on parent for single nested complex element
+    child = models.ForeignKey("tests.ChildType", on_delete=models.SET_NULL, null=True, blank=True)
+
+
+class ChildType(Xml2DjangoBaseClass):
+    value = models.CharField(max_length=255)
+    code = models.CharField(max_length=255, null=True, blank=True)
+
+
+class ItemType(Xml2DjangoBaseClass):
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    # For repeated nested complex elements, generator defaults to child_fk strategy (non-nullable here)
+    parenttype = models.ForeignKey(
+        "tests.ParentType",
+        on_delete=models.CASCADE,
+        related_name="items",
+        null=False,
+    )

@@ -1,0 +1,61 @@
+---
+description: Bug report handling workflow (tests-first) for Pydantic2Django
+---
+
+# Bug Report Handling Workflow
+
+Use this rule whenever a bug is reported. Follow a tests-first workflow to ensure the issue is reproduced, fixed, and guarded against regressions.
+
+## Steps
+
+1) Write a failing test that reproduces the report
+- Create or locate the appropriate module path under `tests/` (mirror the affected package if possible).
+- Name the test clearly, e.g., `test_<issue-id-or-short-slug>_reproduces_report`.
+- Use the reporter's exact input and environment details; minimize fixtures to the essentials.
+- Commit the failing test first when feasible to preserve history.
+
+2) Identify the root cause
+- Read error messages and stack traces from the failing test to pinpoint the failure site.
+- Prefer focused, minimal reproductions to isolate the code path.
+- Keep changes small and scoped to the actual problem.
+
+3) Fix the issue
+- Implement the smallest viable change that resolves the root cause.
+- Maintain backward compatibility and adhere to project style (PEP 8, type hints, docstrings for public APIs).
+- Avoid duplication; prefer reusing existing utilities.
+
+4) Verify the fix against the new test
+- Run just the new test during iteration:
+  - `poetry run pytest -k "<new_test_name_or_slug>"`
+- Ensure the previously failing test now passes.
+
+5) Iterate until fully resolved
+- If new failures surface, update the test(s) or fix as needed and repeat steps 2–4.
+
+6) Guard against regressions
+- Run the full test suite locally:
+  - `poetry run pytest`
+- Add additional unit tests if the fix reveals untested edges.
+
+7) Write a changenote for the fix
+- Add a new Markdown file under `changenotes/` describing:
+  - Summary of the bug and its impact
+  - Root cause analysis
+  - Reproduction steps (brief)
+  - The implemented fix
+  - Tests added/updated
+  - Risk assessment and backward compatibility notes
+  - References (issue links, PRs)
+- See examples:
+  - [PYDANTIC_VALIDATION_FIX_SUMMARY.md](mdc:changenotes/PYDANTIC_VALIDATION_FIX_SUMMARY.md)
+  - [README_type_fix.md](mdc:changenotes/README_type_fix.md)
+
+8) Finalize
+- Ensure code quality checks pass (linters/type-checkers if configured) and that dependencies remain minimal and explicit.
+- Merge when reviews pass and CI is green.
+
+## Notes
+- Python 3.11+ is required; use Poetry and Pytest.
+- Keep fixes modular and well-documented; prefer DRY and single-responsibility changes.
+- If documentation behavior changes, update relevant docs under `docs/` in the same PR.
+- If a bug is reported in one module, verify sibling modules do not share the erroneous behavior (@core/ @dataclass/ @django/ @pydantic/ @typedclass/ @xmlschema/).

@@ -2,26 +2,8 @@ import pytest
 
 from django.apps import apps
 from django.db import models, connection
-
-from pydantic2django.django.models import Xml2DjangoBaseClass
 from pydantic2django.xmlschema import XmlInstanceIngestor
-
-
-class ParentType(Xml2DjangoBaseClass):
-    owner = models.CharField(max_length=255)
-    # FK to child will be on parent for single nested complex element
-    child = models.ForeignKey("tests.ChildType", on_delete=models.SET_NULL, null=True, blank=True)
-
-
-class ChildType(Xml2DjangoBaseClass):
-    value = models.CharField(max_length=255)
-    code = models.CharField(max_length=255, null=True, blank=True)
-
-
-class ItemType(Xml2DjangoBaseClass):
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    # For repeated nested complex elements, generator defaults to child_fk strategy
-    parenttype = models.ForeignKey("tests.ParentType", on_delete=models.CASCADE, related_name="items", null=True)
+from tests.fixtures.fixtures import ParentType, ChildType, ItemType
 
 
 def test_ingest_nested_xml(tmp_path):

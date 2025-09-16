@@ -262,6 +262,7 @@ class XmlInstanceIngestor:
         complex_type: XmlSchemaComplexType,
         model_cls: type,
         parent_instance: Any | None,
+        parent_link_field: str | None = None,
     ) -> Any:
         """
         Create and save a Django model instance from an XML element according to its complex type.
@@ -303,7 +304,17 @@ class XmlInstanceIngestor:
             dj_name = self._xml_name_to_django_field(name)
             field_values[dj_name] = first.text
 
-        # Instantiate without relationships first
+        # If this element is a repeated child (child_fk strategy), and we know the FK field name
+        # on the child model, include it in initial field values to satisfy NOT NULL constraints.
+        if parent_instance is not None and parent_link_field:
+            try:
+                model_field_names = {f.name for f in model_cls._meta.fields}
+                if parent_link_field in model_field_names:
+                    field_values.setdefault(parent_link_field, parent_instance)
+            except Exception:
+                pass
+
+        # Instantiate without other relationships first
         instance: Any
         if self._save_objects:
             instance = model_cls.objects.create(**field_values)
@@ -360,7 +371,11 @@ class XmlInstanceIngestor:
                 parent_fk_field = instance.__class__.__name__.lower()
                 for child_elem in elements:
                     child_instance: Any = self._build_instance_from_element(
-                        child_elem, target_complex_type, target_model_cls, parent_instance=instance
+                        child_elem,
+                        target_complex_type,
+                        target_model_cls,
+                        parent_instance=instance,
+                        parent_link_field=parent_fk_field,
                     )
                     # Set parent FK on child; save update if field exists
                     if hasattr(child_instance, parent_fk_field):
