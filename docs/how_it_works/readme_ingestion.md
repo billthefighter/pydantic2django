@@ -103,3 +103,44 @@ Both benefit from `ModelContext` when non-serializable values need to be provide
 - Complex adapters (XML) provide an external ingestor class with a narrow API.
 - Relationship handling during ingestion mirrors the generation factory’s strategy.
 - Name conversion rules are mirrored in both directions (e.g., XML name ↔ Django field name).
+
+### Identifier normalization and enum choices
+
+When generating Django models from XML Schema, identifiers are normalized to valid Python/Django field names, and enumerations are emitted as `TextChoices`.
+
+- **Field name normalization**:
+  - **Namespace separators and punctuation** (`:`, `.`, `-`, spaces) become `_`.
+  - **CamelCase → snake_case** (e.g., `camelCase` → `camel_case`).
+  - **Invalid characters** are replaced with `_`; multiple `_` are collapsed.
+  - **Leading character** is ensured to be a letter or `_` (prefix `_` if needed).
+  - **Lowercased** output (e.g., `xlink:type` → `xlink_type`).
+
+- **Special cases**:
+  - Element named `id` that is not an XML `xs:ID` is renamed to `xml_id` to avoid Django primary key conflicts.
+  - Names like `type` remain `type` (no suffixing), but their related enums use a proper class symbol (see below).
+
+- **Enum emission**:
+  - For `xs:simpleType` with `xs:restriction`/`xs:enumeration`, a `models.TextChoices` class is generated.
+  - The enum class name is derived from the (cleaned) field name in PascalCase (e.g., `type` → `Type`).
+  - Fields reference choices via the enum symbol: `choices=Type.choices` and default via `Type.MEMBER`.
+
+Example:
+
+```python
+class CoordinateSystemType(Xml2DjangoBaseClass):
+    # Generated alongside the model
+    class Type(models.TextChoices):
+        CARTESIAN = "cartesian", "Cartesian"
+        POLAR = "polar", "Polar"
+
+    # Field named 'type' correctly references the enum class
+    type = models.CharField(choices=Type.choices, max_length=9)
+
+class FileLocationType(Xml2DjangoBaseClass):
+    # Namespaced attribute xlink:type → xlink_type
+    xlink_type = models.CharField(max_length=255, null=True, blank=True)
+```
+
+Notes:
+- The normalization is applied uniformly to elements and attributes before code generation.
+- If you encounter a source name that still produces an invalid identifier, please report it with the original XML/XSD name so we can extend the rules.

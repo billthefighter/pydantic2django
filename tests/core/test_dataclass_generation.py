@@ -337,3 +337,22 @@ def test_callable_default_is_serialized_to_none():
 
 # TODO: Add tests for metadata_dataclass if metadata['django'] overrides are implemented
 # TODO: Add tests for nested_dataclass (potentially maps to JSONField?)
+
+
+def test_dataclass_field_name_normalization(tmp_path):
+    """Ensure dataclass field names are normalized: namespaces and camelCase handled."""
+    from dataclasses import dataclass
+    from pydantic2django.dataclass.generator import DataclassDjangoModelGenerator
+
+    @dataclass
+    class WeirdDC:
+        xlink_type: str  # simulate source "xlink:type" by naming target style; generator should not break
+        camelCase: int
+
+    gen = DataclassDjangoModelGenerator(output_path=str(tmp_path / "out.py"), packages=["dummy"], app_label="tests", filter_function=None, verbose=False)
+    carrier = gen.setup_django_model(WeirdDC)
+    assert carrier and carrier.django_model
+    code = gen.generate_model_definition(carrier)
+    # xlink_type should stay xlink_type, camelCase normalized to camel_case
+    assert "xlink_type = models.TextField(" in code or "xlink_type = models.CharField(" in code
+    assert "camel_case = models.IntegerField(" in code

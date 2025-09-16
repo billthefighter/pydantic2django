@@ -545,8 +545,13 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         Get or create a TextChoices enum class for a simpleType with enumeration.
         Returns the class name and a boolean indicating if it was newly created.
         """
-        # Generate a more readable name, e.g., 'BookGenre' from 'BookType' and 'genre'
-        enum_name_base = field_info.name.replace("_", " ").title().replace(" ", "")
+        # Derive enum class name from the field name via core naming utilities
+        try:
+            from ..core.utils.naming import enum_class_name_from_field
+
+            enum_name_base = enum_class_name_from_field(field_info.name)
+        except Exception:
+            enum_name_base = str(field_info.name).replace("_", " ").title().replace(" ", "")
 
         # Add a suffix to avoid clashes with model names
         enum_class_name = f"{enum_name_base}"
@@ -604,15 +609,14 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
     def _handle_field_result(self, result: FieldConversionResult, carrier: ConversionCarrier[XmlSchemaComplexType]):
         """Handle the result of field conversion and add to appropriate carrier containers."""
         if result.django_field:
-            # Normalize XML names to Django-style snake_case
-            out_field_name = result.field_name
+            # Normalize XML names to valid Django-style field names
             try:
-                import re
+                from ..core.utils.naming import sanitize_field_identifier
 
-                s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", out_field_name)
-                out_field_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+                out_field_name = sanitize_field_identifier(result.field_name)
             except Exception:
-                pass
+                # Fallback: basic lowering
+                out_field_name = str(result.field_name).lower()
             # Avoid generating a plain 'id' field unless it's a primary key; rename to prevent Django E004
             try:
                 if out_field_name.lower() == "id" and not getattr(result.django_field, "primary_key", False):

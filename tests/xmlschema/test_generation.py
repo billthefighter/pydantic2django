@@ -295,3 +295,83 @@ def test_element_id_non_pk_is_renamed(tmp_path):
     # Should not have a plain 'id =' field; expect 'xml_id'
     assert "\n    id = " not in code
     assert_field_definition_xml(code, "xml_id", "CharField", {}, model_name="ThingType2")
+
+
+def test_enum_field_named_type_uses_enum_class(tmp_path):
+    """Enum choices for element named 'type' should reference 'Type.choices'."""
+    xsd_content = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://ex.com3" xmlns:tns="http://ex.com3" elementFormDefault="qualified">
+        <xs:complexType name="CoordinateSystemType">
+            <xs:sequence>
+                <xs:element name="type">
+                    <xs:simpleType>
+                        <xs:restriction base="xs:string">
+                            <xs:enumeration value="cartesian"/>
+                            <xs:enumeration value="polar"/>
+                        </xs:restriction>
+                    </xs:simpleType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:schema>
+    """.strip()
+    xsd_file = tmp_path / "enum_type_schema.xsd"
+    xsd_file.write_text(xsd_content)
+
+    output_file = tmp_path / "models.py"
+    app_label = "enum_type_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(xsd_file)],
+        output_path=str(output_file),
+        app_label=app_label,
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+    assert "class CoordinateSystemType(Xml2DjangoBaseClass):" in code
+    # Confirm the enum class exists and that field references Type.choices
+    assert "class Type(models.TextChoices):" in code
+    assert_field_definition_xml(
+        code,
+        "type",
+        "CharField",
+        {"choices": "Type.choices"},
+        model_name="CoordinateSystemType",
+    )
+
+
+def test_namespaced_attribute_is_normalized(tmp_path):
+    """Attributes like xlink:type should be normalized to xlink_type in Django fields."""
+    xsd_content = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xlink="http://www.w3.org/1999/xlink" targetNamespace="http://ex.com4" xmlns:tns="http://ex.com4" elementFormDefault="qualified">
+        <xs:complexType name="FileLocationType">
+            <xs:attribute name="xlink:type" type="xs:string" use="optional"/>
+        </xs:complexType>
+    </xs:schema>
+    """.strip()
+    xsd_file = tmp_path / "namespaced_attr_schema.xsd"
+    xsd_file.write_text(xsd_content)
+
+    output_file = tmp_path / "models.py"
+    app_label = "ns_attr_app"
+
+    generator = XmlSchemaDjangoModelGenerator(
+        schema_files=[str(xsd_file)],
+        output_path=str(output_file),
+        app_label=app_label,
+    )
+    generator.generate()
+
+    code = output_file.read_text()
+    assert "class FileLocationType(Xml2DjangoBaseClass):" in code
+    # Expect a valid identifier field 'xlink_type' rather than 'xlink: type'
+    assert_field_definition_xml(
+        code,
+        "xlink_type",
+        "CharField",
+        {"max_length": "255", "null": "True", "blank": "True"},
+        model_name="FileLocationType",
+    )

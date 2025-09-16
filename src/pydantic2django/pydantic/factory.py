@@ -373,6 +373,14 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):
         for field_name_original, field_info in get_model_fields(source_model).items():
             field_name = field_info.alias or field_name_original
 
+            # Normalize the output Django field identifier consistently with XML/dataclass
+            try:
+                from ..core.utils.naming import sanitize_field_identifier
+
+                normalized_field_name = sanitize_field_identifier(field_name)
+            except Exception:
+                normalized_field_name = field_name
+
             # Skip 'id' field if updating an existing model definition
             # Note: _handle_id_field in field factory handles primary key logic
             if field_name.lower() == "id" and carrier.existing_model:
@@ -389,27 +397,29 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):
             if conversion_result.django_field:
                 # Store definition string first
                 if conversion_result.field_definition_str:
-                    carrier.django_field_definitions[field_name] = conversion_result.field_definition_str
+                    carrier.django_field_definitions[normalized_field_name] = conversion_result.field_definition_str
                 else:
-                    logger.warning(f"Missing field definition string for successfully created field '{field_name}'")
+                    logger.warning(
+                        f"Missing field definition string for successfully created field '{normalized_field_name}'"
+                    )
 
                 # Store the field instance itself
                 if isinstance(
                     conversion_result.django_field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)
                 ):
-                    carrier.relationship_fields[field_name] = conversion_result.django_field
+                    carrier.relationship_fields[normalized_field_name] = conversion_result.django_field
                 else:
-                    carrier.django_fields[field_name] = conversion_result.django_field
+                    carrier.django_fields[normalized_field_name] = conversion_result.django_field
 
             elif conversion_result.context_field:
-                carrier.context_fields[field_name] = conversion_result.context_field
+                carrier.context_fields[normalized_field_name] = conversion_result.context_field
             elif conversion_result.error_str:
-                carrier.invalid_fields.append((field_name, conversion_result.error_str))
+                carrier.invalid_fields.append((normalized_field_name, conversion_result.error_str))
             else:
                 # Should not happen if FieldConversionResult is used correctly
                 error = f"Field factory returned unexpected empty result for {model_name}.{field_name_original}"
                 logger.error(error)
-                carrier.invalid_fields.append((field_name, error))
+                carrier.invalid_fields.append((normalized_field_name, error))
 
     def _build_pydantic_model_context(self, carrier: ConversionCarrier[type[BaseModel]]):
         """Builds the ModelContext specifically for Pydantic source models."""

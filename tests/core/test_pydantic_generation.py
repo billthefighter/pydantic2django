@@ -283,3 +283,20 @@ def test_generate_relationship_models(relationship_models):
 
     assert "class Meta:" in generated_code
     assert "app_label = 'tests'" in generated_code
+
+
+def test_pydantic_field_name_normalization(tmp_path):
+    """Ensure Pydantic field alias with namespace/punct is normalized to snake_case identifier."""
+    from pydantic import BaseModel, Field
+    from pydantic2django.pydantic.generator import StaticPydanticModelGenerator
+
+    class WeirdNames(BaseModel):
+        xlink_type: str = Field(alias="xlink:type")
+        camelCase: int
+
+    gen = StaticPydanticModelGenerator(output_path=str(tmp_path / "out.py"), packages=["dummy"], app_label="tests")
+    carrier = gen.setup_django_model(WeirdNames)
+    assert carrier and carrier.django_model
+    code = gen.generate_model_definition(carrier)
+    assert "xlink_type = models.TextField(" in code or "xlink_type = models.CharField(" in code
+    assert "camel_case = models.IntegerField(" in code

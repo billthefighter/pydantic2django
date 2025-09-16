@@ -3,6 +3,11 @@ from typing import Optional
 
 from django.db import models
 
+from ...core.utils.naming import enum_class_name_from_field as _core_enum_class_name_from_field
+
+# Bridge to core naming utilities for shared behavior
+from ...core.utils.naming import sanitize_field_identifier as _core_sanitize_field_identifier
+
 
 def sanitize_related_name(name: str, model_name: str = "", field_name: str = "") -> str:
     """
@@ -96,3 +101,22 @@ def get_related_model_name(field: models.Field) -> Optional[str]:
 
     # logger.warning(f"Failed to determine related model name for field {getattr(field, 'name', '?')}")
     return None
+
+
+def sanitize_model_field_name(name: str) -> str:
+    """
+    Convert an arbitrary XML name to a valid, snake_cased Django/Python field name.
+
+    - Replace namespace separators and punctuation (":", ".", "-", spaces) with "_"
+    - Convert CamelCase to snake_case
+    - Remove invalid characters (keep [a-zA-Z0-9_])
+    - Ensure name starts with a letter or underscore; if not, prefix with "_"
+    - Lowercase the result
+    - Avoid Python keywords/builtins by suffixing with "_value" if necessary
+    """
+    return _core_sanitize_field_identifier(name)
+
+
+def enum_class_name_from_field(name: str) -> str:
+    """Proxy to core helper for deriving enum class names from field names."""
+    return _core_enum_class_name_from_field(name)

@@ -395,6 +395,14 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
         for field_info in dataclass_fields:
             field_name = field_info.name
 
+            # Normalize output Django field identifier
+            try:
+                from ..core.utils.naming import sanitize_field_identifier
+
+                normalized_field_name = sanitize_field_identifier(field_name)
+            except Exception:
+                normalized_field_name = field_name
+
             # Get the *resolved* type for this field
             resolved_type = resolved_types.get(field_name)
             if resolved_type is None:
@@ -444,25 +452,27 @@ class DataclassModelFactory(BaseModelFactory[DataclassType, dataclasses.Field]):
 
             # Process the result (errors, definitions)
             if field_result.error_str:
-                carrier.invalid_fields.append((field_name, field_result.error_str))
+                carrier.invalid_fields.append((normalized_field_name, field_result.error_str))
             else:
                 # Store the definition string if available
                 if field_result.field_definition_str:
-                    carrier.django_field_definitions[field_name] = field_result.field_definition_str
+                    carrier.django_field_definitions[normalized_field_name] = field_result.field_definition_str
                 else:
-                    logger.warning(f"Field '{field_name}' processing yielded no error and no definition string.")
+                    logger.warning(
+                        f"Field '{normalized_field_name}' processing yielded no error and no definition string."
+                    )
 
                 # Store the actual field instance in the correct carrier dict
                 if field_result.django_field:
                     if isinstance(
                         field_result.django_field, (models.ForeignKey, models.OneToOneField, models.ManyToManyField)
                     ):
-                        carrier.relationship_fields[field_name] = field_result.django_field
+                        carrier.relationship_fields[normalized_field_name] = field_result.django_field
                     else:
-                        carrier.django_fields[field_name] = field_result.django_field
+                        carrier.django_fields[normalized_field_name] = field_result.django_field
                 elif field_result.context_field:
                     # Handle context fields if needed (currently seems unused based on logs)
-                    carrier.context_fields[field_name] = field_result.context_field
+                    carrier.context_fields[normalized_field_name] = field_result.context_field
 
                 # Merge imports from result into the factory's import handler
                 if field_result.required_imports:
