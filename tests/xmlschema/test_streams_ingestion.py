@@ -37,7 +37,9 @@ def test_generate_and_ingest_mtconnect_streams(tmp_path: Path):
     gen.generate()
 
     # Ingest the XML instance without saving to the DB
-    ingestor = XmlInstanceIngestor(schema_files=[str(xsd_path)], app_label=app_label)
+    ingestor = XmlInstanceIngestor(
+        schema_files=[str(xsd_path)], app_label=app_label, dynamic_model_fallback=True
+    )
     root = ingestor.ingest_from_file(str(xml_path), save=False)
 
     # Validate root-level structure

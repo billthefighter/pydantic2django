@@ -150,14 +150,31 @@ def warmup_xmlschema_models(schema_files: list[str | Path], *, app_label: str) -
         logger.debug("Warmup failed for app '%s': %s", app_label, exc)
 
 
-def get_shared_ingestor(*, schema_files: list[str | Path], app_label: str) -> XmlInstanceIngestor:
+def get_shared_ingestor(
+    *, schema_files: list[str | Path], app_label: str, dynamic_model_fallback: bool = False
+) -> XmlInstanceIngestor:
     """
     Get or create a shared XmlInstanceIngestor for a given (app_label, schema set).
 
     Reuses the same ingestor instance across calls if the schema files (paths and mtimes)
     are unchanged, eliminating repeated discovery and setup work.
+
+    Args:
+        schema_files: Absolute or relative paths to XSD files. Paths are normalized.
+        app_label: Django app label that contains the installed models for the discovered types.
+        dynamic_model_fallback: If True, when an installed model is not found in the app
+            registry, the ingestor will fall back to dynamically generated stand-in classes registered
+            in the in-memory registry. If False, the ingestor will raise a ModelResolutionError instead
+            of falling back. This is useful to guarantee that only concrete, installed Django models
+            (with managers) are used during ingestion.
+
+    Notes:
+        - The shared-ingestor cache key includes the value of `dynamic_model_fallback` to avoid reusing
+          an instance created with a different fallback policy.
     """
-    key = _schema_key(app_label, schema_files)
+    # Include fallback flag in the cache key (without changing CacheKey type)
+    cache_label = f"{app_label}|dyn={1 if dynamic_model_fallback else 0}"
+    key = _schema_key(cache_label, schema_files)
     cached = _INGESTOR_CACHE.get(key)
     if cached is not None:
         return cached
@@ -166,7 +183,9 @@ def get_shared_ingestor(*, schema_files: list[str | Path], app_label: str) -> Xm
     warmup_xmlschema_models(schema_files, app_label=app_label)
 
     inst = XmlInstanceIngestor(
-        schema_files=[Path(p) for p in _normalize_schema_files(schema_files)], app_label=app_label
+        schema_files=[Path(p) for p in _normalize_schema_files(schema_files)],
+        app_label=app_label,
+        dynamic_model_fallback=dynamic_model_fallback,
     )
     _INGESTOR_CACHE.put(key, inst)
     return inst
@@ -201,7 +220,25 @@ class XmlInstanceIngestor:
         *,
         schema_files: list[str | Path],
         app_label: str,
+        dynamic_model_fallback: bool = False,
     ):
+        """
+        Initialize a schema-aware XML ingestor.
+
+        Args:
+            schema_files: Paths to XSD files used to parse/resolve types.
+            app_label: Django app label expected to contain installed models.
+            dynamic_model_fallback: Controls behavior when an installed model is missing.
+                - True: fall back to dynamically generated stand-ins from the
+                  in-memory registry, allowing unsaved/ephemeral workflows.
+                - False (default): raise ModelResolutionError when a discovered complex type cannot be
+                  resolved to an installed Django model, avoiding implicit usage of stand-ins.
+
+        Behavior:
+            - Regardless of the fallback flag, the ingestor will always prefer installed Django
+              models and pre-cache them for all discovered complex types to ensure consistent
+              resolution across root and nested elements.
+        """
         try:  # Validate dependency early
             import lxml.etree  # noqa: F401
         except ImportError as exc:  # pragma: no cover - environment dependent
@@ -209,12 +246,32 @@ class XmlInstanceIngestor:
 
         self.app_label = app_label
         self._save_objects: bool = True
+        self._dynamic_model_fallback: bool = bool(dynamic_model_fallback)
         self.created_instances: list[Any] = []
 
         discovery = XmlSchemaDiscovery()
         discovery.discover_models(packages=[str(p) for p in schema_files], app_label=app_label)
         # Keep references for mapping
         self._schemas: list[XmlSchemaDefinition] = list(discovery.parsed_schemas)
+
+        # Pre-resolve and cache installed Django model classes for all discovered complex types.
+        # This guarantees we consistently use concrete models (with managers) when available.
+        self._model_resolution_cache: dict[str, type] = {}
+        try:
+            discovered_names: set[str] = set()
+            for schema in self._schemas:
+                for ct in schema.get_all_complex_types():
+                    discovered_names.add(ct.name)
+            for model_name in discovered_names:
+                try:
+                    model_cls = django_apps.get_model(f"{self.app_label}.{model_name}")
+                except Exception:
+                    model_cls = None
+                if model_cls is not None:
+                    self._model_resolution_cache[model_name] = model_cls
+        except Exception:
+            # Cache population is best-effort; fall back to on-demand lookups.
+            self._model_resolution_cache = {}
 
     # --- Public API ---
     def ingest_from_string(self, xml_string: str, *, save: bool = True) -> Any:
@@ -247,7 +304,17 @@ class XmlInstanceIngestor:
         local_name = self._local_name(elem.tag)
         complex_type = self._resolve_root_complex_type(local_name)
         if complex_type is None:
-            raise ValueError(f"Could not resolve complex type for root element '{local_name}'")
+            known_types = []
+            try:
+                for s in self._schemas:
+                    known_types.extend([ct.name for ct in s.get_all_complex_types()])
+            except Exception:
+                pass
+            raise ValueError(
+                "Could not resolve complex type for root element "
+                f"'{local_name}'. Known discovered types (sample): "
+                f"{known_types[:10]}"
+            )
 
         model_cls = self._get_model_for_complex_type(complex_type)
         if model_cls is None:
@@ -438,10 +505,33 @@ class XmlInstanceIngestor:
 
     def _get_model_for_complex_type(self, complex_type: XmlSchemaComplexType) -> type | None:
         model_name = complex_type.name
+        # Prefer cache of installed models first for determinism across root and nested types
+        cached = getattr(self, "_model_resolution_cache", {}).get(model_name)
+        if cached is not None:
+            return cached
+
+        # Otherwise, attempt to resolve from app registry, then fall back to generated stand-ins
         try:
-            return django_apps.get_model(f"{self.app_label}.{model_name}")
-        except Exception:
-            # Fallback to in-memory registry for dynamically generated classes
+            model_cls = django_apps.get_model(f"{self.app_label}.{model_name}")
+            # Populate cache for subsequent lookups
+            try:
+                self._model_resolution_cache[model_name] = model_cls
+            except Exception:
+                pass
+            return model_cls
+        except Exception as exc:
+            # Optionally fallback to in-memory registry for dynamically generated classes
+            if not getattr(self, "_dynamic_model_fallback", True):
+                # Provide a detailed error to aid configuration
+                raise ModelResolutionError(
+                    app_label=self.app_label,
+                    model_name=model_name,
+                    message=(
+                        "Installed Django model not found and dynamic model fallback is disabled. "
+                        "Ensure your concrete models are installed under the correct app label, or enable "
+                        "dynamic fallback explicitly."
+                    ),
+                ) from exc
             try:
                 return get_generated_model(self.app_label, model_name)
             except Exception:
@@ -462,3 +552,10 @@ class XmlInstanceIngestor:
 
         s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", xml_name)
         return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+class ModelResolutionError(Exception):
+    def __init__(self, *, app_label: str, model_name: str, message: str) -> None:
+        super().__init__(f"[{app_label}.{model_name}] {message}")
+        self.app_label = app_label
+        self.model_name = model_name

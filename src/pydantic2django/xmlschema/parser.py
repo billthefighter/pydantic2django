@@ -2,6 +2,7 @@
 XML Schema parser that converts XSD files into internal representation models.
 Uses lxml for XML parsing and provides the foundation for the discovery pipeline.
 """
+import copy
 import logging
 from pathlib import Path
 
@@ -427,9 +428,85 @@ class XmlSchemaParser:
     def _parse_complex_content(
         self, complex_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
-        """Parse complexContent, which typically implies extension or restriction."""
-        # TODO: Implement complexContent parsing if needed
-        logger.warning(f"complexContent in {complex_type.name} is not fully supported yet.")
+        """Parse complexContent, which typically implies extension or restriction.
+
+        Minimal support implemented:
+        - xs:extension: resolve base complex type, shallowly inherit its elements/attributes,
+          then parse additional particles/attributes declared within the extension.
+        - xs:restriction: treated similarly to extension (limited). Restriction facets are
+          not enforced; local particles/attributes are parsed if present.
+        """
+        try:
+            # Handle <xs:extension base="..."> ... </xs:extension>
+            extension = complex_content.find(f"{{{self.XS_NAMESPACE}}}extension")
+            if extension is not None:
+                base_qname = extension.get("base")
+                base_local = self._get_local_name(base_qname) if base_qname else None
+
+                if base_local:
+                    complex_type.base_type = base_local
+                    base_ct = schema_def.find_complex_type(base_local, namespace=schema_def.target_namespace)
+                    if base_ct:
+                        # Inherit elements and attributes from the base type
+                        if base_ct.elements:
+                            complex_type.elements.extend(copy.deepcopy(base_ct.elements))
+                        if base_ct.attributes:
+                            complex_type.attributes.update(copy.deepcopy(base_ct.attributes))
+                    else:
+                        logger.debug("Base complex type '%s' not found for %s", base_local, complex_type.name)
+
+                # Parse additional content inside the extension
+                for child in extension:
+                    tag_name = self._get_local_name(child.tag)
+                    if tag_name in ("sequence", "choice", "all"):
+                        if tag_name == "sequence":
+                            complex_type.sequence = True
+                            complex_type.choice = False
+                        elif tag_name == "choice":
+                            complex_type.choice = True
+                            complex_type.sequence = False
+                        elif tag_name == "all":
+                            complex_type.all_elements = True
+                            complex_type.sequence = False
+                        self._parse_particle_content(child, complex_type, schema_def)
+                    elif tag_name == "attribute":
+                        attribute = self._parse_attribute(child, schema_def)
+                        if attribute:
+                            complex_type.attributes[attribute.name] = attribute
+                return
+
+            # Handle <xs:restriction base="..."> ... </xs:restriction>
+            restriction = complex_content.find(f"{{{self.XS_NAMESPACE}}}restriction")
+            if restriction is not None:
+                base_qname = restriction.get("base")
+                base_local = self._get_local_name(base_qname) if base_qname else None
+
+                if base_local:
+                    complex_type.base_type = base_local
+                    base_ct = schema_def.find_complex_type(base_local, namespace=schema_def.target_namespace)
+                    if base_ct:
+                        # Limited handling: inherit, but do not enforce restriction facets
+                        if base_ct.elements:
+                            complex_type.elements.extend(copy.deepcopy(base_ct.elements))
+                        if base_ct.attributes:
+                            complex_type.attributes.update(copy.deepcopy(base_ct.attributes))
+
+                # Parse any locally declared particles/attributes
+                for child in restriction:
+                    tag_name = self._get_local_name(child.tag)
+                    if tag_name in ("sequence", "choice", "all"):
+                        self._parse_particle_content(child, complex_type, schema_def)
+                    elif tag_name == "attribute":
+                        attribute = self._parse_attribute(child, schema_def)
+                        if attribute:
+                            complex_type.attributes[attribute.name] = attribute
+
+                logger.warning(f"complexContent restriction in {complex_type.name} is treated as extension (limited).")
+                return
+
+            logger.warning(f"complexContent in {complex_type.name} has no extension/restriction; limited support.")
+        except Exception:
+            logger.warning(f"complexContent in {complex_type.name} is not fully supported yet.")
 
     def _parse_simple_content(
         self, simple_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition

@@ -41,6 +41,10 @@ Long-lived processes can avoid repeated schema discovery/model registration usin
 - `get_shared_ingestor(schema_files=..., app_label=...)`
   - Returns a shared `XmlInstanceIngestor` keyed by `(app_label, normalized schema paths, schema mtimes)`
   - Reuses the same instance across calls; entries are cached with an LRU + TTL policy
+- Optional: `dynamic_model_fallback` (default: false). When set to `true`, the ingestor will fall back
+  to dynamically generated stand-in classes when an installed Django model cannot be found. When left
+  as default (`false`), the ingestor raises a detailed error if a discovered complex type has no installed
+  model.
   - Default cache policy: LRU maxsize=4, TTL=600s; configurable via `set_ingestor_cache()`
   - Public controls:
     - `set_ingestor_cache(maxsize: int | None = None, ttl_seconds: float | None = None)`
@@ -63,7 +67,7 @@ APP_LABEL = "tests"
 # At process start
 warmup_xmlschema_models(SCHEMAS, app_label=APP_LABEL)
 
-# In each task
+# In each task (default: require installed models)
 ingestor = get_shared_ingestor(schema_files=SCHEMAS, app_label=APP_LABEL)
 root = ingestor.ingest_from_file("/abs/path/example.xml", save=False)
 ```
@@ -79,6 +83,15 @@ from pydantic2django.xmlschema.ingestor import set_ingestor_cache
 # Keep up to 8 different ingestors for 10 minutes each
 set_ingestor_cache(maxsize=8, ttl_seconds=600)
 ```
+
+### Dynamic model fallback (explicit opt-in)
+
+By default (`dynamic_model_fallback=False`), only installed models are used. If a discovered type
+has no installed model, ingestion raises a `ModelResolutionError` with the `app_label` and
+`model_name`.
+
+To support ephemeral, non-persisting workflows (e.g., dry-run validation, schema exploration), set
+`dynamic_model_fallback=True` to enable fallback to dynamically generated stand-in classes.
 
 Future extensions:
 - Namespace-scoped matching beyond simple local-name stripping
