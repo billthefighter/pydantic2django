@@ -15,6 +15,13 @@ from ..core.context import ModelContext
 
 # Corrected import path for serialization
 from ..core.serialization import serialize_value
+from ..core.utils.naming import sanitize_field_identifier
+from ..core.utils.timescale import (
+    TIMESERIES_TIME_ALIASES,
+    TimeseriesTimestampMissingError,
+    has_timescale_time_field,
+    map_time_alias_into_time,
+)
 
 logger = logging.getLogger(__name__)  # Ensure logger is defined globally for the file
 
@@ -1348,6 +1355,16 @@ class Xml2DjangoBaseClass(models.Model):
         # Convert XML data (field names might need conversion from XML naming)
         data = cls._convert_xml_data(xml_data)
 
+        # If this model is Timescale-enabled (has 'time' field), ensure timestamp mapping
+        try:
+            model_field_names = {f.name for f in cls._meta.fields}
+        except Exception:
+            model_field_names = set()
+        if has_timescale_time_field(model_field_names) and "time" not in data:
+            map_time_alias_into_time(data, aliases=TIMESERIES_TIME_ALIASES)
+            if "time" not in data:
+                raise TimeseriesTimestampMissingError(cls.__name__, attempted_aliases=list(TIMESERIES_TIME_ALIASES))
+
         # Override with any provided kwargs
         data.update(kwargs)
 
@@ -1370,7 +1387,7 @@ class Xml2DjangoBaseClass(models.Model):
             if key.startswith("_") or key.startswith("@"):
                 continue
 
-            # Convert camelCase to snake_case for Django field names
+            # Normalize XML name into a Django-safe field identifier
             django_field_name = cls._xml_name_to_django_field(key)
             converted[django_field_name] = value
 
@@ -1379,11 +1396,7 @@ class Xml2DjangoBaseClass(models.Model):
     @classmethod
     def _xml_name_to_django_field(cls, xml_name: str) -> str:
         """Convert XML element/attribute name to Django field name."""
-        # Simple camelCase to snake_case conversion
-        import re
-
-        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", xml_name)
-        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+        return sanitize_field_identifier(xml_name)
 
     def to_xml_dict(self, include_metadata: bool = False) -> dict[str, Any]:
         """
@@ -1451,8 +1464,8 @@ class Xml2DjangoBaseClass(models.Model):
         """
         try:
             import xml.etree.ElementTree as ET
-        except ImportError:
-            raise ImportError("XML support requires xml.etree.ElementTree")
+        except ImportError as err:
+            raise ImportError("XML support requires xml.etree.ElementTree") from err
 
         root_name = root_element_name or self._xml_type_name or self.__class__.__name__
         root = ET.Element(root_name)
@@ -1497,8 +1510,8 @@ class Xml2DjangoBaseClass(models.Model):
         """
         try:
             import xml.etree.ElementTree as ET
-        except ImportError:
-            raise ImportError("XML support requires xml.etree.ElementTree")
+        except ImportError as err:
+            raise ImportError("XML support requires xml.etree.ElementTree") from err
 
         root = ET.fromstring(xml_string)
         data = {}

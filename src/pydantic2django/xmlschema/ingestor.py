@@ -24,10 +24,19 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from django.apps import apps as django_apps
+
+from pydantic2django.core.utils.naming import sanitize_field_identifier
+from pydantic2django.core.utils.timescale import (
+    TIMESERIES_TIME_ALIASES,
+    TimeseriesTimestampMissingError,
+    has_timescale_time_field,
+    map_time_alias_into_time,
+)
 
 from . import get_generated_model
 from .discovery import XmlSchemaDiscovery
@@ -151,7 +160,7 @@ def warmup_xmlschema_models(schema_files: list[str | Path], *, app_label: str) -
 
 
 def get_shared_ingestor(
-    *, schema_files: list[str | Path], app_label: str, dynamic_model_fallback: bool = False
+    *, schema_files: list[str | Path], app_label: str, dynamic_model_fallback: bool = False, strict: bool = False
 ) -> XmlInstanceIngestor:
     """
     Get or create a shared XmlInstanceIngestor for a given (app_label, schema set).
@@ -172,8 +181,8 @@ def get_shared_ingestor(
         - The shared-ingestor cache key includes the value of `dynamic_model_fallback` to avoid reusing
           an instance created with a different fallback policy.
     """
-    # Include fallback flag in the cache key (without changing CacheKey type)
-    cache_label = f"{app_label}|dyn={1 if dynamic_model_fallback else 0}"
+    # Include fallback and strict flags in the cache key (without changing CacheKey type)
+    cache_label = f"{app_label}|dyn={1 if dynamic_model_fallback else 0}|strict={1 if strict else 0}"
     key = _schema_key(cache_label, schema_files)
     cached = _INGESTOR_CACHE.get(key)
     if cached is not None:
@@ -186,6 +195,7 @@ def get_shared_ingestor(
         schema_files=[Path(p) for p in _normalize_schema_files(schema_files)],
         app_label=app_label,
         dynamic_model_fallback=dynamic_model_fallback,
+        strict=strict,
     )
     _INGESTOR_CACHE.put(key, inst)
     return inst
@@ -221,6 +231,7 @@ class XmlInstanceIngestor:
         schema_files: list[str | Path],
         app_label: str,
         dynamic_model_fallback: bool = False,
+        strict: bool = False,
     ):
         """
         Initialize a schema-aware XML ingestor.
@@ -247,6 +258,7 @@ class XmlInstanceIngestor:
         self.app_label = app_label
         self._save_objects: bool = True
         self._dynamic_model_fallback: bool = bool(dynamic_model_fallback)
+        self._strict: bool = bool(strict)
         self.created_instances: list[Any] = []
 
         discovery = XmlSchemaDiscovery()
@@ -298,6 +310,79 @@ class XmlInstanceIngestor:
             tree = _etree.parse(f)
         root = tree.getroot()
         return self._ingest_root_element(root)
+
+    def validate_models(self, *, strict: bool = True) -> list[ContractIssue]:
+        """
+        Validate that discovered schema types align with installed Django models.
+
+        - Ensures expected fields from attributes, simple elements, and single nested complex
+          elements exist on the corresponding Django model.
+        - Flags Timescale-based models that are missing the canonical 'time' field.
+
+        Returns a list of ContractIssue. If strict=True and issues exist, raises SchemaSyncError
+        with a concise remediation message.
+        """
+        issues: list[ContractIssue] = []
+        for schema in self._schemas:
+            try:
+                complex_types = list(schema.get_all_complex_types())
+            except Exception:
+                continue
+            for ct in complex_types:
+                model_cls = self._get_model_for_complex_type(ct)
+                if model_cls is None:
+                    issues.append(
+                        ContractIssue(
+                            complex_type_name=ct.name,
+                            model_name=f"{self.app_label}.{ct.name}",
+                            missing_fields=["<installed model not found>"],
+                            extra_fields=[],
+                            problems=["No installed Django model resolved for complex type"],
+                        )
+                    )
+                    continue
+
+                try:
+                    model_field_names = {f.name for f in model_cls._meta.fields}
+                except Exception:
+                    model_field_names = set()
+
+                expected_fields: set[str] = set()
+                # Attributes
+                for attr_name in getattr(ct, "attributes", {}).keys():
+                    expected_fields.add(self._xml_name_to_django_field(attr_name))
+                # Elements (simple + parent links for single nested complex)
+                for el in getattr(ct, "elements", []):
+                    if getattr(el, "type_name", None) and getattr(el, "base_type", None) is None:
+                        if not getattr(el, "is_list", False):
+                            expected_fields.add(self._xml_name_to_django_field(el.name))
+                        continue
+                    expected_fields.add(self._xml_name_to_django_field(el.name))
+
+                missing = sorted([fn for fn in expected_fields if fn not in model_field_names])
+                problems: list[str] = []
+                if self._is_timescale_model(model_cls) and "time" not in model_field_names:
+                    problems.append("Timescale model missing required 'time' field")
+
+                if missing or problems:
+                    issues.append(
+                        ContractIssue(
+                            complex_type_name=ct.name,
+                            model_name=f"{self.app_label}.{model_cls.__name__}",
+                            missing_fields=missing,
+                            extra_fields=[],
+                            problems=problems,
+                        )
+                    )
+
+        if strict and issues:
+            details = "; ".join(
+                f"[{i.model_name}] missing={i.missing_fields or '-'} problems={i.problems or '-'}" for i in issues[:5]
+            )
+            raise SchemaSyncError(
+                f"Schema and static model are out of sync; verify schema and/or regenerate static Django models and re-migrate. Details: {details}"
+            )
+        return issues
 
     # --- Core ingestion ---
     def _ingest_root_element(self, elem: Any) -> Any:
@@ -352,6 +437,24 @@ class XmlInstanceIngestor:
             lname = self._local_name(child.tag)
             children_by_local.setdefault(lname, []).append(child)
 
+        # Strict mode: detect unexpected XML child elements and attributes not declared in the schema
+        if self._strict:
+            expected_child_names = {e.name for e in getattr(complex_type, "elements", [])}
+            unexpected_children = sorted([n for n in children_by_local.keys() if n not in expected_child_names])
+            if unexpected_children:
+                raise SchemaSyncError(
+                    "Schema and static model are out of sync; verify schema and/or regenerate static Django models and re-migrate. "
+                    f"Unexpected XML elements for type '{complex_type.name}': {unexpected_children}"
+                )
+            expected_attr_names = set(getattr(complex_type, "attributes", {}).keys())
+            xml_attr_local = {self._local_name(k) for k in getattr(elem, "attrib", {}).keys()}
+            unexpected_attrs = sorted([n for n in xml_attr_local if n not in expected_attr_names])
+            if unexpected_attrs:
+                raise SchemaSyncError(
+                    "Schema and static model are out of sync; verify schema and/or regenerate static Django models and re-migrate. "
+                    f"Unmapped XML attributes for type '{complex_type.name}': {unexpected_attrs}"
+                )
+
         # Map simple fields and collect nested complex elements to process
         nested_to_process: list[tuple[XmlSchemaElement, list[Any]]] = []
         for el_def in complex_type.elements:
@@ -384,9 +487,32 @@ class XmlInstanceIngestor:
         # Instantiate without other relationships first
         instance: Any
         if self._save_objects:
+            # Timescale-aware timestamp remapping: if model expects a 'time' field,
+            # remap common XML timestamp attributes (e.g., creationTime → creation_time)
+            # into 'time' when not already provided.
+            try:
+                model_field_names = {f.name for f in model_cls._meta.fields}
+            except Exception:
+                model_field_names = set()
+            if has_timescale_time_field(model_field_names) and "time" not in field_values:
+                # Always attempt a helpful alias remap; only enforce requiredness for Timescale models
+                map_time_alias_into_time(field_values, aliases=TIMESERIES_TIME_ALIASES)
+                if self._is_timescale_model(model_cls) and "time" not in field_values:
+                    raise TimeseriesTimestampMissingError(
+                        model_cls.__name__, attempted_aliases=list(TIMESERIES_TIME_ALIASES)
+                    )
+
             instance = model_cls.objects.create(**field_values)
         else:
             try:
+                # Mirror the same remapping for unsaved construction flows
+                try:
+                    model_field_names = {f.name for f in model_cls._meta.fields}
+                except Exception:
+                    model_field_names = set()
+                if has_timescale_time_field(model_field_names) and "time" not in field_values:
+                    # For unsaved flows, remap aliases but do not enforce a hard requirement
+                    map_time_alias_into_time(field_values, aliases=TIMESERIES_TIME_ALIASES)
                 instance = model_cls(**field_values)
             except TypeError as exc:
                 # If the dynamically generated class is abstract (not installed app),
@@ -412,10 +538,19 @@ class XmlInstanceIngestor:
         # Attach any remaining XML attributes as dynamic attributes if not mapped
         try:
             model_field_names = {f.name for f in model_cls._meta.fields}
+            unmapped_dynamic: list[str] = []
             for attr_name, attr_val in getattr(elem, "attrib", {}).items():
                 dj_name = self._xml_name_to_django_field(attr_name)
                 if dj_name not in field_values and dj_name not in model_field_names:
-                    setattr(instance, dj_name, attr_val)
+                    if self._strict:
+                        unmapped_dynamic.append(dj_name)
+                    else:
+                        setattr(instance, dj_name, attr_val)
+            if self._strict and unmapped_dynamic:
+                raise SchemaSyncError(
+                    "Schema and static model are out of sync; verify schema and/or regenerate static Django models and re-migrate. "
+                    f"Unmapped XML attributes for type '{complex_type.name}': {unmapped_dynamic}"
+                )
         except Exception:
             pass
 
@@ -538,6 +673,17 @@ class XmlInstanceIngestor:
                 return None
 
     @staticmethod
+    def _is_timescale_model(model_cls: type) -> bool:
+        try:
+            from pydantic2django.django.models import TimescaleModel as _TsModel
+        except Exception:
+            return False
+        try:
+            return issubclass(model_cls, _TsModel)
+        except Exception:
+            return False
+
+    @staticmethod
     def _local_name(qname: str) -> str:
         if "}" in qname:
             return qname.split("}", 1)[1]
@@ -547,11 +693,8 @@ class XmlInstanceIngestor:
 
     @staticmethod
     def _xml_name_to_django_field(xml_name: str) -> str:
-        # Mirror Xml2DjangoBaseClass._xml_name_to_django_field
-        import re
-
-        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", xml_name)
-        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+        # Use shared normalization so all ingestion paths stay consistent
+        return sanitize_field_identifier(xml_name)
 
 
 class ModelResolutionError(Exception):
@@ -559,3 +702,19 @@ class ModelResolutionError(Exception):
         super().__init__(f"[{app_label}.{model_name}] {message}")
         self.app_label = app_label
         self.model_name = model_name
+
+
+# TimeseriesTimestampMissingError is provided by pydantic2django.core.utils.timescale
+
+
+@dataclass
+class ContractIssue:
+    complex_type_name: str
+    model_name: str
+    missing_fields: list[str]
+    extra_fields: list[str]
+    problems: list[str]
+
+
+class SchemaSyncError(Exception):
+    """Raised when schema-to-model contract validation fails (strict mode)."""

@@ -44,6 +44,7 @@ class DataclassDjangoModelGenerator(
         field_factory_instance: Optional[DataclassFieldFactory] = None,  # Add field factory param
         relationship_accessor: Optional[RelationshipConversionAccessor] = None,  # Accept accessor
         module_mappings: Optional[dict[str, str]] = None,
+        enable_timescale: bool = True,
     ):
         # 1. Initialize Dataclass-specific discovery
         self.dataclass_discovery_instance = discovery_instance or DataclassDiscovery()
@@ -77,6 +78,7 @@ class DataclassDjangoModelGenerator(
             model_factory_instance=self.dataclass_model_factory,
             module_mappings=module_mappings,
             base_model_class=self._get_default_base_model_class(),
+            enable_timescale=enable_timescale,
         )
         logger.info("DataclassDjangoModelGenerator initialized using BaseStaticGenerator.")
         # Timescale classification results cached per run (name -> role)
@@ -173,7 +175,7 @@ class DataclassDjangoModelGenerator(
             DataclassTimescaleBase = None  # type: ignore
 
         # Compute roles lazily if not present
-        if not getattr(self, "_timescale_roles", None):
+        if self.enable_timescale and not getattr(self, "_timescale_roles", None):
             roles: dict[str, TimescaleRole] = {}
             try:
                 models_to_score = []
@@ -191,13 +193,14 @@ class DataclassDjangoModelGenerator(
 
         # Select base class
         base_cls: type[models.Model] = self.base_model_class
-        try:
-            name = source_model.__name__
-            if should_use_timescale_base and DataclassTimescaleBase:
-                if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
-                    base_cls = DataclassTimescaleBase
-        except Exception:
-            pass
+        if self.enable_timescale:
+            try:
+                name = source_model.__name__
+                if should_use_timescale_base and DataclassTimescaleBase:
+                    if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
+                        base_cls = DataclassTimescaleBase
+            except Exception:
+                pass
 
         prev_base = self.base_model_class
         self.base_model_class = base_cls

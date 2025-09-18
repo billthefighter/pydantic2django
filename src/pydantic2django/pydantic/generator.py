@@ -57,6 +57,7 @@ class StaticPydanticModelGenerator(
         # model_factory_instance: Optional[PydanticModelFactory] = None,
         # Inject mapper instead?
         bidirectional_mapper_instance: Optional[BidirectionalTypeMapper] = None,
+        enable_timescale: bool = True,
     ):
         # 1. Initialize Pydantic-specific discovery
         # Use provided instance or create a default one
@@ -88,6 +89,7 @@ class StaticPydanticModelGenerator(
             module_mappings=module_mappings,
             base_model_class=self._get_default_base_model_class(),
             # Jinja setup is handled by base class
+            enable_timescale=enable_timescale,
         )
 
         # 6. Pydantic-specific Jinja setup or context generator
@@ -385,7 +387,7 @@ class StaticPydanticModelGenerator(
             PydanticTimescaleBase = None  # type: ignore
 
         # Compute roles lazily if not present
-        if not getattr(self, "_timescale_roles", None):
+        if self.enable_timescale and not getattr(self, "_timescale_roles", None):
             roles: dict[str, TimescaleRole] = {}
             try:
                 models_to_score = []
@@ -403,13 +405,14 @@ class StaticPydanticModelGenerator(
 
         # Select base class
         base_cls: type[models.Model] = self.base_model_class
-        try:
-            name = source_model.__name__
-            if should_use_timescale_base and PydanticTimescaleBase:
-                if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
-                    base_cls = PydanticTimescaleBase
-        except Exception:
-            pass
+        if self.enable_timescale:
+            try:
+                name = source_model.__name__
+                if should_use_timescale_base and PydanticTimescaleBase:
+                    if should_use_timescale_base(name, self._timescale_roles):  # type: ignore[arg-type]
+                        base_cls = PydanticTimescaleBase
+            except Exception:
+                pass
 
         prev_base = self.base_model_class
         self.base_model_class = base_cls

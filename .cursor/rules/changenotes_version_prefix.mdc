@@ -1,0 +1,53 @@
+---
+globs: changenotes/*.md
+description: Enforce version-prefixed changenote filenames in changenotes directory
+---
+# Changenote filename policy
+
+- All changenote files in `changenotes/` must be prefixed with a release identifier, followed by `__`.
+- For current/known releases, use semantic version prefix: `X.Y.Z__<TITLE>.md` (e.g., `1.0.18__GENERATORS_ENABLE_TIMESCALE_FLAG.md`).
+- For legacy notes predating 1.0.18, pin with `PRE1_0_17__<TITLE>.md`.
+
+## Rationale
+- Keeps changenotes chronologically sortable and scannable.
+- Makes it clear which release a change belongs to.
+
+## Checklist when creating/editing a changenote
+- Ensure the filename begins with the correct release prefix.
+- Prefer short, SCREAMING_SNAKE_CASE titles for clarity.
+- Keep content concise and actionable; link to code paths where appropriate.
+
+## Suggested content format
+```md
+# <Short, action-oriented title>
+
+## Summary
+<1–3 sentences describing the change and its outcome.>
+
+## Motivation
+<Why this was needed. Optional if covered by Summary.>
+
+## What changed
+- <Key change 1>
+- <Key change 2>
+
+## Affected code
+- `path/to/file.py` — <brief note>
+- `path/to/another.py` — <brief note>
+
+## Tests
+- `<path/to/test>::test_name` — <what it verifies>
+
+## Compatibility
+- <Notes on behavior changes, defaults, flags, migrations>
+
+## Example (optional)
+```python
+# minimal usage snippet if helpful
+```
+```
+
+## Examples
+- `1.0.18__TIMESCALE_HEADER_CREATIONTIME_MAPPING.md`
+- `1.0.18__XML_NAME_NORMALIZATION_AND_FIELD_SANITIZATION.md`
+- `PRE1_0_17__PYDANTIC_VALIDATION_FIX_SUMMARY.md`

@@ -1,6 +1,6 @@
 [project]
 name = "django-typed2django"
-version = "1.0.17"
+version = "1.0.18"
 description = "Convert Various non-Django models to Django models dynamically"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,6 @@ dependencies = [
     "pydantic>=2.0",
     "pre-commit>=4.1.0",
     "email-validator>=2.1.0",
-    "pydantic-ai>=0.1.2",
     "mkdocs-autolinks-plugin>=0.7.1",
     "lxml>=6.0.1",
     "django-timescaledb>=0.2.13",
@@ -27,6 +26,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pydantic-ai>=0.1.2",
     "pytest>=7.4.0",
     "pytest-django>=4.5.2",
     "pytest-cov>=4.1.0",

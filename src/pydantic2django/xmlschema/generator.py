@@ -48,6 +48,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         nesting_depth_threshold: int = 1,
         # Optional override for the Django base model class
         base_model_class: type[models.Model] | None = None,
+        # Feature flags
+        enable_timescale: bool = True,
     ):
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
@@ -68,6 +70,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             module_mappings=module_mappings,
             verbose=verbose,
             filter_function=filter_function,
+            enable_timescale=enable_timescale,
         )
         # Timescale classification results cached per run
         self._timescale_roles: dict[str, TimescaleRole] = {}
@@ -292,9 +295,12 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         models_to_process = self._get_models_in_processing_order()
 
         # Classify models for Timescale usage (hypertable vs dimension)
-        try:
-            self._timescale_roles = classify_xml_complex_types(models_to_process)
-        except Exception:
+        if self.enable_timescale:
+            try:
+                self._timescale_roles = classify_xml_complex_types(models_to_process)
+            except Exception:
+                self._timescale_roles = {}
+        else:
             self._timescale_roles = {}
 
         # Reset state for this run (mirror BaseStaticGenerator)
@@ -437,10 +443,12 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
     # Override to choose Timescale base per model and pass roles map to factory
     def setup_django_model(self, source_model: XmlSchemaComplexType) -> ConversionCarrier | None:  # type: ignore[override]
         source_model_name = getattr(source_model, "__name__", getattr(source_model, "name", str(source_model)))
-        try:
-            use_ts_base = should_use_timescale_base(source_model_name, self._timescale_roles)
-        except Exception:
-            use_ts_base = False
+        use_ts_base = False
+        if self.enable_timescale:
+            try:
+                use_ts_base = should_use_timescale_base(source_model_name, self._timescale_roles)
+            except Exception:
+                use_ts_base = False
 
         base_class: type[models.Model]
         if use_ts_base:

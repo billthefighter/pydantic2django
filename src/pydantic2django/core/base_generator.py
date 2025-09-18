@@ -41,6 +41,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         base_model_class: type[models.Model],
         packages: list[str] | None = None,
         class_name_prefix: str = "Django",
+        enable_timescale: bool = True,
     ):
         """
         Initialize the base generator.
@@ -56,6 +57,7 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             module_mappings: Optional mapping of modules to remap imports.
             base_model_class: The base Django model class to inherit from.
             class_name_prefix: Prefix for generated Django model class names.
+            enable_timescale: Whether to enable TimescaleDB support for hypertables.
         """
         self.output_path = output_path
         self.packages = packages
@@ -68,6 +70,8 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self.base_model_class = base_model_class
         self.class_name_prefix = class_name_prefix
         self.carriers: list[ConversionCarrier[SourceModelType]] = []  # Stores results from model factory
+        # Feature flags
+        self.enable_timescale: bool = bool(enable_timescale)
 
         self.import_handler = ImportHandler(module_mappings=module_mappings)
 

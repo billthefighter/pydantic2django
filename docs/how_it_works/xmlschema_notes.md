@@ -25,6 +25,7 @@ Notes and limits:
 
 - Derived complex types appear with inherited elements/attributes, so ingestion can proceed for most extension-based hierarchies.
 - Because restriction rules aren’t enforced, ingest may accept instances that a strict validator would reject. If strict validation is required, keep producer-side validation enabled or post-validate with a dedicated XML library.
+- Timescale-aware timestamp mapping: when a generated model inherits from `XmlTimescaleBase` (requiring a non-null `time` column), the ingestor remaps common XML timestamp attributes to the canonical `time` field when not explicitly set. For example, `creationTime` is mapped to `time` for MTConnect Streams headers.
 
 ## Recommended next steps
 
