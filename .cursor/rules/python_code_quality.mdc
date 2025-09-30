@@ -8,10 +8,10 @@ alwaysApply: false
 # P2D Python Code Quality Standards
 <rule>
 ## Package Management
-- Always use Poetry for package management
-- Run all scripts using Poetry (`poetry run python script.py`)
+- Always use uv for package management
+- Run all scripts using uv (`uv run python script.py`)
 - Manage dependencies through pyproject.toml
-- Use virtual environments created by Poetry
+- Use virtual environments created by uv
 
 ## Import Management
 - When fixing or generating imports, always grep the module for the import first

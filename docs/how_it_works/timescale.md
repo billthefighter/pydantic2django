@@ -38,18 +38,19 @@ We classify XML complex types into roles using a point system; a score ≥ thres
 - +1 if any element indicates unbounded/high‑cardinality growth (`is_list=True` or `maxOccurs="unbounded"`).
 - −2 for definition/metadata‑like names: `*Definition*`, `*Definitions*`, `Constraints`, `Properties`, `Parameters`, `Header`, `Counts`, `Configuration`, `Description`, `Location`, `Limits`, `Reference`, `Relationships`.
 
-Container demotion and leaf promotion:
+Container demotion, leaf promotion, and no‑time demotion:
 
 - After the initial score pass, any type that lacks a direct time/date field but has descendant complex types that do contain such fields is treated as a container and demoted to a dimension.
 - Those descendant types with direct time/date fields are promoted to hypertables.
 - If the container itself has a direct time/date field, it remains a hypertable.
+- New: any type that lacks a direct time/date field is demoted to a dimension even if its name/list scoring would have met the threshold (safety demotion to avoid hypertables without timestamps). Explicit overrides can opt the type back into hypertable.
 
 These rules tend to classify top‑level “Streams”/“Devices” containers as dimensions while promoting their leaf observation/time‑bearing children to hypertables.
 
 ### Generator flow
 
 1. Discovery loads complex types and determines processing order.
-2. We classify each type via the heuristics above.
+2. We classify each type via the heuristics above (including the safety demotion for no‑time types).
 3. During model assembly, if generated fields collide with base fields, we still assemble a bare model class so the finalize phase can inject inverted FKs and add indexes.
 4. Relationship finalization ensures:
    - no hypertable→hypertable FKs (soft refs instead),
@@ -74,6 +75,16 @@ gen = StaticPydanticModelGenerator(
     enable_timescale=False,
 )
 ```
+
+### Generator configuration and strict mode
+
+- Flags/params on `XmlSchemaDjangoModelGenerator`:
+  - `timescale_overrides: dict[str, TimescaleRole] | None` — force specific types to `hypertable` or `dimension`.
+  - `timescale_config: TimescaleConfig | None` — adjust threshold/knobs.
+  - `timescale_strict: bool` — when true, generation fails if any type classified as `hypertable` lacks a direct time/date field. When false (default), such types are safely demoted to `dimension` by the heuristics.
+
+Notes:
+- Explicit `timescale_overrides` are respected and will not be auto‑demoted; combine with `timescale_strict=True` to surface mistakes early.
 
 ### Migrations and Timescale specifics
 

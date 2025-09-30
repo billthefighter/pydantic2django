@@ -35,6 +35,11 @@ Behavior:
 
 The `time` field is required for hypertables. Enforcing it only when the model inherits a Timescale base avoids over-constraining standard models that may have optional timestamps. The ingestor still remaps common aliases (e.g., `creationTime`, `timeStamp`, etc.) into `time` for convenience, but only Timescale models must provide it.
 
+### Interaction with generator demotion
+
+- Non-strict default behavior: During generation, types that lack a direct time/date field are demoted to `dimension` even if their name/list scoring would otherwise classify them as hypertables. This prevents runtime `TimeseriesTimestampMissingError` for metadata/container types (e.g., MTConnect `Header`, `Agent`).
+- Strict mode: When `timescale_strict=True` on the generator, any type classified as a hypertable that lacks a direct time/date field causes generation to fail with a clear message, prompting schema/override correction rather than deferring to ingestion-time errors.
+
 ### Failure messages and remediation
 
 On failures, you’ll see a compact summary including the affected model and missing fields. Recommended steps:

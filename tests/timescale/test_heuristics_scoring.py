@@ -87,3 +87,16 @@ def test_overrides_respected():
     schema.add_complex_type(ct)
     roles = classify_xml_complex_types([ct], overrides={"ArbitraryType": TimescaleRole.HYPERTABLE})
     assert roles.get("ArbitraryType") == TimescaleRole.HYPERTABLE
+
+
+def test_no_children_no_time_is_demoted_despite_name_and_list_growth():
+    schema = XmlSchemaDefinition(schema_location="mem.xsd", target_namespace="tns")
+    ct = XmlSchemaComplexType(name="StreamsType")
+    # Add a simple list element to simulate unbounded growth (+1)
+    ct.add_element(XmlSchemaElement(name="Value", base_type=XmlSchemaType.STRING, is_list=True))
+    # No direct time-like fields and no child complex types
+    schema.add_complex_type(ct)
+
+    roles = classify_xml_complex_types([ct])
+    # Should be DIMENSION because there is no direct time field
+    assert roles.get("StreamsType") == TimescaleRole.DIMENSION

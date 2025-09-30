@@ -38,6 +38,40 @@ def test_generator_uses_timescale_base_for_hypertables(monkeypatch):
     assert carrier_d.base_django_model is gen.base_model_class
     assert carrier_d.base_django_model is Xml2DjangoBaseClass
 
+def test_generator_strict_mode_raises_when_hypertable_has_no_time_fields():
+    # Build a schema with a type that would otherwise look hypertable-ish by name
+    schema = XmlSchemaDefinition(schema_location="mem.xsd", target_namespace="tns")
+    ct = XmlSchemaComplexType(name="StreamsType")
+    # No direct time fields
+    schema.add_complex_type(ct)
+
+    gen = XmlSchemaDjangoModelGenerator(
+        schema_files=["dummy.xsd"],
+        output_path="/tmp/out.py",
+        app_label="tests",
+        enable_timescale=True,
+        timescale_strict=True,
+        # Force hypertable classification to trigger strict validation
+        timescale_overrides={"StreamsType": TimescaleRole.HYPERTABLE},
+    )
+
+    # Monkeypatch discovery to return our single type
+    class _FakeDiscovery:
+        def discover_models(self, packages, *, app_label: str, user_filters=None):
+            return None
+
+        def get_models_in_registration_order(self):
+            return [ct]
+
+        def analyze_dependencies(self):
+            return None
+
+    gen.discovery_instance = _FakeDiscovery()
+
+    with pytest.raises(ValueError):
+        _ = gen.generate_models_file()
+
+
 
 def test_timescale_base_does_not_add_redundant_unique_constraint_on_pk():
     class StreamsType(XmlTimescaleBase):

@@ -15,8 +15,10 @@ from pydantic2django.core.base_generator import BaseStaticGenerator
 from pydantic2django.core.factories import ConversionCarrier
 from pydantic2django.django.timescale.bases import XmlTimescaleBase
 from pydantic2django.django.timescale.heuristics import (
+    TimescaleConfig,
     TimescaleRole,
     classify_xml_complex_types,
+    has_direct_time_feature,
     should_use_timescale_base,
 )
 
@@ -50,6 +52,10 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         base_model_class: type[models.Model] | None = None,
         # Feature flags
         enable_timescale: bool = True,
+        # Timescale configuration
+        timescale_overrides: dict[str, TimescaleRole] | None = None,
+        timescale_config: TimescaleConfig | None = None,
+        timescale_strict: bool = False,
     ):
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
@@ -74,6 +80,9 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         )
         # Timescale classification results cached per run
         self._timescale_roles: dict[str, TimescaleRole] = {}
+        self._timescale_overrides: dict[str, TimescaleRole] | None = timescale_overrides
+        self._timescale_config: TimescaleConfig | None = timescale_config
+        self._timescale_strict: bool = timescale_strict
 
     def _get_model_definition_extra_context(self, carrier: ConversionCarrier) -> dict:
         """
@@ -297,11 +306,25 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         # Classify models for Timescale usage (hypertable vs dimension)
         if self.enable_timescale:
             try:
-                self._timescale_roles = classify_xml_complex_types(models_to_process)
+                self._timescale_roles = classify_xml_complex_types(
+                    models_to_process,
+                    overrides=self._timescale_overrides,
+                    config=self._timescale_config,
+                )
             except Exception:
                 self._timescale_roles = {}
         else:
             self._timescale_roles = {}
+
+        # Strict validation: if any hypertable lacks a direct time-like field, fail fast
+        if self.enable_timescale and self._timescale_strict:
+            for m in models_to_process:
+                name = getattr(m, "name", getattr(m, "__name__", str(m)))
+                if self._timescale_roles.get(name) == TimescaleRole.HYPERTABLE and not has_direct_time_feature(m):
+                    raise ValueError(
+                        f"Timescale strict mode: '{name}' classified as hypertable but has no direct time-like field. "
+                        f"Add a time/timestamp-like attribute/element or demote via overrides."
+                    )
 
         # Reset state for this run (mirror BaseStaticGenerator)
         self.carriers = []

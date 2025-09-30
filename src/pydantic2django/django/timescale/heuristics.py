@@ -42,6 +42,24 @@ class TimescaleConfig:
     default_soft_ref_field: str = "UUIDField"
 
 
+def has_direct_time_feature(xct: Any) -> bool:
+    """Return True if the XML complex type exposes a direct time-like attribute/element.
+
+    Checks both attributes and elements for common time-related names.
+    """
+    try:
+        time_keys = {"time", "timestamp", "sequence", "effectiveTime", "sampleRate", "date", "datetime"}
+        for attr_name in getattr(xct, "attributes", {}).keys():
+            if any(k.lower() in attr_name.lower() for k in time_keys):
+                return True
+        for el in getattr(xct, "elements", []) or []:
+            if any(k.lower() in getattr(el, "name", "").lower() for k in time_keys):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _score_name(name: str) -> int:
     """Score based on the complex type's name.
 
@@ -129,19 +147,6 @@ def classify_xml_complex_types(
         except Exception:
             continue
 
-    def _has_direct_time_feature(xct: Any) -> bool:
-        try:
-            time_keys = {"time", "timestamp", "sequence", "effectiveTime", "sampleRate"}
-            for attr_name in getattr(xct, "attributes", {}).keys():
-                if any(k.lower() in attr_name.lower() for k in time_keys):
-                    return True
-            for el in getattr(xct, "elements", []) or []:
-                if any(k.lower() in getattr(el, "name", "").lower() for k in time_keys):
-                    return True
-            return False
-        except Exception:
-            return False
-
     def _child_complex_types(xct: Any) -> list[Any]:
         children: list[Any] = []
         try:
@@ -169,12 +174,15 @@ def classify_xml_complex_types(
         role = TimescaleRole.HYPERTABLE if score >= cfg.threshold else TimescaleRole.DIMENSION
         result[name] = role
 
-    # Second pass: demote container types without direct time fields and promote leaf children with time fields
+    # Second pass: demote types without direct time fields and promote leaf children with time fields
     for m in models:
         name = getattr(m, "name", None) or getattr(m, "__name__", str(m))
         try:
+            # Never override explicit user overrides
+            if name in overrides:
+                continue
             # Skip if this type already has direct time features
-            if _has_direct_time_feature(m):
+            if has_direct_time_feature(m):
                 continue
 
             # Find descendant complex types that have direct time features
@@ -187,7 +195,7 @@ def classify_xml_complex_types(
                 if id(node) in seen:
                     continue
                 seen.add(id(node))
-                if _has_direct_time_feature(node):
+                if has_direct_time_feature(node):
                     leaf_time_types.add(getattr(node, "name", getattr(node, "__name__", str(node))))
                 else:
                     stack.extend(_child_complex_types(node))
@@ -198,11 +206,11 @@ def classify_xml_complex_types(
                     result[name] = TimescaleRole.DIMENSION
                 # Ensure all leaf time-bearing types are hypertables
                 for tname in leaf_time_types:
-                    result[tname] = TimescaleRole.HYPERTABLE
+                    if tname not in overrides:
+                        result[tname] = TimescaleRole.HYPERTABLE
             else:
-                # No leaf time types found. If it clearly acts as a container (has any child complex types)
-                # and lacks direct time, classify as dimension defensively to avoid container hypertables
-                if first_children and result.get(name) == TimescaleRole.HYPERTABLE:
+                # No leaf time types found. If it lacks direct time, do not allow hypertable classification
+                if result.get(name) == TimescaleRole.HYPERTABLE:
                     result[name] = TimescaleRole.DIMENSION
         except Exception:
             # Be defensive: never fail classification due to structure issues
