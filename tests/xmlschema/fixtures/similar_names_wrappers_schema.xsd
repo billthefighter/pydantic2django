@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/similar"
+           xmlns:tns="http://www.example.com/similar"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="DataType">
+        <xs:sequence>
+            <xs:element name="value" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="DataWrapperType">
+        <xs:sequence>
+            <xs:element name="Data" type="tns:DataType"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ContainerType">
+        <xs:sequence>
+            <xs:element name="data" type="tns:DataWrapperType"/>
+            <xs:element name="data_type" type="tns:DataWrapperType"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="Container" type="tns:ContainerType"/>
+
+</xs:schema>

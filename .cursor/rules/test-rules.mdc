@@ -1,6 +1,5 @@
 ---
-description:
-globs: "tests/**/*.py"
+globs: tests/**
 alwaysApply: false
 ---
 name: test_standards

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/mixedwrappers"
+           xmlns:tns="http://www.example.com/mixedwrappers"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="SamplesType">
+        <xs:sequence>
+            <xs:element name="A" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="EventsType">
+        <xs:sequence>
+            <xs:element name="Status" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ConditionType">
+        <xs:sequence>
+            <xs:element name="State" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ComponentStreamType">
+        <xs:sequence>
+            <xs:element name="Samples" type="tns:SamplesType" minOccurs="0"/>
+            <xs:element name="Events" type="tns:EventsType"/>
+            <xs:element name="Condition" type="tns:ConditionType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="componentId" type="xs:string" use="required"/>
+        <xs:attribute name="name" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:element name="ComponentStream" type="tns:ComponentStreamType"/>
+
+</xs:schema>

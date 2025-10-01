@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/m2mwrap"
+           xmlns:tns="http://www.example.com/m2mwrap"
+           elementFormDefault="qualified">
+
+    <!-- A cross-reference-like pattern that should map to M2M when configured -->
+    <xs:complexType name="TagType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="TagsWrapperType">
+        <xs:sequence>
+            <xs:element name="Tag" type="tns:TagType" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ArticleType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+            <xs:element name="tags" type="tns:TagsWrapperType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="Article" type="tns:ArticleType"/>
+
+</xs:schema>

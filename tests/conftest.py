@@ -116,3 +116,53 @@ class LazyChoiceModel(models.Model):
 @pytest.fixture(scope="session")
 def lazy_choice_model():
     return LazyChoiceModel
+
+
+# ---------------- XMLSchema generator helpers -----------------
+
+@pytest.fixture(scope="session")
+def make_generated_code():
+    """Factory that generates Django models from one or more XSD files and returns the rendered code as text.
+
+    Usage:
+        code = make_generated_code(
+            schema_paths=[Path(...)/"schema.xsd"],
+            app_label="test_app",
+            nested_relationship_strategy="fk",
+            list_relationship_style="child_fk",
+        )
+    """
+    from pydantic2django.xmlschema.generator import XmlSchemaDjangoModelGenerator
+
+    def _make(
+        schema_paths: list[Path] | list[str] | Path | str,
+        *,
+        app_label: str = "test_app",
+        nested_relationship_strategy: str | None = None,
+        list_relationship_style: str | None = None,
+    ) -> str:
+        if isinstance(schema_paths, (str, Path)):
+            schema_list = [str(schema_paths)]
+        else:
+            schema_list = [str(p) for p in schema_paths]
+
+        # Use a per-call tmp directory so parallel tests don't collide
+        tmp_root = Path.cwd() / ".pytest_gen_out"
+        tmp_root.mkdir(exist_ok=True)
+        output_file = tmp_root / f"models_{app_label}.py"
+
+        kwargs: dict[str, object] = {
+            "schema_files": schema_list,
+            "output_path": str(output_file),
+            "app_label": app_label,
+        }
+        if nested_relationship_strategy is not None:
+            kwargs["nested_relationship_strategy"] = nested_relationship_strategy
+        if list_relationship_style is not None:
+            kwargs["list_relationship_style"] = list_relationship_style
+
+        generator = XmlSchemaDjangoModelGenerator(**kwargs)  # type: ignore[arg-type]
+        generator.generate()
+        return output_file.read_text()
+
+    return _make

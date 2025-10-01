@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/mixedcontent"
+           xmlns:tns="http://www.example.com/mixedcontent"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="MixedWrapperType" mixed="true">
+        <xs:sequence>
+            <xs:element name="Leaf" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ContainerType">
+        <xs:sequence>
+            <xs:element name="Wrapper" type="tns:MixedWrapperType"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="Container" type="tns:ContainerType"/>
+
+</xs:schema>

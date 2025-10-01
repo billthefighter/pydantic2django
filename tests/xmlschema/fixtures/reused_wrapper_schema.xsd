@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/reused"
+           xmlns:tns="http://www.example.com/reused"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="SamplesType">
+        <xs:sequence>
+            <xs:element name="A" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ParentAType">
+        <xs:sequence>
+            <xs:element name="Samples" type="tns:SamplesType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="ParentBType">
+        <xs:sequence>
+            <xs:element name="Samples" type="tns:SamplesType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="A" type="tns:ParentAType"/>
+    <xs:element name="B" type="tns:ParentBType"/>
+
+</xs:schema>

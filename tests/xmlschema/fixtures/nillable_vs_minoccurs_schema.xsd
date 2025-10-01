@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/nilmin"
+           xmlns:tns="http://www.example.com/nilmin"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="WrapperAType">
+        <xs:sequence>
+            <xs:element name="Leaf" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="WrapperBType">
+        <xs:sequence>
+            <xs:element name="Leaf" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ContainerType">
+        <xs:sequence>
+            <xs:element name="A" type="tns:WrapperAType" minOccurs="0"/>
+            <xs:element name="B" type="tns:WrapperBType" nillable="true"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:element name="Container" type="tns:ContainerType"/>
+
+</xs:schema>

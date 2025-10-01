@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/choicewrappers"
+           xmlns:tns="http://www.example.com/choicewrappers"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="SamplesType">
+        <xs:sequence>
+            <xs:element name="A" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="EventsType">
+        <xs:sequence>
+            <xs:element name="B" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ComponentStreamType">
+        <xs:choice>
+            <xs:element name="Samples" type="tns:SamplesType"/>
+            <xs:element name="Events" type="tns:EventsType"/>
+        </xs:choice>
+        <xs:attribute name="componentId" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="ComponentStream" type="tns:ComponentStreamType"/>
+
+</xs:schema>

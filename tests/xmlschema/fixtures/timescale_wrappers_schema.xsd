@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/tswrap"
+           xmlns:tns="http://www.example.com/tswrap"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="SamplesType">
+        <xs:sequence>
+            <xs:element name="timestamp" type="xs:dateTime"/>
+            <xs:element name="value" type="xs:decimal"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ComponentStreamType">
+        <xs:sequence>
+            <xs:element name="Samples" type="tns:SamplesType" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:element name="ComponentStream" type="tns:ComponentStreamType"/>
+
+</xs:schema>

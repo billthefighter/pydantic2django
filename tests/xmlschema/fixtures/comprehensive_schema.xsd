@@ -83,4 +83,40 @@
         </xs:keyref>
     </xs:element>
 
+    <!-- MTConnect-like wrapper container pattern -->
+    <xs:complexType name="SamplesType">
+        <xs:sequence>
+            <xs:element name="ObservationUpdateRate" type="xs:string" minOccurs="0"/>
+            <xs:element name="AssetUpdateRate" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="EventsType">
+        <xs:sequence>
+            <xs:element name="AdapterURI" type="xs:string" minOccurs="0"/>
+            <xs:element name="ConnectionStatus" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ComponentStreamType">
+        <xs:sequence>
+            <xs:element name="Samples" type="tns:SamplesType" minOccurs="0"/>
+            <xs:element name="Events" type="tns:EventsType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="componentId" type="xs:string" use="required"/>
+        <xs:attribute name="name" type="xs:string" use="optional"/>
+        <xs:attribute name="uuid" type="xs:string" use="optional"/>
+        <xs:attribute name="component" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:complexType name="DeviceStreamType">
+        <xs:sequence>
+            <xs:element name="ComponentStream" type="tns:ComponentStreamType" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="xs:string" use="optional"/>
+        <xs:attribute name="uuid" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:element name="DeviceStream" type="tns:DeviceStreamType"/>
+
 </xs:schema>

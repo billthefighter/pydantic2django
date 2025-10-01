@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://ex.com/ns/parent"
+           xmlns:tns="http://ex.com/ns/parent"
+           xmlns:child="http://ex.com/ns/child"
+           elementFormDefault="qualified">
+
+    <xs:import namespace="http://ex.com/ns/child" schemaLocation="ns_wrappers_child.xsd"/>
+
+    <xs:complexType name="ComponentStreamType">
+        <xs:sequence>
+            <xs:element name="Samples" type="child:SamplesType" minOccurs="0"/>
+            <xs:element name="Events" type="child:EventsType" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="ComponentStream" type="tns:ComponentStreamType"/>
+
+</xs:schema>

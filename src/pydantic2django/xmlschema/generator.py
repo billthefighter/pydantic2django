@@ -340,7 +340,9 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
 
         # Give the factory a chance to add cross-model relationship fields (e.g., child FKs)
         carriers_by_name = {
-            getattr(c.source_model, "__name__", ""): c for c in self.carriers if c.django_model is not None
+            (getattr(c.source_model, "name", None) or getattr(c.source_model, "__name__", "")): c
+            for c in self.carriers
+            if c.django_model is not None
         }
         if hasattr(self.model_factory_instance, "finalize_relationships"):
             try:

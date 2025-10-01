@@ -37,7 +37,7 @@ def test_parser_finds_complex_types(parsed_schema):
     """Tests that the parser discovers the top-level complex types."""
     assert "AuthorType" in parsed_schema.complex_types
     assert "BookType" in parsed_schema.complex_types
-    assert len(parsed_schema.complex_types) == 3  # Includes Library's inline type
+    assert len(parsed_schema.complex_types) == 7  # Includes Library's inline type
 
 
 def test_parser_finds_simple_types(parsed_schema):

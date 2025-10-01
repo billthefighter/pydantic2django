@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.example.com/keyrefwrap"
+           xmlns:tns="http://www.example.com/keyrefwrap"
+           elementFormDefault="qualified">
+
+    <xs:complexType name="AuthorType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+        </xs:sequence>
+        <xs:attribute name="author_id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="BookType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+            <xs:element name="author_ref" type="xs:IDREF"/>
+        </xs:sequence>
+        <xs:attribute name="isbn" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="LibraryWrapperType">
+        <xs:sequence>
+            <xs:element name="Author" type="tns:AuthorType" maxOccurs="unbounded"/>
+            <xs:element name="Book" type="tns:BookType" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="ContainerType">
+        <xs:sequence>
+            <xs:element name="Library" type="tns:LibraryWrapperType"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:element name="Container" type="tns:ContainerType">
+        <xs:key name="authorKey">
+            <xs:selector xpath=".//tns:Author"/>
+            <xs:field xpath="@author_id"/>
+        </xs:key>
+        <xs:keyref name="authorKeyRef" refer="tns:authorKey">
+            <xs:selector xpath=".//tns:Book"/>
+            <xs:field xpath="tns:author_ref"/>
+        </xs:keyref>
+    </xs:element>
+
+</xs:schema>
