@@ -49,3 +49,4 @@ test_db.sqlite3
 site/*
 *.DS_Store
 .pytest_gen_out/
+examples/mtconnect_example
