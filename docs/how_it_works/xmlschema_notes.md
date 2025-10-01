@@ -27,6 +27,75 @@ Notes and limits:
 - Because restriction rules aren’t enforced, ingest may accept instances that a strict validator would reject. If strict validation is required, keep producer-side validation enabled or post-validate with a dedicated XML library.
 - Timescale-aware timestamp mapping: when a generated model inherits from `XmlTimescaleBase` (requiring a non-null `time` column), the ingestor remaps common XML timestamp attributes to the canonical `time` field when not explicitly set. For example, `creationTime` is mapped to `time` for MTConnect Streams headers.
 
+## Discovery, promotion, demotion, and collapsing
+
+This section explains how P2D decides which XSD types become concrete Django models (promotion), when we intentionally avoid creating a model and store data in a denormalized form (demotion), and how we resolve relationship direction across wrapper chains (collapsing).
+
+### Discovery and promotion
+
+- By default, only top‑level, selected `xs:complexType` entries are promoted to Django models. Nested/inline/anonymous leaf types are not automatically promoted.
+- Promotion scope is controlled by discovery filters and per‑run options. This keeps generated models concise and avoids exploding the schema surface.
+
+Mermaid: promoted vs. not promoted
+
+```mermaid
+graph TD
+    A[DeviceStreamType] --> B[ComponentStreamType]
+    B --> C[SamplesType]
+    C -->|repeats| D[SampleType]
+
+    classDef gen fill:#dfe,stroke:#090
+    classDef notGen fill:#fed,stroke:#c60
+
+    class A,B,C gen
+    class D notGen
+```
+
+In this example, `SampleType` is a repeated leaf and may not be generated unless explicitly selected. The system must therefore avoid emitting FKs that target `SampleType` unless it is in scope.
+
+### Demotion (safe fallback)
+
+When a referenced type is outside discovery scope or cannot be resolved to a generated model, we demote that structure to a safe representation:
+
+- JSON fallback on the parent field for nested structures (used during the element mapping stage).
+- Soft references (UUID with index) when Timescale rules indicate FK inversion or hypertable→hypertable safety.
+
+Demotion preserves data while sacrificing some relational fidelity, and is logged to aid debugging. This is preferable to emitting broken FKs.
+
+### Collapsing wrapper chains (relationship direction)
+
+P2D uses wrapper heuristics and a finalize pass to place FKs on children while keeping parents minimal:
+
+- Repeating complex children: default `child_fk` places FK on the child back to the parent.
+- Single wrapper elements (TitleCase or `*WrapperType`): treat as containers and inject child‑side FK(s) to the immediate wrapper (not the grandparent), unless an M2M configuration or Timescale policy applies.
+- Deep wrapper chains: we may “collapse” chains to an appropriate ancestor, but only when it makes sense and does not cross discovery boundaries. Immediate wrapper preference is maintained for direct elements.
+
+Mermaid: collapsing behavior (immediate wrapper vs. top ancestor)
+
+```mermaid
+graph TD
+    A[DeviceStreamType] --> B[ComponentStreamType]
+    B --> C[SamplesType]
+    C -->|repeats| D[SampleType]
+
+    D -.child_fk.-> C
+    %% In some configurations, a leaf could collapse further, but P2D prefers immediate wrapper here
+
+    classDef gen fill:#dfe,stroke:#090
+    classDef notGen fill:#fed,stroke:#c60
+    class A,B,C gen
+    class D notGen
+```
+
+Finalization respects discovery boundaries and will skip FK injection whenever either side is not generated, preferring the previously emitted JSON placeholder or soft reference.
+
+### Configuration knobs (related)
+
+- `list_relationship_style`: `child_fk` (default), `m2m`, or `json`.
+- `nested_relationship_strategy`: `fk`, `json`, or `auto`.
+- Timescale flags to invert or soften relationships for hypertables.
+- (Planned) `auto_generate_missing_leaves`: opt‑in to promote leaf types on demand; default False to avoid uncontrolled schema growth.
+
 ## Recommended next steps
 
 1. Complex content completeness

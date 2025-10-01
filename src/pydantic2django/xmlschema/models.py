@@ -248,6 +248,7 @@ class XmlSchemaSimpleType:
     base_type: XmlSchemaType | None = None
     restrictions: XmlSchemaRestriction | None = None
     schema_location: str | None = None
+    documentation: str | None = None
 
     @property
     def __name__(self) -> str:
@@ -285,6 +286,10 @@ class XmlSchemaDefinition:
     simple_types: dict[str, XmlSchemaSimpleType] = field(default_factory=dict)
     elements: dict[str, XmlSchemaElement] = field(default_factory=dict)
     attributes: dict[str, XmlSchemaAttribute] = field(default_factory=dict)
+    # Attribute groups (name -> attributes mapping)
+    attribute_groups: dict[str, dict[str, XmlSchemaAttribute]] = field(default_factory=dict)
+    # Substitution group membership (head local name -> list of member elements)
+    element_substitutions: dict[str, list[XmlSchemaElement]] = field(default_factory=dict)
     imports: list[XmlSchemaImport] = field(default_factory=list)
     includes: list[str] = field(default_factory=list)
     keys: list[XmlSchemaKey] = field(default_factory=list)
@@ -312,6 +317,20 @@ class XmlSchemaDefinition:
         """Add a global element to this schema."""
         element.namespace = element.namespace or self.target_namespace
         self.elements[element.name] = element
+        # Track substitution group membership for later expansion
+        if element.substitution_group:
+            head = element.substitution_group
+            self.element_substitutions.setdefault(head, []).append(element)
+
+    def add_attribute_group(self, name: str, attributes: dict[str, XmlSchemaAttribute]) -> None:
+        """Register a named attribute group (flattened attributes)."""
+        self.attribute_groups[name] = attributes
+
+    def get_attribute_group(self, name: str) -> dict[str, XmlSchemaAttribute] | None:
+        return self.attribute_groups.get(name)
+
+    def get_substitution_members(self, head_local_name: str) -> list[XmlSchemaElement]:
+        return self.element_substitutions.get(head_local_name, [])
 
     def get_all_complex_types(self) -> list[XmlSchemaComplexType]:
         """Get all complex types in this schema."""

@@ -56,6 +56,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         timescale_overrides: dict[str, TimescaleRole] | None = None,
         timescale_config: TimescaleConfig | None = None,
         timescale_strict: bool = False,
+        # Control behavior for missing leaf/child targets in finalize pass
+        auto_generate_missing_leaves: bool = False,
     ):
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
@@ -83,6 +85,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         self._timescale_overrides: dict[str, TimescaleRole] | None = timescale_overrides
         self._timescale_config: TimescaleConfig | None = timescale_config
         self._timescale_strict: bool = timescale_strict
+        self._auto_generate_missing_leaves: bool = auto_generate_missing_leaves
 
     def _get_model_definition_extra_context(self, carrier: ConversionCarrier) -> dict:
         """

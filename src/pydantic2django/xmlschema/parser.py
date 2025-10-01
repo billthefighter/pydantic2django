@@ -5,9 +5,10 @@ Uses lxml for XML parsing and provides the foundation for the discovery pipeline
 import copy
 import logging
 from pathlib import Path
+from typing import Any
 
 try:
-    from lxml import etree
+    from lxml import etree  # type: ignore[import-not-found]
 except ImportError:
     etree = None
 
@@ -131,7 +132,7 @@ class XmlSchemaParser:
         except Exception as e:
             raise XmlSchemaParseError(f"Failed to parse schema {schema_path}: {e}") from e
 
-    def _parse_schema_contents(self, schema_root: "etree.Element", schema_def: XmlSchemaDefinition):
+    def _parse_schema_contents(self, schema_root: Any, schema_def: XmlSchemaDefinition):
         """Parse the contents of a schema element"""
         logger.info(f"Parsing contents of schema: {schema_def.schema_location}")
         logger.debug(f"Root element: {schema_root.tag}")
@@ -154,6 +155,17 @@ class XmlSchemaParser:
                 element = self._parse_element(child, schema_def)
                 if element:
                     schema_def.add_element(element)
+            elif tag_name == "attributeGroup":
+                # Parse named attributeGroup definitions at the schema root
+                name = child.get("name")
+                if name:
+                    attrs: dict[str, XmlSchemaAttribute] = {}
+                    for attr_elem in child.findall(f"{{{self.XS_NAMESPACE}}}attribute"):
+                        attr = self._parse_attribute(attr_elem, schema_def)
+                        if attr:
+                            attrs[attr.name] = attr
+                    if attrs:
+                        schema_def.add_attribute_group(name, attrs)
             elif tag_name == "key":
                 key = self._parse_key(child)
                 if key:
@@ -164,7 +176,7 @@ class XmlSchemaParser:
                     schema_def.keyrefs.append(keyref)
 
     def _parse_complex_type(
-        self, element: "etree.Element", schema_def: XmlSchemaDefinition, name_override: str | None = None
+        self, element: Any, schema_def: XmlSchemaDefinition, name_override: str | None = None
     ) -> XmlSchemaComplexType | None:
         """Parse a complexType element"""
         name = name_override or element.get("name")
@@ -211,6 +223,17 @@ class XmlSchemaParser:
                 if attribute:
                     complex_type.attributes[attribute.name] = attribute
 
+            elif tag_name == "attributeGroup":
+                # Expand referenced attribute group into this complex type
+                ref = child.get("ref")
+                if ref:
+                    ref_local = self._get_local_name(ref)
+                    group = schema_def.get_attribute_group(ref_local)
+                    if group:
+                        # Shallow copy attributes to avoid shared mutations
+                        for aname, attr in group.items():
+                            complex_type.attributes.setdefault(aname, copy.deepcopy(attr))
+
             elif tag_name == "complexContent":
                 # Handle inheritance/extension
                 self._parse_complex_content(child, complex_type, schema_def)
@@ -222,7 +245,7 @@ class XmlSchemaParser:
         return complex_type
 
     def _parse_particle_content(
-        self, particle: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
+        self, particle: Any, complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
         """Parse sequence, choice, or all content"""
         logger.debug(f"Parsing particle content for {complex_type.name}")
@@ -234,6 +257,24 @@ class XmlSchemaParser:
                 element = self._parse_element(child, schema_def)
                 if element:
                     complex_type.elements.append(element)
+                    # Expand substitution group members if this element is a head
+                    try:
+                        head_local = element.name
+                        members = schema_def.get_substitution_members(head_local)
+                        if members:
+                            existing_names = {e.name for e in complex_type.elements}
+                            for mem in members:
+                                if mem.name in existing_names:
+                                    continue
+                                clone = copy.deepcopy(element)
+                                clone.name = mem.name
+                                clone.type_name = mem.type_name or clone.type_name
+                                # Clear base_type so factory resolves complex type
+                                clone.base_type = None
+                                complex_type.elements.append(clone)
+                    except Exception:
+                        # Best-effort expansion only
+                        pass
 
             elif tag_name in ("sequence", "choice", "all"):
                 # Nested groups
@@ -241,7 +282,7 @@ class XmlSchemaParser:
 
         logger.debug(f"Finished particle content for {complex_type.name}. Total elements: {len(complex_type.elements)}")
 
-    def _parse_element(self, element: "etree.Element", schema_def: XmlSchemaDefinition) -> XmlSchemaElement | None:
+    def _parse_element(self, element: Any, schema_def: XmlSchemaDefinition) -> XmlSchemaElement | None:
         """Parse an element definition"""
         name = element.get("name")
         ref = element.get("ref")
@@ -286,6 +327,14 @@ class XmlSchemaParser:
         else:
             xml_element.max_occurs = int(xml_element.max_occurs)
 
+        # Capture substitution group if present
+        try:
+            subst = element.get("substitutionGroup")
+            if subst:
+                xml_element.substitution_group = self._get_local_name(subst)
+        except Exception:
+            pass
+
         # Map built-in types
         if xml_element.type_name:
             type_local_name = self._get_local_name(xml_element.type_name)
@@ -323,7 +372,7 @@ class XmlSchemaParser:
 
         return xml_element
 
-    def _parse_attribute(self, element: "etree.Element", schema_def: XmlSchemaDefinition) -> XmlSchemaAttribute | None:
+    def _parse_attribute(self, element: Any, schema_def: XmlSchemaDefinition) -> XmlSchemaAttribute | None:
         """Parse an attribute definition"""
         name = element.get("name")
         ref = element.get("ref")
@@ -350,7 +399,7 @@ class XmlSchemaParser:
         return attribute
 
     def _parse_simple_type(
-        self, element: "etree.Element", schema_def: XmlSchemaDefinition, name_override: str | None = None
+        self, element: Any, schema_def: XmlSchemaDefinition, name_override: str | None = None
     ) -> XmlSchemaSimpleType | None:
         """Parse a simpleType element."""
         name = name_override or element.get("name")
@@ -378,7 +427,7 @@ class XmlSchemaParser:
 
         return simple_type
 
-    def _parse_restriction(self, restriction_elem: "etree.Element") -> XmlSchemaRestriction:
+    def _parse_restriction(self, restriction_elem: Any) -> XmlSchemaRestriction:
         """Parse a restriction element"""
         base_type_qname = restriction_elem.get("base")
         base_type_name = self._get_local_name(base_type_qname) if base_type_qname else None
@@ -426,7 +475,7 @@ class XmlSchemaParser:
         return restriction
 
     def _parse_complex_content(
-        self, complex_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
+        self, complex_content: Any, complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
         """Parse complexContent, which typically implies extension or restriction.
 
@@ -473,6 +522,14 @@ class XmlSchemaParser:
                         attribute = self._parse_attribute(child, schema_def)
                         if attribute:
                             complex_type.attributes[attribute.name] = attribute
+                    elif tag_name == "attributeGroup":
+                        ref = child.get("ref")
+                        if ref:
+                            ref_local = self._get_local_name(ref)
+                            group = schema_def.get_attribute_group(ref_local)
+                            if group:
+                                for aname, attr in group.items():
+                                    complex_type.attributes.setdefault(aname, copy.deepcopy(attr))
                 return
 
             # Handle <xs:restriction base="..."> ... </xs:restriction>
@@ -509,7 +566,7 @@ class XmlSchemaParser:
             logger.warning(f"complexContent in {complex_type.name} is not fully supported yet.")
 
     def _parse_simple_content(
-        self, simple_content: "etree.Element", complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
+        self, simple_content: Any, complex_type: XmlSchemaComplexType, schema_def: XmlSchemaDefinition
     ):
         """Parse simpleContent, which adds attributes to a simple type."""
         # Minimal support: capture attributes declared on the extension node
@@ -523,6 +580,15 @@ class XmlSchemaParser:
                 attribute = self._parse_attribute(attr_elem, schema_def)
                 if attribute:
                     complex_type.attributes[attribute.name] = attribute
+            # Expand attribute groups referenced in simpleContent extension
+            for ag in ext.findall(f"{{{self.XS_NAMESPACE}}}attributeGroup"):
+                ref = ag.get("ref")
+                if ref:
+                    ref_local = self._get_local_name(ref)
+                    group = schema_def.get_attribute_group(ref_local)
+                    if group:
+                        for aname, attr in group.items():
+                            complex_type.attributes.setdefault(aname, copy.deepcopy(attr))
         except Exception:
             logger.warning(f"simpleContent in {complex_type.name} is not fully supported yet.")
 
@@ -534,7 +600,7 @@ class XmlSchemaParser:
             return qname.split(":", 1)[-1]
         return qname
 
-    def _parse_key(self, element: "etree.Element") -> XmlSchemaKey | None:
+    def _parse_key(self, element: Any) -> XmlSchemaKey | None:
         """Parse a key element."""
         name = element.get("name")
         if not name:
@@ -554,7 +620,7 @@ class XmlSchemaParser:
 
         return XmlSchemaKey(name=name, selector=selector, fields=fields)
 
-    def _parse_keyref(self, element: "etree.Element") -> XmlSchemaKeyRef | None:
+    def _parse_keyref(self, element: Any) -> XmlSchemaKeyRef | None:
         """Parse a keyref element."""
         name = element.get("name")
         refer = element.get("refer")

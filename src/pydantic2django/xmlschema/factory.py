@@ -14,7 +14,7 @@ from ..core.factories import (
     ConversionCarrier,
     FieldConversionResult,
 )
-from ..django.timescale.heuristics import should_invert_fk, should_soft_reference
+from ..django.timescale.heuristics import is_hypertable, should_invert_fk, should_soft_reference
 from .models import (
     XmlSchemaAttribute,
     XmlSchemaComplexType,
@@ -78,6 +78,8 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         self.included_model_names: set[str] | None = included_model_names
         # Control whether to invert FKs targeting hypertables (hypertable -> dimension)
         self.invert_fk_to_timescale = invert_fk_to_timescale
+        # Track per-target related_names to avoid collisions for keyref-based FKs
+        self._target_related_names: dict[str, set[str]] = {}
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -294,23 +296,36 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             if self.included_model_names is not None and target_type_name not in self.included_model_names:
                 allowed = False
 
-            if allowed and target_type_name in schema_def.complex_types:
+            if allowed:
                 strategy = self._decide_nested_strategy(current_depth=1)
                 # Repeating complex elements
                 if element.is_list:
                     if strategy == "json" or self.list_relationship_style == "json" or not allowed:
                         return self._make_json_field_kwargs(element)
-                    if self.list_relationship_style == "m2m":
-                        kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "blank": True}
+                    # Attempt to resolve leaf repeated complex type inside the wrapper
+                    leaf_child: str | None = None
+                    if schema_def and target_type_name in schema_def.complex_types:
+                        target_ct = schema_def.complex_types[target_type_name]
+                        for child_el in target_ct.elements:
+                            if getattr(child_el, "is_list", False) and child_el.type_name:
+                                cand = child_el.type_name.split(":")[-1]
+                                if cand:
+                                    leaf_child = cand
+                                    break
+                    if self.list_relationship_style == "m2m" and leaf_child:
+                        kwargs = {"to": f"{carrier.meta_app_label}.{leaf_child}", "blank": True}
                         return models.ManyToManyField, kwargs
                     # Default: child_fk -> defer actual FK creation to child model via finalize step
-                    # Store pending relation on the model factory via carrier.context_data
                     pending = carrier.context_data.setdefault("_pending_child_fk", [])
                     pending.append(
                         {
-                            "child": target_type_name,
-                            "parent": getattr(carrier.source_model, "__name__", model_name),
+                            "child": (leaf_child or target_type_name),
+                            "parent": (
+                                getattr(carrier.source_model, "name", None)
+                                or getattr(carrier.source_model, "__name__", model_name)
+                            ),
                             "element_name": element.name,
+                            "allow_collapse": False,
                         }
                     )
                     # Represent on parent as a reverse accessor only; no concrete field needed
@@ -321,18 +336,51 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 if strategy == "json" or not allowed:
                     return self._make_json_field_kwargs(element)
 
-                # Heuristic: Treat TitleCase wrapper element names as container wrappers
-                # and prefer child_fk direction when list_relationship_style == "child_fk".
-                # This preserves existing behavior for typical lower-case element names
-                # (e.g., 'child') that should remain parent-side FK.
-                is_wrapper_like = bool(element.name[:1].isupper())
+                # Inspect the target complex type for repeating children
+                repeating_child_type: str | None = None
+                if schema_def and target_type_name in schema_def.complex_types:
+                    target_ct = schema_def.complex_types[target_type_name]
+                    for child_el in target_ct.elements:
+                        if getattr(child_el, "is_list", False) and child_el.type_name:
+                            cand = child_el.type_name.split(":")[-1]
+                            if cand and schema_def.complex_types.get(cand):
+                                repeating_child_type = cand
+                                break
+
+                # If configured for M2M and wrapper contains repeating complex children, emit M2M to the leaf
+                if self.list_relationship_style == "m2m" and repeating_child_type:
+                    kwargs = {"to": f"{carrier.meta_app_label}.{repeating_child_type}", "blank": True}
+                    return models.ManyToManyField, kwargs
+
+                # Heuristic: Treat wrapper-like single nested elements as containers and prefer child_fk
+                # Conditions:
+                #  - Element name is TitleCase (e.g., 'Samples', 'Events'), OR
+                #  - Target type name ends with 'WrapperType'
+                is_wrapper_like = bool(element.name[:1].isupper()) or str(target_type_name).endswith("WrapperType")
                 if self.list_relationship_style == "child_fk" and is_wrapper_like:
                     pending = carrier.context_data.setdefault("_pending_child_fk", [])
+                    # If wrapper contains repeating complex children, also link the leaf child directly to this parent
+                    if repeating_child_type:
+                        pending.append(
+                            {
+                                "child": repeating_child_type,
+                                "parent": (
+                                    getattr(carrier.source_model, "name", None)
+                                    or getattr(carrier.source_model, "__name__", model_name)
+                                ),
+                                "element_name": element.name,
+                                "allow_collapse": False,
+                            }
+                        )
                     pending.append(
                         {
                             "child": target_type_name,
-                            "parent": getattr(carrier.source_model, "__name__", model_name),
+                            "parent": (
+                                getattr(carrier.source_model, "name", None)
+                                or getattr(carrier.source_model, "__name__", model_name)
+                            ),
                             "element_name": element.name,
+                            "allow_collapse": False,
                         }
                     )
                     # No concrete field on parent
@@ -366,6 +414,15 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 kwargs = {"to": f"{carrier.meta_app_label}.{target_type_name}", "on_delete": models.SET_NULL}
                 kwargs["null"] = True
                 kwargs["blank"] = True
+                # Ensure reverse accessor uniqueness on target by including source model in related_name
+                try:
+                    rn = str(element.name).lower()
+                    if not rn.endswith("s"):
+                        rn = rn + "s"
+                except Exception:
+                    rn = "items"
+                # Include both source and target model names to avoid collisions across siblings
+                kwargs["related_name"] = f"{rn}_{src_name.lower()}_{str(target_type_name).lower()}"
                 return models.ForeignKey, kwargs
 
         # Default simple-type mapping
@@ -516,13 +573,28 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     return models.UUIDField, soft_kwargs
                 kwargs["to"] = f"{carrier.meta_app_label}.{target_model_name}"
 
-                # Use the keyref selector to generate a better related_name
+                # Use the keyref selector to generate a concise related_name
                 if keyref.selector:
                     related_name_base = keyref.selector.split(":")[-1].replace(".//", "")
-                    related_name = f"{related_name_base.lower()}s"
-                    kwargs["related_name"] = related_name
+                    rn = related_name_base.lower()
+                    if not rn.endswith("s"):
+                        rn = rn + "s"
+                    # Deduplicate per target to avoid reverse accessor collisions
+                    target = f"{carrier.meta_app_label}.{target_model_name}"
+                    used = self._target_related_names.setdefault(target, set())
+                    final_rn = rn if rn not in used else f"{rn}_{model_name.lower()}"
+                    used.add(final_rn)
+                    kwargs["related_name"] = final_rn
                 else:
-                    kwargs["related_name"] = f"{model_name.lower()}s"
+                    # Fallback: pluralize the current model name (e.g., Book -> books)
+                    rn = model_name.lower()
+                    if not rn.endswith("s"):
+                        rn = rn + "s"
+                    target = f"{carrier.meta_app_label}.{target_model_name}"
+                    used = self._target_related_names.setdefault(target, set())
+                    final_rn = rn if rn not in used else f"{rn}_{model_name.lower()}"
+                    used.add(final_rn)
+                    kwargs["related_name"] = final_rn
 
         # Determine optionality to adjust on_delete/null/blank
         is_optional = False
@@ -709,20 +781,112 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
         After all models are built, inject ForeignKey fields into child models
         for repeating nested complex elements (one-to-many parent->child).
         """
+        # Precompute multiplicity across parents and per child-parent pair
+        parent_sets: dict[tuple[str, str], set[str]] = {}
+        pair_counts: dict[tuple[str, str], int] = {}
+        # Build a parent chain map to allow collapsing wrapper chains: child -> {parents}
+        parent_chain: dict[str, set[str]] = {}
+        for rel in self._pending_child_fk:
+            child = str(rel.get("child"))
+            parent = str(rel.get("parent"))
+            elem = str(rel.get("element_name", "items"))
+            parent_sets.setdefault((child, elem), set()).add(parent)
+            pair_counts[(child, parent)] = pair_counts.get((child, parent), 0) + 1
+            parent_chain.setdefault(child, set()).add(parent)
+
+        def _collapse_parent(child_name: str, orig_parent: str, allow_collapse: bool) -> str:
+            """If a child has exactly one parent repeatedly, climb to the top-most single parent.
+            If multiple parents exist at any step, keep the original parent unchanged.
+            """
+            if not allow_collapse:
+                return orig_parent
+            seen = set()
+            current_child = child_name
+            current_parent = orig_parent
+            while True:
+                parents = parent_chain.get(current_child)
+                if not parents or len(parents) != 1:
+                    return current_parent
+                parent = next(iter(parents))
+                if parent in seen:
+                    return current_parent
+                seen.add(parent)
+                current_parent = parent
+                current_child = parent
+
+        # Prepass: compute collisions of reverse accessors per (parent, rn_base)
+        parent_rn_to_children: dict[tuple[str, str], set[str]] = {}
+        for rel in self._pending_child_fk:
+            child_name = str(rel.get("child"))
+            orig_parent_name = str(rel.get("parent"))
+            allow_c = bool(rel.get("allow_collapse", True))
+            parent_name = _collapse_parent(child_name, orig_parent_name, allow_c)
+            if not allow_c:
+                probe = parent_name
+                visited: set[str] = set()
+                while (
+                    probe in parent_chain
+                    and len(parent_chain.get(probe, set())) == 1
+                    and str(probe).endswith("WrapperType")
+                    and probe not in visited
+                ):
+                    visited.add(probe)
+                    probe = next(iter(parent_chain[probe]))
+                parent_name = probe
+            element_name = str(rel.get("element_name", "items"))
+            rn_base = element_name.lower()
+            if not rn_base.endswith("s"):
+                rn_base = rn_base + "s"
+            key = (str(parent_name), rn_base)
+            s = parent_rn_to_children.setdefault(key, set())
+            s.add(child_name)
+
         # Process pending child FKs first (if any)
         for rel in self._pending_child_fk:
             child_name = rel.get("child")
-            parent_name = rel.get("parent")
+            # Collapse wrapper chains only when single-parent chains exist
+            orig_parent_name = str(rel.get("parent"))
+            allow_c = bool(rel.get("allow_collapse", True))
+            parent_name = _collapse_parent(str(child_name), orig_parent_name, allow_c)
+            if not allow_c:
+                # If parent is a wrapper type with a single parent chain, climb until a non-wrapper ancestor
+                probe = parent_name
+                visited: set[str] = set()
+                while (
+                    probe in parent_chain
+                    and len(parent_chain.get(probe, set())) == 1
+                    and str(probe).endswith("WrapperType")
+                    and probe not in visited
+                ):
+                    visited.add(probe)
+                    probe = next(iter(parent_chain[probe]))
+                parent_name = probe
             element_name = rel.get("element_name", "items")
             child_carrier = carriers_by_name.get(child_name)
             if not child_carrier or not child_carrier.django_model:
-                logger.warning(f"Could not inject child FK: missing carrier for {child_name}")
+                logger.info(
+                    "Skipping FK injection: missing or filtered child '%s' for parent '%s' (element '%s')",
+                    child_name,
+                    parent_name,
+                    element_name,
+                )
                 continue
             # Build kwargs for FK on child -> parent
             rn_base = element_name.lower()
             if not rn_base.endswith("s"):
                 rn_base = rn_base + "s"
-            related_name = rn_base
+            # Choose related_name with minimal verbosity while avoiding collisions
+            parents_for_key = parent_sets.get((str(child_name), element_name), set())
+            has_multiple_parents = len(parents_for_key) > 1
+            # Collision across different children targeting same (parent, rn_base)?
+            parent_rn_children = parent_rn_to_children.get((str(parent_name), rn_base), set())
+            has_cross_child_collision = len(parent_rn_children) > 1
+            if has_cross_child_collision:
+                related_name = f"{rn_base}_{str(child_name).lower()}"
+            elif has_multiple_parents:
+                related_name = f"{rn_base}_{str(parent_name).lower()}"
+            else:
+                related_name = rn_base
             # Use Timescale roles to decide FK vs soft reference
             roles = child_carrier.context_data.get("_timescale_roles", {})
             child_name_str = str(child_name) if child_name else ""
@@ -739,15 +903,40 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
                 field_name = f"{parent_name.lower()}"
                 child_carrier.django_field_definitions[field_name] = soft_def
             else:
+                # If multiple FKs to same parent for this child, disambiguate field name with element
+                need_elem_suffix = pair_counts.get((str(child_name), str(parent_name)), 0) > 1
+                suffix = f"_{rn_base}" if need_elem_suffix else ""
+                field_name = f"{(parent_name or '').lower()}{suffix}"
+
                 fk_kwargs = {
                     "to": f"{app_label}.{parent_name}",
                     "on_delete": "models.CASCADE",
                     "related_name": related_name,
                 }
+
+                # For Timescale inverted relationship (hypertable -> dimension), prefer SET_NULL
+                try:
+                    from ..django.utils.serialization import RawCode
+
+                    if is_hypertable(child_name_str, roles) and not is_hypertable(parent_name_str, roles):
+                        fk_kwargs["on_delete"] = RawCode("models.SET_NULL")
+                        fk_kwargs["null"] = True
+                        fk_kwargs["blank"] = True
+                        # Suggest useful indexes on hypertable
+                        idx_list: list[str] = child_carrier.context_data.setdefault("meta_indexes", [])
+                        idx_list.append(f"models.Index(fields=['{field_name}'])")
+                        # Composite with time if defined on the hypertable
+                        has_time = (
+                            "time" in child_carrier.django_field_definitions or "time" in child_carrier.django_fields
+                        )
+                        if has_time:
+                            idx_list.append(f"models.Index(fields=['{field_name}', '-time'])")
+                except Exception:
+                    pass
+
                 from ..django.utils.serialization import generate_field_definition_string
 
                 fk_def = generate_field_definition_string(models.ForeignKey, fk_kwargs, app_label)
-                field_name = f"{parent_name.lower()}"
                 child_carrier.django_field_definitions[field_name] = fk_def
 
         # Handle inverted Timescale relationships: add FK on hypertable -> dimension
@@ -760,7 +949,7 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
                 field_name = inv.get("field_name", (dim or "").lower())
                 hyper_carrier = carriers_by_name.get(str(hyper))
                 if not hyper_carrier or not hyper_carrier.django_model:
-                    logger.warning(f"Could not inject inverted FK: missing hypertable carrier for {hyper}")
+                    logger.info("Skipping inverted FK: missing hypertable carrier for %s", hyper)
                     continue
                 # Build FK kwargs: SET_NULL safe policy
                 from ..django.utils.serialization import RawCode

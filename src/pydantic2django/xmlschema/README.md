@@ -211,8 +211,9 @@ pip install pydantic2django[xmlschema]
 2. **Schema Imports**: Limited support for cross-schema references
 3. **Choice Groups**: Mapped to individual optional fields (may not preserve exact semantics)
 4. **Mixed Content**: Limited support for elements with mixed text/element content
-5. **Substitution Groups**: Not currently supported
-6. **Complex Constraints**: Advanced restrictions may need custom Django validators
+5. **Substitution Groups**: Supported with basic expansion of substitution heads to member elements during particle parsing
+6. **Attribute Groups**: Supported; named groups are flattened into complex types (including within extensions and simpleContent)
+7. **Complex Constraints**: Advanced restrictions may need custom Django validators
 
 ### Future Enhancements
 
