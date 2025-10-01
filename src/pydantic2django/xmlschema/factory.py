@@ -320,6 +320,24 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 # Single nested complex element
                 if strategy == "json" or not allowed:
                     return self._make_json_field_kwargs(element)
+
+                # Heuristic: Treat TitleCase wrapper element names as container wrappers
+                # and prefer child_fk direction when list_relationship_style == "child_fk".
+                # This preserves existing behavior for typical lower-case element names
+                # (e.g., 'child') that should remain parent-side FK.
+                is_wrapper_like = bool(element.name[:1].isupper())
+                if self.list_relationship_style == "child_fk" and is_wrapper_like:
+                    pending = carrier.context_data.setdefault("_pending_child_fk", [])
+                    pending.append(
+                        {
+                            "child": target_type_name,
+                            "parent": getattr(carrier.source_model, "__name__", model_name),
+                            "element_name": element.name,
+                        }
+                    )
+                    # No concrete field on parent
+                    return None, {}
+
                 # FK on parent to child, unless hypertable -> hypertable
                 roles = carrier.context_data.get("_timescale_roles", {})
                 src_name = str(getattr(carrier.source_model, "__name__", model_name))
