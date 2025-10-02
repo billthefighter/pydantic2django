@@ -44,6 +44,14 @@ class ConversionCarrier(Generic[SourceModelType]):
     context_data: dict[str, Any] = field(default_factory=dict)
     # Stores (original_field_name, union_details_dict) for multi-FK unions
     pending_multi_fk_unions: list[tuple[str, dict]] = field(default_factory=list)
+    # --- GFK mode support ---
+    enable_gfk: bool = False
+    gfk_policy: str | None = None
+    gfk_threshold_children: int | None = None
+    gfk_value_mode: str | None = None
+    gfk_normalize_common_attrs: bool = False
+    # Mark children that should be represented as GenericEntry rows
+    pending_gfk_children: list[dict[str, Any]] = field(default_factory=list)
     invalid_fields: list[tuple[str, str]] = field(default_factory=list)
     django_meta_class: Optional[type] = None
     django_model: Optional[type[models.Model]] = None  # Changed from DjangoModelType

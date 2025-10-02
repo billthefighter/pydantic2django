@@ -42,6 +42,12 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         packages: list[str] | None = None,
         class_name_prefix: str = "Django",
         enable_timescale: bool = True,
+        # --- GFK flags ---
+        enable_gfk: bool = True,
+        gfk_policy: str | None = "threshold_by_children",
+        gfk_threshold_children: int | None = 8,
+        gfk_value_mode: str | None = "typed_columns",
+        gfk_normalize_common_attrs: bool = False,
     ):
         """
         Initialize the base generator.
@@ -72,6 +78,12 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         self.carriers: list[ConversionCarrier[SourceModelType]] = []  # Stores results from model factory
         # Feature flags
         self.enable_timescale: bool = bool(enable_timescale)
+        # GFK feature flags
+        self.enable_gfk: bool = bool(enable_gfk)
+        self.gfk_policy: str | None = gfk_policy
+        self.gfk_threshold_children: int | None = gfk_threshold_children
+        self.gfk_value_mode: str | None = gfk_value_mode
+        self.gfk_normalize_common_attrs: bool = bool(gfk_normalize_common_attrs)
 
         self.import_handler = ImportHandler(module_mappings=module_mappings)
 
@@ -234,6 +246,12 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
             class_name_prefix=self.class_name_prefix,
             # Add other defaults/configs if needed, e.g., strict mode
             strict=False,  # Example default
+            # GFK flags
+            enable_gfk=self.enable_gfk,
+            gfk_policy=self.gfk_policy,
+            gfk_threshold_children=self.gfk_threshold_children,
+            gfk_value_mode=self.gfk_value_mode,
+            gfk_normalize_common_attrs=self.gfk_normalize_common_attrs,
         )
 
         try:

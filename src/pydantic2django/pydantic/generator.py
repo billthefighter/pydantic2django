@@ -58,6 +58,12 @@ class StaticPydanticModelGenerator(
         # Inject mapper instead?
         bidirectional_mapper_instance: Optional[BidirectionalTypeMapper] = None,
         enable_timescale: bool = True,
+        # --- GFK flags ---
+        enable_gfk: bool = True,
+        gfk_policy: str | None = "threshold_by_children",
+        gfk_threshold_children: int | None = 8,
+        gfk_value_mode: str | None = "typed_columns",
+        gfk_normalize_common_attrs: bool = False,
     ):
         # 1. Initialize Pydantic-specific discovery
         # Use provided instance or create a default one
@@ -90,6 +96,11 @@ class StaticPydanticModelGenerator(
             base_model_class=self._get_default_base_model_class(),
             # Jinja setup is handled by base class
             enable_timescale=enable_timescale,
+            enable_gfk=enable_gfk,
+            gfk_policy=gfk_policy,
+            gfk_threshold_children=gfk_threshold_children,
+            gfk_value_mode=gfk_value_mode,
+            gfk_normalize_common_attrs=gfk_normalize_common_attrs,
         )
 
         # 6. Pydantic-specific Jinja setup or context generator
@@ -268,6 +279,7 @@ class StaticPydanticModelGenerator(
         model_definitions = []  # Store generated Django model definition strings
         django_model_names = []  # Store generated Django model names for __all__
         context_only_models = []  # Track Pydantic models yielding only context
+        gfk_used = False
 
         # 3. Setup Django models (populates self.carriers via base method calling factory)
         for source_model in models_to_process:
@@ -278,6 +290,23 @@ class StaticPydanticModelGenerator(
             model_name = self._get_source_model_name(carrier)  # Pydantic model name
 
             try:
+                # --- GFK finalize hook: inject GenericRelation on parents ---
+                if getattr(carrier, "enable_gfk", False) and getattr(carrier, "pending_gfk_children", None):
+                    # Ensure imports for contenttypes
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+                    self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+
+                    # Inject a GenericRelation field into the parent model definition strings
+                    # Field name 'entries' for reverse access
+                    try:
+                        carrier.django_field_definitions[
+                            "entries"
+                        ] = "GenericRelation('GenericEntry', related_query_name='entries')"
+                    except Exception:
+                        pass
+                    gfk_used = True
+
                 django_model_def = ""
                 django_model_name_cleaned = ""
 
@@ -349,6 +378,11 @@ class StaticPydanticModelGenerator(
                 f"Skipped Django definitions for {len(context_only_models)} models with only context fields: {', '.join(context_only_models)}"
             )
 
+        # If GFK is used anywhere, emit GenericEntry model once per file
+        if gfk_used:
+            model_definitions.append(self._build_generic_entry_model_definition())
+            django_model_names.append("'GenericEntry'")
+
         # 6. Deduplicate Definitions (Django models only, context defs deduplicated by name during loop)
         unique_model_definitions = self._deduplicate_definitions(model_definitions)  # Use base method
 
@@ -372,6 +406,56 @@ class StaticPydanticModelGenerator(
         # 10. Render the main template
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(**template_context)
+
+    def _build_generic_entry_model_definition(self) -> str:
+        """Build the GenericEntry model definition string.
+
+        Uses contenttypes GenericForeignKey to attach to any parent model.
+        Includes common columns and optional typed value columns based on flags.
+        """
+        # Ensure imports present
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+        self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+
+        fields: list[str] = []
+        fields.append("content_type = models.ForeignKey('contenttypes.ContentType', on_delete=models.CASCADE)")
+        fields.append("object_id = models.PositiveIntegerField()")
+        fields.append("content_object = GenericForeignKey('content_type', 'object_id')")
+        fields.append("element_qname = models.CharField(max_length=255)")
+        fields.append("type_qname = models.CharField(max_length=255, null=True, blank=True)")
+        fields.append("attrs_json = models.JSONField(default=dict, blank=True)")
+        # Optional typed value columns if configured
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            fields.append("text_value = models.TextField(null=True, blank=True)")
+            fields.append("num_value = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)")
+            fields.append("time_value = models.DateTimeField(null=True, blank=True)")
+        fields.append("order_index = models.IntegerField(default=0)")
+        fields.append("path_hint = models.CharField(max_length=255, null=True, blank=True)")
+
+        # Build indexes list
+        indexes_lines = ["models.Index(fields=['content_type', 'object_id'])"]
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            indexes_lines.append("models.Index(fields=['element_qname'])")
+            indexes_lines.append("models.Index(fields=['type_qname'])")
+            indexes_lines.append("models.Index(fields=['time_value'])")
+            indexes_lines.append("models.Index(fields=['content_type', 'object_id', '-time_value'])")
+
+        # Compose class string
+        lines: list[str] = []
+        lines.append(f"class GenericEntry({self.base_model_class.__name__}):")
+        for f in fields:
+            lines.append(f"    {f}")
+        lines.append("")
+        lines.append("    class Meta:")
+        lines.append(f"        app_label = '{self.app_label}'")
+        lines.append("        abstract = False")
+        lines.append("        indexes = [")
+        for idx in indexes_lines:
+            lines.append(f"            {idx},")
+        lines.append("        ]")
+        lines.append("")
+        return "\n".join(lines)
 
     # Choose Timescale base per model (lazy roles computation)
     def setup_django_model(self, source_model: type[BaseModel]) -> ConversionCarrier | None:  # type: ignore[override]

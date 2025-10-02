@@ -25,6 +25,8 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime as _dt
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -569,6 +571,31 @@ class XmlInstanceIngestor:
                 continue
 
             if el_def.is_list:
+                # If the parent model exposes GenericRelation('entries'), persist as GenericEntry rows
+                try:
+                    has_entries = hasattr(instance, "entries")
+                except Exception:
+                    has_entries = False
+                if has_entries:
+                    try:
+                        GenericEntry = django_apps.get_model(f"{self.app_label}.GenericEntry")
+                    except Exception:
+                        GenericEntry = None
+                    if GenericEntry is not None:
+                        for idx, child_elem in enumerate(elements):
+                            entry_data_kwargs = self._build_generic_entry_kwargs(
+                                instance=instance,
+                                el_name=el_def.name,
+                                target_type_name=target_type_name,
+                                child_elem=child_elem,
+                                GenericEntry=GenericEntry,
+                                order_index=idx,
+                            )
+                            # Create entry row
+                            if self._save_objects:
+                                GenericEntry.objects.create(**entry_data_kwargs)
+                        # Skip concrete child instance creation when using GFK
+                        continue
                 # Default generation style 'child_fk': inject FK on child named after parent class in lowercase
                 parent_fk_field = instance.__class__.__name__.lower()
                 for child_elem in elements:
@@ -593,13 +620,48 @@ class XmlInstanceIngestor:
                         )
                 continue
 
-            # Single nested complex element: parent holds FK to child in default strategy
+            # Single nested complex element: either FK on parent or GFK entry (all_nested policy)
+            parent_fk_name = self._xml_name_to_django_field(el_def.name)
+            # If parent exposes entries and does NOT define a concrete FK field for this element, persist as GenericEntry
+            use_gfk_single = False
+            try:
+                has_entries = hasattr(instance, "entries")
+            except Exception:
+                has_entries = False
+            if has_entries:
+                try:
+                    model_field_names = {f.name for f in model_cls._meta.fields}
+                except Exception:
+                    model_field_names = set()
+                if parent_fk_name not in model_field_names:
+                    use_gfk_single = True
+
+            if use_gfk_single:
+                try:
+                    GenericEntry = django_apps.get_model(f"{self.app_label}.GenericEntry")
+                except Exception:
+                    GenericEntry = None
+                if GenericEntry is not None:
+                    child_elem = elements[0]
+                    single_entry_kwargs = self._build_generic_entry_kwargs(
+                        instance=instance,
+                        el_name=el_def.name,
+                        target_type_name=target_type_name,
+                        child_elem=child_elem,
+                        GenericEntry=GenericEntry,
+                        order_index=0,
+                    )
+                    if self._save_objects:
+                        GenericEntry.objects.create(**single_entry_kwargs)
+                # Skip concrete child instance creation
+                continue
+
+            # Default: create child instance and set FK on parent
             child_elem = elements[0]
             child_instance = self._build_instance_from_element(
                 child_elem, target_complex_type, target_model_cls, parent_instance=instance
             )
 
-            parent_fk_name = self._xml_name_to_django_field(el_def.name)
             # For proxy instances (non-Django), the attribute may not exist yet; set unconditionally
             try:
                 setattr(instance, parent_fk_name, child_instance)
@@ -613,6 +675,68 @@ class XmlInstanceIngestor:
                 )
 
         return instance
+
+    @staticmethod
+    def _build_generic_entry_kwargs(
+        *,
+        instance: Any,
+        el_name: str,
+        target_type_name: str | None,
+        child_elem: Any,
+        GenericEntry: Any,
+        order_index: int,
+    ) -> dict[str, Any]:
+        """Build keyword args for creating a GenericEntry from an XML child element.
+
+        Parses attributes and element text. When the GenericEntry model defines typed
+        value columns, attempts to parse numeric and ISO8601 datetime values.
+        """
+        entry_attrs_json: dict[str, Any] = {}
+        try:
+            for k, v in getattr(child_elem, "attrib", {}).items():
+                entry_attrs_json[k] = v
+        except Exception:
+            pass
+
+        entry_kwargs: dict[str, Any] = {
+            "content_object": instance,
+            "element_qname": el_name,
+            "type_qname": target_type_name or None,
+            "attrs_json": entry_attrs_json,
+            "order_index": order_index,
+            "path_hint": el_name,
+        }
+
+        # Handle text value
+        try:
+            text_val = getattr(child_elem, "text", None)
+        except Exception:
+            text_val = None
+        if text_val and str(text_val).strip() != "":
+            raw = str(text_val).strip()
+            # If GenericEntry defines typed columns, attempt parse to numeric/time
+            has_text_col = False
+            try:
+                has_text_col = hasattr(GenericEntry, "_meta") and any(
+                    f.name == "text_value" for f in GenericEntry._meta.fields
+                )
+            except Exception:
+                has_text_col = False
+            if has_text_col:
+                entry_kwargs["text_value"] = raw
+                try:
+                    entry_kwargs["num_value"] = Decimal(raw)
+                except Exception:
+                    pass
+                try:
+                    iso = raw.replace("Z", "+00:00")
+                    entry_kwargs["time_value"] = _dt.fromisoformat(iso)
+                except Exception:
+                    pass
+            else:
+                entry_attrs_json["value"] = raw
+
+        return entry_kwargs
 
     # --- Helpers ---
     def _resolve_root_complex_type(self, root_local_name: str) -> XmlSchemaComplexType | None:

@@ -45,7 +45,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         module_mappings: dict[str, str] | None = None,
         class_name_prefix: str = "",
         # Relationship handling for nested complex types
-        nested_relationship_strategy: str = "auto",  # one of: "fk", "json", "auto"
+        nested_relationship_strategy: str = "fk",  # one of: "fk", "json", "auto"
         list_relationship_style: str = "child_fk",  # one of: "child_fk", "m2m", "json"
         nesting_depth_threshold: int = 1,
         # Optional override for the Django base model class
@@ -58,6 +58,13 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         timescale_strict: bool = False,
         # Control behavior for missing leaf/child targets in finalize pass
         auto_generate_missing_leaves: bool = False,
+        # --- GFK flags ---
+        enable_gfk: bool = True,
+        gfk_policy: str | None = "threshold_by_children",
+        gfk_threshold_children: int | None = 8,
+        gfk_value_mode: str | None = "typed_columns",
+        gfk_normalize_common_attrs: bool = False,
+        gfk_overrides: dict[str, bool] | None = None,
     ):
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
@@ -65,6 +72,10 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             nested_relationship_strategy=nested_relationship_strategy,
             list_relationship_style=list_relationship_style,
             nesting_depth_threshold=nesting_depth_threshold,
+            enable_gfk=enable_gfk,
+            gfk_policy=gfk_policy,
+            gfk_threshold_children=gfk_threshold_children,
+            gfk_overrides=gfk_overrides,
         )
 
         super().__init__(
@@ -79,6 +90,11 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             verbose=verbose,
             filter_function=filter_function,
             enable_timescale=enable_timescale,
+            enable_gfk=enable_gfk,
+            gfk_policy=gfk_policy,
+            gfk_threshold_children=gfk_threshold_children,
+            gfk_value_mode=gfk_value_mode,
+            gfk_normalize_common_attrs=gfk_normalize_common_attrs,
         )
         # Timescale classification results cached per run
         self._timescale_roles: dict[str, TimescaleRole] = {}
@@ -288,6 +304,91 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         """
         # Discover and create carriers first via base implementation pieces
         self.discover_models()
+        # --- GFK Prepass: when enabled, identify wrapper owners and exclude their polymorphic children ---
+        if getattr(self, "enable_gfk", False) and getattr(self, "gfk_policy", None):
+            try:
+                excluded_child_types: set[str] = set()
+                gfk_owner_wrappers: set[str] = set()
+                policy = str(getattr(self, "gfk_policy", ""))
+                threshold_val = int(getattr(self, "gfk_threshold_children", 0) or 0)
+                # Walk parsed schemas to infer wrapper owners and their child types
+                for schema_def in getattr(self.discovery_instance, "parsed_schemas", []) or []:
+                    try:
+                        for ct in schema_def.get_all_complex_types():
+                            # Iterate elements of each complex type
+                            for el in ct.elements:
+                                # Only interested in complex targets
+                                if not el.type_name or el.base_type is not None:
+                                    continue
+                                target_type = el.type_name.split(":")[-1]
+                                target_ct = schema_def.complex_types.get(target_type)
+                                if not target_ct:
+                                    continue
+                                # Wrapper-like heuristic
+                                is_wrapper_like = bool(el.name[:1].isupper()) or str(target_type).endswith(
+                                    "WrapperType"
+                                )
+                                # Collect distinct child complex types under target wrapper
+                                distinct_child_types: set[str] = set()
+                                has_substitution_members = False
+                                repeating_leaf_child: str | None = None
+                                for child_el in target_ct.elements:
+                                    if getattr(child_el, "substitution_group", None):
+                                        has_substitution_members = True
+                                    if getattr(child_el, "type_name", None):
+                                        cand = child_el.type_name.split(":")[-1]
+                                        if cand:
+                                            distinct_child_types.add(cand)
+                                    if getattr(child_el, "is_list", False) and getattr(child_el, "type_name", None):
+                                        repeating_leaf_child = child_el.type_name.split(":")[-1]
+
+                                # Decide based on policy
+                                route_by_subst = (
+                                    policy == "substitution_only" and is_wrapper_like and has_substitution_members
+                                )
+                                route_by_all_nested = policy == "all_nested" and is_wrapper_like
+                                route_by_threshold = (
+                                    policy == "threshold_by_children"
+                                    and is_wrapper_like
+                                    and (threshold_val <= 0 or len(distinct_child_types) >= threshold_val)
+                                )
+                                route_by_repeating = policy == "repeating_only" and bool(el.is_list)
+
+                                if route_by_subst or route_by_all_nested or route_by_threshold or route_by_repeating:
+                                    # Mark wrapper as owner so placeholders are suppressed later
+                                    gfk_owner_wrappers.add(target_type)
+                                    # Exclude polymorphic children under this wrapper from concrete generation
+                                    if el.is_list and repeating_leaf_child:
+                                        excluded_child_types.add(repeating_leaf_child)
+                                    # Also exclude distinct child complex types observed under the wrapper
+                                    excluded_child_types.update({t for t in distinct_child_types if t})
+                    except Exception:
+                        continue  # best-effort per schema
+
+                # Filter discovery output to remove excluded children, keeping wrappers/parents
+                try:
+                    # filtered_models is a mapping of qualname -> complex_type
+                    fm = dict(getattr(self.discovery_instance, "filtered_models", {}) or {})
+                    if fm and excluded_child_types:
+                        new_fm = {k: v for k, v in fm.items() if getattr(v, "name", None) not in excluded_child_types}
+                        self.discovery_instance.filtered_models = new_fm  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                # Share exclusions and owner marks with the field factory for intra-model decisions
+                try:
+                    ff = getattr(self.model_factory_instance, "field_factory", None)
+                    if ff is not None:
+                        ff._gfk_excluded_child_types = excluded_child_types
+                        # Seed owner names to suppress JSON placeholders for wrapper children
+                        owner_names = set(getattr(ff, "_gfk_owner_names", set()))
+                        owner_names.update(gfk_owner_wrappers)
+                        ff._gfk_owner_names = owner_names
+                except Exception:
+                    pass
+            except Exception:
+                # Prepass is best-effort and should never crash generation
+                pass
         # Inform the field factory which models are actually included so it can
         # avoid generating relations to filtered-out models (fallback to JSON).
         try:
@@ -302,6 +403,13 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             included_names = included_local_names | included_qualified_keys
             # type: ignore[attr-defined]
             self.model_factory_instance.field_factory.included_model_names = included_names  # noqa: E501
+            # Also pass through any GFK prepass exclusions to the field factory if not already set
+            try:
+                ff = self.model_factory_instance.field_factory
+                if not getattr(ff, "_gfk_excluded_child_types", None):
+                    ff._gfk_excluded_child_types = set()
+            except Exception:
+                pass
         except Exception:
             pass
         models_to_process = self._get_models_in_processing_order()
@@ -354,6 +462,40 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             except Exception as e:
                 logger.error(f"Error finalizing XML relationships: {e}")
 
+        # Inject GenericRelation on parents when GFK is enabled and pending children exist
+        gfk_used = False
+        try:
+            for carrier in self.carriers:
+                if getattr(carrier, "enable_gfk", False) and getattr(carrier, "pending_gfk_children", None):
+                    # Ensure contenttypes imports
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+                    self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+                    # Add reverse relation field on parent model
+                    carrier.django_field_definitions[
+                        "entries"
+                    ] = "GenericRelation('GenericEntry', related_query_name='entries')"
+                    gfk_used = True
+        except Exception:
+            pass
+
+        # Optional diagnostics: summarize GFK routing per parent
+        try:
+            if gfk_used and getattr(self, "verbose", False):
+                summary: dict[str, int] = {}
+                for carrier in self.carriers:
+                    for entry in getattr(carrier, "pending_gfk_children", []) or []:
+                        owner = str(entry.get("owner") or getattr(carrier.source_model, "name", ""))
+                        summary[owner] = summary.get(owner, 0) + 1
+                if summary:
+                    try:
+                        details = ", ".join(f"{k}:{v}" for k, v in sorted(summary.items()))
+                        logger.info(f"[GFK] Routed children counts by owner: {details}")
+                    except Exception:
+                        logger.info("[GFK] Routed children counts by owner available")
+        except Exception:
+            pass
+
         # Register generated model classes for in-memory lookup by ingestors
         try:
             for carrier in self.carriers:
@@ -398,6 +540,11 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         f"Error generating definition for source model {getattr(carrier.source_model, '__name__', '?')}: {e}",
                         exc_info=True,
                     )
+
+        # If GFK used, append GenericEntry model definition and include in __all__
+        if gfk_used:
+            model_definitions.append(self._build_generic_entry_model_definition())
+            django_model_names.append("'GenericEntry'")
 
         unique_model_definitions = self._deduplicate_definitions(model_definitions)
         # Ensure that every advertised model name in __all__ has a corresponding class definition.
@@ -468,6 +615,49 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(**template_context)
 
+    def _build_generic_entry_model_definition(self) -> str:
+        """Build the GenericEntry model definition string for XMLSchema generation."""
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+        self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+
+        fields: list[str] = []
+        fields.append("content_type = models.ForeignKey('contenttypes.ContentType', on_delete=models.CASCADE)")
+        fields.append("object_id = models.PositiveIntegerField()")
+        fields.append("content_object = GenericForeignKey('content_type', 'object_id')")
+        fields.append("element_qname = models.CharField(max_length=255)")
+        fields.append("type_qname = models.CharField(max_length=255, null=True, blank=True)")
+        fields.append("attrs_json = models.JSONField(default=dict, blank=True)")
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            fields.append("text_value = models.TextField(null=True, blank=True)")
+            fields.append("num_value = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)")
+            fields.append("time_value = models.DateTimeField(null=True, blank=True)")
+        fields.append("order_index = models.IntegerField(default=0)")
+        fields.append("path_hint = models.CharField(max_length=255, null=True, blank=True)")
+
+        indexes_lines = ["models.Index(fields=['content_type', 'object_id'])"]
+        # Optional indexes when typed value columns are enabled
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            indexes_lines.append("models.Index(fields=['element_qname'])")
+            indexes_lines.append("models.Index(fields=['type_qname'])")
+            indexes_lines.append("models.Index(fields=['time_value'])")
+            indexes_lines.append("models.Index(fields=['content_type', 'object_id', '-time_value'])")
+
+        lines: list[str] = []
+        lines.append(f"class GenericEntry({self.base_model_class.__name__}):")
+        for f in fields:
+            lines.append(f"    {f}")
+        lines.append("")
+        lines.append("    class Meta:")
+        lines.append(f"        app_label = '{self.app_label}'")
+        lines.append("        abstract = False")
+        lines.append("        indexes = [")
+        for idx in indexes_lines:
+            lines.append(f"            {idx},")
+        lines.append("        ]")
+        lines.append("")
+        return "\n".join(lines)
+
     # Override to choose Timescale base per model and pass roles map to factory
     def setup_django_model(self, source_model: XmlSchemaComplexType) -> ConversionCarrier | None:  # type: ignore[override]
         source_model_name = getattr(source_model, "__name__", getattr(source_model, "name", str(source_model)))
@@ -490,6 +680,11 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             base_django_model=base_class,
             class_name_prefix=self.class_name_prefix,
             strict=False,
+            enable_gfk=self.enable_gfk,
+            gfk_policy=self.gfk_policy,
+            gfk_threshold_children=self.gfk_threshold_children,
+            gfk_value_mode=self.gfk_value_mode,
+            gfk_normalize_common_attrs=self.gfk_normalize_common_attrs,
         )
 
         # Make roles map available to field factory for FK decisions

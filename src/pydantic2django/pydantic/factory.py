@@ -114,12 +114,46 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
             # --- Check for Multi-FK Union Signal --- #
             union_details = constructor_kwargs.pop("_union_details", None)
             if union_details and isinstance(union_details, dict):
+                # If GFK mode is enabled and policy says to use it, record as pending GFK child
+                if getattr(carrier, "enable_gfk", False) and self._should_route_to_gfk(union_details, carrier):
+                    logger.info(
+                        f"[GFK] Routing union field '{field_name}' on '{model_name}' to GenericEntry (policy={carrier.gfk_policy})."
+                    )
+                    carrier.pending_gfk_children.append(
+                        {
+                            "field_name": field_name,
+                            "union_details": union_details,
+                            "model_name": model_name,
+                        }
+                    )
+                    # Do not generate a concrete field for this union
+                    return result
+                # Otherwise, fall back to existing multi-FK behavior
                 logger.info(f"Detected multi-FK union signal for '{field_name}'. Deferring field generation.")
                 # Store the original field name and the details for the generator
                 carrier.pending_multi_fk_unions.append((field_name, union_details))
-                # Store remaining kwargs (null, blank for placeholder) in raw_kwargs if needed? Already done.
-                # Do not set django_field or field_definition_str
                 return result  # Return early, deferring generation
+
+            # --- Check for GFK placeholder signal from mapper --- #
+            gfk_details = constructor_kwargs.pop("_gfk_details", None)
+            if gfk_details and isinstance(gfk_details, dict):
+                if getattr(carrier, "enable_gfk", False):
+                    logger.info(
+                        f"[GFK] Mapper signaled GFK for '{field_name}' on '{model_name}'. Recording as pending GFK child."
+                    )
+                    carrier.pending_gfk_children.append(
+                        {
+                            "field_name": field_name,
+                            "gfk_details": gfk_details,
+                            "model_name": model_name,
+                        }
+                    )
+                    # Do not generate a concrete field
+                    return result
+                else:
+                    logger.warning(
+                        f"Received _gfk_details for '{field_name}' but enable_gfk is False. Falling back to JSON field."
+                    )
 
             # --- Handle Relationships Specifically (Adjust Kwargs) --- #
             # Check if it's a relationship type *after* getting mapping AND checking for union signal
@@ -227,6 +261,26 @@ class PydanticFieldFactory(BaseFieldFactory[FieldInfo]):
             result.error_str = error_msg
             result.context_field = field_info  # Fallback to context
             return result
+
+    def _should_route_to_gfk(self, union_details: dict, carrier: ConversionCarrier[type[BaseModel]]) -> bool:
+        """Return True if this union field should be handled via GFK based on carrier policy.
+
+        For now, support simple policies:
+        - "all_nested": always route
+        - "threshold_by_children": route when number of union models >= gfk_threshold_children
+        Otherwise: False.
+        """
+        try:
+            policy = (carrier.gfk_policy or "").strip()
+            if policy == "all_nested":
+                return True
+            if policy == "threshold_by_children":
+                threshold = carrier.gfk_threshold_children or 0
+                models_in_union = len(union_details.get("models", []) or [])
+                return models_in_union >= threshold if threshold > 0 else False
+        except Exception:
+            pass
+        return False
 
     def _generate_field_def_string(self, result: FieldConversionResult, app_label: str) -> str:
         """Generates the field definition string safely."""
@@ -370,7 +424,7 @@ class PydanticModelFactory(BaseModelFactory[type[BaseModel], FieldInfo]):
         source_model = carrier.source_model
         model_name = source_model.__name__
 
-        for field_name_original, field_info in get_model_fields(source_model).items():
+        for field_name_original, field_info in get_model_fields(cast(type[BaseModel], source_model)).items():
             field_name = field_info.alias or field_name_original
 
             # Normalize the output Django field identifier consistently with XML/dataclass

@@ -67,6 +67,11 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         nesting_depth_threshold: int = 1,
         included_model_names: set[str] | None = None,
         invert_fk_to_timescale: bool = True,
+        # --- GFK flags ---
+        enable_gfk: bool = False,
+        gfk_policy: str | None = None,
+        gfk_threshold_children: int | None = None,
+        gfk_overrides: dict[str, bool] | None = None,
     ):
         super().__init__()
         self.nested_relationship_strategy = nested_relationship_strategy
@@ -80,6 +85,25 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         self.invert_fk_to_timescale = invert_fk_to_timescale
         # Track per-target related_names to avoid collisions for keyref-based FKs
         self._target_related_names: dict[str, set[str]] = {}
+        # GFK flags
+        self.enable_gfk = bool(enable_gfk)
+        self.gfk_policy = gfk_policy
+        self.gfk_threshold_children = gfk_threshold_children
+        self.gfk_overrides = gfk_overrides or {}
+        # Track wrapper-like owner types that should route children via GFK
+        self._gfk_owner_names: set[str] = set()
+        # Track child complex types that should be excluded from concrete generation when routed via GFK
+        self._gfk_excluded_child_types: set[str] = set()
+
+    def _gfk_override_for(self, element_name: str) -> bool | None:
+        """Return override decision for an element if provided.
+
+        True = force GFK, False = disable GFK, None = no override.
+        """
+        try:
+            return self.gfk_overrides.get(str(element_name))
+        except Exception:
+            return None
 
     def create_field(
         self, field_info: XmlSchemaFieldInfo, model_name: str, carrier: ConversionCarrier[XmlSchemaComplexType]
@@ -295,13 +319,17 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
             allowed = True
             if self.included_model_names is not None and target_type_name not in self.included_model_names:
                 allowed = False
+            # If prepass marked this child type as GFK-excluded, disallow relations to it
+            try:
+                if target_type_name in getattr(self, "_gfk_excluded_child_types", set()):
+                    allowed = False
+            except Exception:
+                pass
 
             if allowed:
                 strategy = self._decide_nested_strategy(current_depth=1)
                 # Repeating complex elements
                 if element.is_list:
-                    if strategy == "json" or self.list_relationship_style == "json" or not allowed:
-                        return self._make_json_field_kwargs(element)
                     # Attempt to resolve leaf repeated complex type inside the wrapper
                     leaf_child: str | None = None
                     if schema_def and target_type_name in schema_def.complex_types:
@@ -312,6 +340,35 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                                 if cand:
                                     leaf_child = cand
                                     break
+                    # If GFK policy applies, prefer GFK routing even when JSON strategy or child type not included
+                    if self.enable_gfk and (
+                        self.gfk_policy
+                        in {"repeating_only", "all_nested", "threshold_by_children", "substitution_only"}
+                    ):
+                        ovr = self._gfk_override_for(element.name)
+                        if ovr is not False:
+                            owner_name = getattr(carrier.source_model, "name", None) or getattr(
+                                carrier.source_model, "__name__", model_name
+                            )
+                            carrier.pending_gfk_children.append(
+                                {
+                                    "child": (leaf_child or target_type_name),
+                                    "owner": owner_name,
+                                    "element_name": element.name,
+                                }
+                            )
+                            # Ensure this child complex type is excluded from concrete generation
+                            try:
+                                if leaf_child:
+                                    self._gfk_excluded_child_types.add(leaf_child)
+                                else:
+                                    self._gfk_excluded_child_types.add(target_type_name)
+                            except Exception:
+                                pass
+                            return None, {}
+                    # Otherwise fall back to JSON when configured or child not allowed
+                    if strategy == "json" or self.list_relationship_style == "json" or not allowed:
+                        return self._make_json_field_kwargs(element)
                     if self.list_relationship_style == "m2m" and leaf_child:
                         kwargs = {"to": f"{carrier.meta_app_label}.{leaf_child}", "blank": True}
                         return models.ManyToManyField, kwargs
@@ -333,19 +390,24 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     return self._make_json_field_kwargs(element) if strategy == "json" else (None, {})
 
                 # Single nested complex element
-                if strategy == "json" or not allowed:
-                    return self._make_json_field_kwargs(element)
-
-                # Inspect the target complex type for repeating children
+                # Inspect the target complex type for repeating children and total distinct child complex types
                 repeating_child_type: str | None = None
+                distinct_child_types: set[str] = set()
+                has_substitution_members: bool = False
                 if schema_def and target_type_name in schema_def.complex_types:
                     target_ct = schema_def.complex_types[target_type_name]
                     for child_el in target_ct.elements:
+                        if getattr(child_el, "substitution_group", None):
+                            has_substitution_members = True
+                        if child_el.type_name:
+                            cand = child_el.type_name.split(":")[-1]
+                            if cand:
+                                distinct_child_types.add(cand)
                         if getattr(child_el, "is_list", False) and child_el.type_name:
                             cand = child_el.type_name.split(":")[-1]
                             if cand and schema_def.complex_types.get(cand):
                                 repeating_child_type = cand
-                                break
+                                # Do not break here to continue counting distinct types
 
                 # If configured for M2M and wrapper contains repeating complex children, emit M2M to the leaf
                 if self.list_relationship_style == "m2m" and repeating_child_type:
@@ -357,7 +419,129 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                 #  - Element name is TitleCase (e.g., 'Samples', 'Events'), OR
                 #  - Target type name ends with 'WrapperType'
                 is_wrapper_like = bool(element.name[:1].isupper()) or str(target_type_name).endswith("WrapperType")
+                # If GFK policy applies, handle before JSON fallback and child inclusion checks
+                if self.enable_gfk and (
+                    self.gfk_policy in {"repeating_only", "all_nested", "threshold_by_children", "substitution_only"}
+                ):
+                    ovr = self._gfk_override_for(element.name)
+                    # threshold_by_children gate unless override forces True
+                    meets_threshold = True
+                    if self.gfk_policy == "threshold_by_children" and ovr is not True:
+                        try:
+                            threshold = int(self.gfk_threshold_children or 0)
+                        except Exception:
+                            threshold = 0
+                        meets_threshold = threshold <= 0 or len(distinct_child_types) >= threshold
+                    # substitution_only: require wrapper-like and presence of substitution members
+                    policy_allows = False
+                    if self.gfk_policy == "all_nested":
+                        policy_allows = True if is_wrapper_like else False
+                    elif self.gfk_policy == "substitution_only":
+                        policy_allows = bool(is_wrapper_like and has_substitution_members)
+                    elif self.gfk_policy == "threshold_by_children":
+                        policy_allows = bool(is_wrapper_like and meets_threshold)
+                    elif self.gfk_policy == "repeating_only":
+                        policy_allows = False  # handled in repeating branch
+
+                    if ovr is not False and policy_allows:
+                        owner_name = getattr(carrier.source_model, "name", None) or getattr(
+                            carrier.source_model, "__name__", model_name
+                        )
+                        if repeating_child_type:
+                            carrier.pending_gfk_children.append(
+                                {"child": repeating_child_type, "owner": owner_name, "element_name": element.name}
+                            )
+                        carrier.pending_gfk_children.append(
+                            {"child": target_type_name, "owner": owner_name, "element_name": element.name}
+                        )
+                        # Mark the target wrapper as a GFK owner so its children route to entries
+                        try:
+                            if isinstance(target_type_name, str) and target_type_name:
+                                self._gfk_owner_names.add(target_type_name)
+                                # Exclude observed child complex types from concrete generation
+                                for t in distinct_child_types:
+                                    if t:
+                                        self._gfk_excluded_child_types.add(t)
+                        except Exception:
+                            pass
+                        return None, {}
+
+                # If current model is a known GFK owner wrapper, suppress JSON placeholders for its child elements
+                try:
+                    current_name = getattr(carrier.source_model, "name", None) or getattr(
+                        carrier.source_model, "__name__", model_name
+                    )
+                except Exception:
+                    current_name = model_name
+
+                if current_name in getattr(self, "_gfk_owner_names", set()):
+                    return None, {}
+
+                if strategy == "json" or not allowed:
+                    return self._make_json_field_kwargs(element)
+
                 if self.list_relationship_style == "child_fk" and is_wrapper_like:
+                    # If GFK enabled and policy applies to wrappers, record GFK entries
+                    if self.enable_gfk and (
+                        self.gfk_policy
+                        in {"repeating_only", "all_nested", "threshold_by_children", "substitution_only"}
+                    ):
+                        ovr = self._gfk_override_for(element.name)
+                        # threshold_by_children: only apply if wrapper has enough distinct child complex types (unless override True)
+                        if self.gfk_policy == "threshold_by_children" and ovr is not True:
+                            try:
+                                threshold = int(self.gfk_threshold_children or 0)
+                            except Exception:
+                                threshold = 0
+                            meets_threshold = threshold <= 0 or len(distinct_child_types) >= threshold
+                            if not meets_threshold:
+                                # Fall back to default behavior when threshold not met
+                                pending = carrier.context_data.setdefault("_pending_child_fk", [])
+                                if repeating_child_type:
+                                    pending.append(
+                                        {
+                                            "child": repeating_child_type,
+                                            "parent": (
+                                                getattr(carrier.source_model, "name", None)
+                                                or getattr(carrier.source_model, "__name__", model_name)
+                                            ),
+                                            "element_name": element.name,
+                                            "allow_collapse": False,
+                                        }
+                                    )
+                                pending.append(
+                                    {
+                                        "child": target_type_name,
+                                        "parent": (
+                                            getattr(carrier.source_model, "name", None)
+                                            or getattr(carrier.source_model, "__name__", model_name)
+                                        ),
+                                        "element_name": element.name,
+                                        "allow_collapse": False,
+                                    }
+                                )
+                                return None, {}
+                        owner_name = getattr(carrier.source_model, "name", None) or getattr(
+                            carrier.source_model, "__name__", model_name
+                        )
+                        if repeating_child_type:
+                            carrier.pending_gfk_children.append(
+                                {"child": repeating_child_type, "owner": owner_name, "element_name": element.name}
+                            )
+                        # Also record the wrapper itself so ingestor can route single-nested wrapper to entries when needed
+                        carrier.pending_gfk_children.append(
+                            {"child": target_type_name, "owner": owner_name, "element_name": element.name}
+                        )
+                        # Exclude children for this wrapper from concrete generation
+                        try:
+                            if repeating_child_type:
+                                self._gfk_excluded_child_types.add(repeating_child_type)
+                            for t in distinct_child_types:
+                                if t:
+                                    self._gfk_excluded_child_types.add(t)
+                        except Exception:
+                            pass
+                        return None, {}
                     pending = carrier.context_data.setdefault("_pending_child_fk", [])
                     # If wrapper contains repeating complex children, also link the leaf child directly to this parent
                     if repeating_child_type:
@@ -385,6 +569,22 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     )
                     # No concrete field on parent
                     return None, {}
+
+                # If gfk_policy == 'all_nested' and not wrapper-like, route single nested through GFK as well
+                if self.enable_gfk and self.gfk_policy == "all_nested":
+                    ovr = self._gfk_override_for(element.name)
+                    if ovr is not False:
+                        owner_name = getattr(carrier.source_model, "name", None) or getattr(
+                            carrier.source_model, "__name__", model_name
+                        )
+                        carrier.pending_gfk_children.append(
+                            {"child": target_type_name, "owner": owner_name, "element_name": element.name}
+                        )
+                        try:
+                            self._gfk_excluded_child_types.add(target_type_name)
+                        except Exception:
+                            pass
+                        return None, {}
 
                 # FK on parent to child, unless hypertable -> hypertable
                 roles = carrier.context_data.get("_timescale_roles", {})
@@ -686,12 +886,21 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
         nested_relationship_strategy: str = "auto",
         list_relationship_style: str = "child_fk",
         nesting_depth_threshold: int = 1,
+        # --- GFK flags ---
+        enable_gfk: bool = False,
+        gfk_policy: str | None = None,
+        gfk_threshold_children: int | None = None,
+        gfk_overrides: dict[str, bool] | None = None,
     ):
         self.app_label = app_label
         self.field_factory = XmlSchemaFieldFactory(
             nested_relationship_strategy=nested_relationship_strategy,
             list_relationship_style=list_relationship_style,
             nesting_depth_threshold=nesting_depth_threshold,
+            enable_gfk=enable_gfk,
+            gfk_policy=gfk_policy,
+            gfk_threshold_children=gfk_threshold_children,
+            gfk_overrides=gfk_overrides,
         )
         # Track pending child FK relations to inject after all models exist
         self._pending_child_fk: list[dict] = []

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://example.com/subst" xmlns:tns="http://example.com/subst" elementFormDefault="qualified">
+
+  <!-- Base type for observation members -->
+  <xs:complexType name="ObservationBaseType">
+    <xs:sequence>
+      <xs:element name="value" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Wrapper that references a substitution head 'Observation' -->
+  <xs:complexType name="SamplesType">
+    <xs:sequence>
+      <xs:element name="Observation" type="tns:ObservationBaseType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Root that contains SamplesType wrapper -->
+  <xs:complexType name="RootType">
+    <xs:sequence>
+      <xs:element name="Samples" type="tns:SamplesType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Substitution group members under head 'Observation' -->
+  <xs:element name="Angle" type="tns:ObservationBaseType" substitutionGroup="tns:Observation"/>
+  <xs:element name="Position" type="tns:ObservationBaseType" substitutionGroup="tns:Observation"/>
+
+</xs:schema>

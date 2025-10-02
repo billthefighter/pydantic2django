@@ -122,6 +122,23 @@ class DataclassFieldFactory(BaseFieldFactory[dataclasses.Field]):
                 result.context_field = field_info
                 return result
 
+            # --- Handle GFK signal from mapper (List[Union[...]] of models) --- #
+            gfk_details = constructor_kwargs.pop("_gfk_details", None)
+            if gfk_details and isinstance(gfk_details, dict):
+                if getattr(carrier, "enable_gfk", False):
+                    logger.info(
+                        f"[GFK] (dataclass) Mapper signaled GFK for '{field_name}' on '{model_name}'. Recording as pending GFK child."
+                    )
+                    carrier.pending_gfk_children.append(
+                        {"field_name": field_name, "gfk_details": gfk_details, "model_name": model_name}
+                    )
+                    # Do not generate a concrete field
+                    return result
+                else:
+                    logger.warning(
+                        f"Received _gfk_details for '{field_name}' but enable_gfk is False. Falling back to JSON field."
+                    )
+
             # --- Merge Dataclass Metadata Overrides --- #
             # Apply explicit options from metadata *after* getting defaults from mapper
             constructor_kwargs.update(django_meta_options)

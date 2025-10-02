@@ -81,6 +81,8 @@ See `docs/how_it_works/xmlschema_notes.md` for current fidelity and planned enha
 
 ## Repeating content and containers (wrappers)
 
+Tip: For large polymorphic/repeating regions you can enable Generic Entries mode to store children as `GenericEntry` rows via Django ContentTypes. See `docs/how_it_works/generic_entries_contenttypes.md`.
+
 For elements containing repeated complex children:
 - Default style is `child_fk`: no concrete list field on the parent; instead, the child receives a `ForeignKey` to the parent during the finalize pass, and the parent accesses children via Django reverse relation. Related names are disambiguated when the same child appears under multiple parents.
 - `m2m` style: when configured and a leaf child type is identifiable, emit `ManyToManyField` from the parent to the leaf.

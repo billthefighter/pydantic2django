@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Optional
 
 from django.apps import apps as django_apps
@@ -45,6 +46,12 @@ class DataclassDjangoModelGenerator(
         relationship_accessor: Optional[RelationshipConversionAccessor] = None,  # Accept accessor
         module_mappings: Optional[dict[str, str]] = None,
         enable_timescale: bool = True,
+        # --- GFK flags ---
+        enable_gfk: bool = True,
+        gfk_policy: str | None = "threshold_by_children",
+        gfk_threshold_children: int | None = 8,
+        gfk_value_mode: str | None = "typed_columns",
+        gfk_normalize_common_attrs: bool = False,
     ):
         # 1. Initialize Dataclass-specific discovery
         self.dataclass_discovery_instance = discovery_instance or DataclassDiscovery()
@@ -79,6 +86,11 @@ class DataclassDjangoModelGenerator(
             module_mappings=module_mappings,
             base_model_class=self._get_default_base_model_class(),
             enable_timescale=enable_timescale,
+            enable_gfk=enable_gfk,
+            gfk_policy=gfk_policy,
+            gfk_threshold_children=gfk_threshold_children,
+            gfk_value_mode=gfk_value_mode,
+            gfk_normalize_common_attrs=gfk_normalize_common_attrs,
         )
         logger.info("DataclassDjangoModelGenerator initialized using BaseStaticGenerator.")
         # Timescale classification results cached per run (name -> role)
@@ -229,20 +241,111 @@ class DataclassDjangoModelGenerator(
                 "typed2django.django.models.Dataclass2DjangoBaseClass is required for Dataclass generation."
             ) from exc
 
-    # --- Potentially Override generate_models_file if needed ---
-    # For dataclasses, the base generate_models_file might be sufficient as there's no
-    # separate context class generation step like in Pydantic.
-    # If specific logic is needed (e.g., different handling of empty models), override it.
-    # For now, assume base class implementation is okay.
+    def generate_models_file(self) -> str:
+        """Generate models for dataclasses with GFK finalize hook."""
+        self.discover_models()
+        models_to_process = self._get_models_in_processing_order()
 
-    # def generate_models_file(self) -> str:
-    #     """ Override if Dataclass generation needs specific steps. """
-    #     # 1. Call super().generate_models_file() to get base content
-    #     # content = super().generate_models_file()
-    #     # 2. Modify content if needed
-    #     # return modified_content
-    #     # OR: Reimplement the loop with dataclass specific logic
-    #     pass # Using base class version
+        # Reset imports and state
+        self.carriers = []
+        self.import_handler.extra_type_imports.clear()
+        self.import_handler.pydantic_imports.clear()
+        self.import_handler.context_class_imports.clear()
+        self.import_handler.imported_names.clear()
+        self.import_handler.processed_field_types.clear()
+        self.import_handler._add_type_import(self.base_model_class)
+
+        # Setup carriers
+        for source_model in models_to_process:
+            self.setup_django_model(source_model)
+
+        # GFK finalize: inject GenericRelation on parents
+        gfk_used = False
+        for carrier in self.carriers:
+            try:
+                if getattr(carrier, "enable_gfk", False) and getattr(carrier, "pending_gfk_children", None):
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+                    self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+                    self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+                    carrier.django_field_definitions[
+                        "entries"
+                    ] = "GenericRelation('GenericEntry', related_query_name='entries')"
+                    gfk_used = True
+            except Exception:
+                pass
+
+        # Render model definitions
+        model_definitions: list[str] = []
+        django_model_names: list[str] = []
+        for carrier in self.carriers:
+            if carrier.django_model:
+                try:
+                    model_def = self.generate_model_definition(carrier)
+                    if model_def:
+                        model_definitions.append(model_def)
+                        django_model_names.append(f"'{self._clean_generic_type(carrier.django_model.__name__)}'")
+                except Exception:
+                    pass
+
+        if gfk_used:
+            model_definitions.append(self._build_generic_entry_model_definition())
+            django_model_names.append("'GenericEntry'")
+
+        unique_model_definitions = self._deduplicate_definitions(model_definitions)
+        imports = self.import_handler.deduplicate_imports()
+        template_context = self._prepare_template_context(unique_model_definitions, django_model_names, imports)
+        template_context.update(
+            {
+                "generation_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "base_model_module": self.base_model_class.__module__,
+                "base_model_name": self.base_model_class.__name__,
+                "extra_type_imports": sorted(self.import_handler.extra_type_imports),
+            }
+        )
+        template = self.jinja_env.get_template("models_file.py.j2")
+        return template.render(**template_context)
+
+    def _build_generic_entry_model_definition(self) -> str:
+        """Build the GenericEntry model definition for dataclass generation."""
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericForeignKey")
+        self.import_handler.add_import("django.contrib.contenttypes.fields", "GenericRelation")
+        self.import_handler.add_import("django.contrib.contenttypes.models", "ContentType")
+
+        fields: list[str] = []
+        fields.append("content_type = models.ForeignKey('contenttypes.ContentType', on_delete=models.CASCADE)")
+        fields.append("object_id = models.PositiveIntegerField()")
+        fields.append("content_object = GenericForeignKey('content_type', 'object_id')")
+        fields.append("element_qname = models.CharField(max_length=255)")
+        fields.append("type_qname = models.CharField(max_length=255, null=True, blank=True)")
+        fields.append("attrs_json = models.JSONField(default=dict, blank=True)")
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            fields.append("text_value = models.TextField(null=True, blank=True)")
+            fields.append("num_value = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)")
+            fields.append("time_value = models.DateTimeField(null=True, blank=True)")
+        fields.append("order_index = models.IntegerField(default=0)")
+        fields.append("path_hint = models.CharField(max_length=255, null=True, blank=True)")
+
+        indexes_lines = ["models.Index(fields=['content_type', 'object_id'])"]
+        if getattr(self, "gfk_value_mode", None) == "typed_columns":
+            indexes_lines.append("models.Index(fields=['element_qname'])")
+            indexes_lines.append("models.Index(fields=['type_qname'])")
+            indexes_lines.append("models.Index(fields=['time_value'])")
+            indexes_lines.append("models.Index(fields=['content_type', 'object_id', '-time_value'])")
+
+        lines: list[str] = []
+        lines.append(f"class GenericEntry({self.base_model_class.__name__}):")
+        for f in fields:
+            lines.append(f"    {f}")
+        lines.append("")
+        lines.append("    class Meta:")
+        lines.append(f"        app_label = '{self.app_label}'")
+        lines.append("        abstract = False")
+        lines.append("        indexes = [")
+        for idx in indexes_lines:
+            lines.append(f"            {idx},")
+        lines.append("        ]")
+        lines.append("")
+        return "\n".join(lines)
 
     # --- Remove methods now implemented in BaseStaticGenerator ---
     # generate(self) -> str: ...
