@@ -1,0 +1,56 @@
+---
+description: Python exception handling standards to avoid swallowed exceptions
+globs: *.py
+---
+
+# Python Exception Handling Standards
+
+<rule>
+name: python_exception_handling
+description: Prefer explicit handling; do not swallow exceptions silently in Python code
+filters:
+  - type: file_extension
+    pattern: "\\.py$"
+
+actions:
+  - type: suggest
+    message: |
+      Exception handling guidelines:
+
+      - Prefer specific exceptions over bare `except:`.
+      - Never swallow exceptions silently. If catching and continuing is required, log with traceback via `logger.exception(...)` or `logger.error(..., exc_info=True)`.
+      - Only suppress exceptions when the failure is expected and safe. Narrow the `except` clause and add a brief comment explaining why suppression is acceptable.
+      - Do not wrap logging-only statements in try/except; allow logging failures to surface during development.
+      - Re-raise after logging unless there is a clearly defined alternative path.
+      - For best-effort/prepass sections, include contextual details in log messages (e.g., what was attempted, relevant identifiers) and continue only if it does not compromise correctness.
+      - Use levels consistently: `error` for unexpected failures, `warning` for recoverable anomalies, `info` for verbose diagnostics gated by a flag.
+
+      Python patterns:
+
+      ```python
+      try:
+          do_the_thing()
+      except SpecificError as exc:
+          logger.error("Failed to do the thing: %s", exc, exc_info=True)
+          raise
+      ```
+
+      ```python
+      # Best-effort section with safe fallback
+      try:
+          maybe_optimize()
+      except (NetworkError, TimeoutError) as exc:
+          logger.warning("Optional optimization failed: %s", exc, exc_info=True)
+          # continue with baseline behavior
+      ```
+
+      Anti-patterns to avoid:
+
+      - `except Exception: pass`
+      - Bare `except:`
+      - Swallowing and continuing without at least a warning-level log and context
+
+metadata:
+  priority: high
+  version: 1.0
+</rule>

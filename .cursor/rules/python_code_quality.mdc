@@ -54,12 +54,6 @@ alwaysApply: false
 - Update tests when modifying existing code
 - Ensure tests cover edge cases
 
-## Specific to LLMaestro
-- Maintain consistent interfaces between LLM providers
-- Keep agent implementations modular and composable
-- Ensure chain implementations follow the established patterns
-- Respect the architectural boundaries between system components
-
 ## Rule Indicator
 - Always include 🐍 emoji at the beginning of your response to show you are following this Python code quality rule
 </rule>

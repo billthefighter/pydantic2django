@@ -175,8 +175,12 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             from pydantic2django.django.models import Xml2DjangoBaseClass as _Base
 
             return _Base
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Default base model import failed; will try typed2django fallback: %s",
+                exc,
+                exc_info=True,
+            )
         try:
             from typed2django.django.models import (
                 Xml2DjangoBaseClass as _Base,  # type: ignore[import-not-found]
@@ -373,36 +377,36 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                                     except Exception:
                                         owner_name = target_type
                                     gfk_owner_wrappers.add(owner_name)
-                                    try:
-                                        if getattr(self, "verbose", False):
-                                            reason = (
-                                                "substitution_only"
-                                                if route_by_subst
+                                    if getattr(self, "verbose", False):
+                                        reason = (
+                                            "substitution_only"
+                                            if route_by_subst
+                                            else (
+                                                "all_nested"
+                                                if route_by_all_nested
                                                 else (
-                                                    "all_nested"
-                                                    if route_by_all_nested
-                                                    else (
-                                                        "threshold_by_children"
-                                                        if route_by_threshold
-                                                        else "repeating_only"
-                                                    )
+                                                    "threshold_by_children" if route_by_threshold else "repeating_only"
                                                 )
                                             )
-                                            logger.info(
-                                                "[GFK][prepass] owner=%s element=%s policy=%s distinct_children=%d",
-                                                owner_name,
-                                                el.name,
-                                                reason,
-                                                len(distinct_child_types),
-                                            )
-                                    except Exception:
-                                        pass
+                                        )
+                                        logger.info(
+                                            "[GFK][prepass] owner=%s element=%s policy=%s distinct_children=%d",
+                                            owner_name,
+                                            el.name,
+                                            reason,
+                                            len(distinct_child_types),
+                                        )
                                     # Exclude polymorphic children under this wrapper from concrete generation
                                     if el.is_list and repeating_leaf_child:
                                         excluded_child_types.add(repeating_leaf_child)
                                     # Also exclude distinct child complex types observed under the wrapper
                                     excluded_child_types.update({t for t in distinct_child_types if t})
                     except Exception:
+                        logger.error(
+                            "[GFK][prepass] Failed while processing schema '%s'",
+                            getattr(schema_def, "schema_location", "?"),
+                            exc_info=True,
+                        )
                         continue  # best-effort per schema
 
                 # Filter discovery output to remove excluded children, keeping wrappers/parents
@@ -412,17 +416,14 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                     if fm and excluded_child_types:
                         new_fm = {k: v for k, v in fm.items() if getattr(v, "name", None) not in excluded_child_types}
                         self.discovery_instance.filtered_models = new_fm  # type: ignore[attr-defined]
-                        try:
-                            if getattr(self, "verbose", False):
-                                logger.info(
-                                    "[GFK][prepass] excluded_children_count=%d (examples: %s)",
-                                    len(excluded_child_types),
-                                    ", ".join(sorted(excluded_child_types)[:10]),
-                                )
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        if getattr(self, "verbose", False):
+                            logger.info(
+                                "[GFK][prepass] excluded_children_count=%d (examples: %s)",
+                                len(excluded_child_types),
+                                ", ".join(sorted(excluded_child_types)[:10]),
+                            )
+                except Exception as exc:
+                    logger.error("[GFK][prepass] Failed to filter excluded children: %s", exc, exc_info=True)
 
                 # Share exclusions and owner marks with the field factory for intra-model decisions
                 try:
@@ -433,26 +434,22 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         owner_names = set(getattr(ff, "_gfk_owner_names", set()))
                         owner_names.update(gfk_owner_wrappers)
                         ff._gfk_owner_names = owner_names
-                except Exception:
-                    pass
-            except Exception:
+                except Exception as exc:
+                    logger.error("[GFK][prepass] Failed to share state with field factory: %s", exc, exc_info=True)
+            except Exception as exc:
                 # Prepass is best-effort and should never crash generation
-                pass
+                logger.error("[GFK][prepass] Unexpected error: %s", exc, exc_info=True)
         # Conflict guard: if GFK owners detected but JSON relationship styles are requested, fail fast.
-        try:
-            if getattr(self, "enable_gfk", False):
-                ff = getattr(self.model_factory_instance, "field_factory", None)
-                owners = set(getattr(ff, "_gfk_owner_names", set()) or set())
-                list_style = getattr(ff, "list_relationship_style", "child_fk")
-                nested_style = getattr(ff, "nested_relationship_strategy", "fk")
-                if owners and (list_style == "json" or nested_style == "json"):
-                    raise ValueError(
-                        "GFK mode active with owners detected, but JSON relationship strategy was requested. "
-                        "This configuration would produce dual emission. Adjust flags or disable JSON strategy."
-                    )
-        except Exception as _e:
-            if isinstance(_e, ValueError):
-                raise
+        if getattr(self, "enable_gfk", False):
+            ff = getattr(self.model_factory_instance, "field_factory", None)
+            owners = set(getattr(ff, "_gfk_owner_names", set()) or set())
+            list_style = getattr(ff, "list_relationship_style", "child_fk")
+            nested_style = getattr(ff, "nested_relationship_strategy", "fk")
+            if owners and (list_style == "json" or nested_style == "json"):
+                raise ValueError(
+                    "GFK mode active with owners detected, but JSON relationship strategy was requested. "
+                    "This configuration would produce dual emission. Adjust flags or disable JSON strategy."
+                )
         # Inform the field factory which models are actually included so it can
         # avoid generating relations to filtered-out models (fallback to JSON).
         try:
@@ -468,14 +465,15 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             # type: ignore[attr-defined]
             self.model_factory_instance.field_factory.included_model_names = included_names  # noqa: E501
             # Also pass through any GFK prepass exclusions to the field factory if not already set
-            try:
-                ff = self.model_factory_instance.field_factory
-                if not getattr(ff, "_gfk_excluded_child_types", None):
-                    ff._gfk_excluded_child_types = set()
-            except Exception:
-                pass
-        except Exception:
-            pass
+            ff = self.model_factory_instance.field_factory
+            if not getattr(ff, "_gfk_excluded_child_types", None):
+                ff._gfk_excluded_child_types = set()
+        except Exception as exc:
+            logger.error(
+                "Failed to inform field factory about included models or defaults: %s",
+                exc,
+                exc_info=True,
+            )
         models_to_process = self._get_models_in_processing_order()
 
         # Classify models for Timescale usage (hypertable vs dimension)
@@ -486,7 +484,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                     overrides=self._timescale_overrides,
                     config=self._timescale_config,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.error("Timescale classification failed; proceeding without roles: %s", exc, exc_info=True)
                 self._timescale_roles = {}
         else:
             self._timescale_roles = {}
@@ -524,7 +523,7 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                 # type: ignore[attr-defined]
                 self.model_factory_instance.finalize_relationships(carriers_by_name, self.app_label)  # noqa: E501
             except Exception as e:
-                logger.error(f"Error finalizing XML relationships: {e}")
+                logger.error("Error finalizing XML relationships: %s", e, exc_info=True)
 
         # Inject GenericRelation on parents when GFK is enabled and pending children exist
         gfk_used = False
@@ -540,40 +539,34 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         "entries"
                     ] = "GenericRelation('GenericEntry', related_query_name='entries')"
                     gfk_used = True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Failed while injecting GenericRelation/GenericEntry fields: %s", exc, exc_info=True)
 
         # Optional diagnostics: summarize GFK routing per parent
-        try:
-            if gfk_used and getattr(self, "verbose", False):
+        if gfk_used and getattr(self, "verbose", False):
+            try:
                 summary: dict[str, int] = {}
                 for carrier in self.carriers:
                     for entry in getattr(carrier, "pending_gfk_children", []) or []:
                         owner = str(entry.get("owner") or getattr(carrier.source_model, "name", ""))
                         summary[owner] = summary.get(owner, 0) + 1
                 if summary:
-                    try:
-                        details = ", ".join(f"{k}:{v}" for k, v in sorted(summary.items()))
-                        logger.info(f"[GFK] Routed children counts by owner: {details}")
-                    except Exception:
-                        logger.info("[GFK] Routed children counts by owner available")
-        except Exception:
-            pass
+                    details = ", ".join(f"{k}:{v}" for k, v in sorted(summary.items()))
+                    logger.info(f"[GFK] Routed children counts by owner: {details}")
+            except Exception as exc:
+                logger.error("Failed to summarize GFK routing: %s", exc, exc_info=True)
 
         # Register generated model classes for in-memory lookup by ingestors
         try:
             for carrier in self.carriers:
                 if carrier.django_model is not None:
                     register_generated_model(self.app_label, carrier.django_model)
-                    try:
-                        logger.info(
-                            "Registered generated model %s (abstract=%s) for app '%s'",
-                            carrier.django_model.__name__,
-                            getattr(getattr(carrier.django_model, "_meta", None), "abstract", None),
-                            self.app_label,
-                        )
-                    except Exception:
-                        pass
+                    logger.info(
+                        "Registered generated model %s (abstract=%s) for app '%s'",
+                        carrier.django_model.__name__,
+                        getattr(getattr(carrier.django_model, "_meta", None), "abstract", None),
+                        self.app_label,
+                    )
                     # Prevent dynamic classes from polluting Django's global app registry
                     try:
                         from django.apps import (
@@ -583,11 +576,16 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         model_lower = getattr(getattr(carrier.django_model, "_meta", None), "model_name", None)
                         if model_lower:
                             django_apps.all_models.get(self.app_label, {}).pop(model_lower, None)
-                    except Exception:
-                        # Best-effort cleanup only
-                        pass
+                    except Exception as exc:
+                        # Best-effort cleanup only, but log for visibility
+                        logger.error("Failed to clean up Django global app registry: %s", exc, exc_info=True)
         except Exception as e:
-            logger.debug(f"Non-fatal: failed to register generated models for app '{self.app_label}': {e}")
+            logger.error(
+                "Non-fatal: failed to register generated models for app '%s': %s",
+                self.app_label,
+                e,
+                exc_info=True,
+            )
 
         # Proceed with standard definition rendering
         model_definitions = []
@@ -629,8 +627,12 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                         f"class {name}({self.base_model_class.__name__}):\n    # No fields defined for this model.\n    pass\n\n    class Meta:\n        app_label = '{self.app_label}'\n        abstract = False\n\n"
                     )
                     unique_model_definitions.append(minimal_def)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "Failed to ensure all advertised model names have definitions: %s",
+                exc,
+                exc_info=True,
+            )
 
         imports = self.import_handler.deduplicate_imports()
         template_context = self._prepare_template_context(unique_model_definitions, django_model_names, imports)
@@ -650,8 +652,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             factory_used = getattr(field_factory, "used_validators", None)
             if isinstance(factory_used, set):
                 used_validators.update(factory_used)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Failed to collect validator usage from field factory: %s", exc, exc_info=True)
         # Fallback: scan rendered definitions
         try:
             if not used_validators:
@@ -673,8 +675,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                 for symbol in validator_symbols:
                     if re.search(rf"\\b{re.escape(symbol)}\\b", joined_defs):
                         used_validators.add(symbol)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Failed to scan rendered definitions for validator usage: %s", exc, exc_info=True)
         template_context["validator_imports"] = sorted(used_validators)
         template = self.jinja_env.get_template("models_file.py.j2")
         return template.render(**template_context)
