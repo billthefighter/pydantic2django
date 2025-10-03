@@ -73,6 +73,26 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         gfk_threshold_children: int | None = None,
         gfk_overrides: dict[str, bool] | None = None,
     ):
+        """Create a field factory for XML Schema with optional GFK routing.
+
+        Args:
+            nested_relationship_strategy: "fk" | "json" | "auto"; controls nested mapping.
+            list_relationship_style: "child_fk" | "m2m" | "json" for repeating nested.
+            nesting_depth_threshold: When strategy is "auto", use FK up to this depth.
+            included_model_names: Allowed target complex types for relation emission.
+            invert_fk_to_timescale: If True, prefer FKs from hypertable → dimension.
+
+            enable_gfk: Enable Generic Entries mode.
+            gfk_policy: "substitution_only" | "repeating_only" | "all_nested" | "threshold_by_children".
+            gfk_threshold_children: Threshold for wrappers when policy is "threshold_by_children".
+            gfk_overrides: Per-element overrides; True forces GFK, False disables it.
+
+        Notes:
+            - When GFK applies for a wrapper owner, this factory records children in
+              `carrier.pending_gfk_children` and suppresses JSON placeholders under that owner.
+            - The prepass may populate `_gfk_excluded_child_types` and `_gfk_owner_names` so
+              we avoid emitting relations to excluded children and suppress placeholders.
+        """
         super().__init__()
         self.nested_relationship_strategy = nested_relationship_strategy
         self.list_relationship_style = list_relationship_style
@@ -309,7 +329,18 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
         model_name: str,
         carrier: ConversionCarrier[XmlSchemaComplexType],
     ):
-        """Creates a Django field from an XmlSchemaElement."""
+        """Creates a Django field from an XmlSchemaElement.
+
+        Honors GFK flags to potentially route nested complex children through
+        `GenericEntry` instead of emitting concrete fields/relations:
+        - `gfk_policy="repeating_only"`: repeated complex leaves -> GFK.
+        - `gfk_policy="all_nested"`: all eligible nested complex children -> GFK.
+        - `gfk_policy="threshold_by_children"`: wrapper-like single-nested elements
+           route to GFK when the wrapper contains ≥ `gfk_threshold_children` distinct
+           child complex types.
+        - `gfk_policy="substitution_only"`: wrapper-like owners with substitution-group
+           members route those members to GFK regardless of distinct child type count.
+        """
         schema_def = carrier.source_model.schema_def
 
         # Handle references to complex types (nested objects)
@@ -350,6 +381,15 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                             owner_name = getattr(carrier.source_model, "name", None) or getattr(
                                 carrier.source_model, "__name__", model_name
                             )
+                            try:
+                                logger.debug(
+                                    "[GFK] routing repeating complex child via entries owner=%s child=%s element=%s",
+                                    owner_name,
+                                    leaf_child or target_type_name,
+                                    element.name,
+                                )
+                            except Exception:
+                                pass
                             carrier.pending_gfk_children.append(
                                 {
                                     "child": (leaf_child or target_type_name),
@@ -363,11 +403,26 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                                     self._gfk_excluded_child_types.add(leaf_child)
                                 else:
                                     self._gfk_excluded_child_types.add(target_type_name)
+                                # Also mark current model as owner to suppress all element fields under it
+                                current_name = getattr(carrier.source_model, "name", None) or getattr(
+                                    carrier.source_model, "__name__", model_name
+                                )
+                                if isinstance(current_name, str) and current_name:
+                                    self._gfk_owner_names.add(current_name)
                             except Exception:
                                 pass
                             return None, {}
                     # Otherwise fall back to JSON when configured or child not allowed
                     if strategy == "json" or self.list_relationship_style == "json" or not allowed:
+                        try:
+                            logger.debug(
+                                "[JSON] emitting JSON placeholder for repeating element model=%s element=%s allowed=%s",
+                                model_name,
+                                element.name,
+                                allowed,
+                            )
+                        except Exception:
+                            pass
                         return self._make_json_field_kwargs(element)
                     if self.list_relationship_style == "m2m" and leaf_child:
                         kwargs = {"to": f"{carrier.meta_app_label}.{leaf_child}", "blank": True}
@@ -447,6 +502,15 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                         owner_name = getattr(carrier.source_model, "name", None) or getattr(
                             carrier.source_model, "__name__", model_name
                         )
+                        try:
+                            logger.debug(
+                                "[GFK] marking wrapper as owner owner=%s element=%s children=%d",
+                                target_type_name,
+                                element.name,
+                                len(distinct_child_types),
+                            )
+                        except Exception:
+                            pass
                         if repeating_child_type:
                             carrier.pending_gfk_children.append(
                                 {"child": repeating_child_type, "owner": owner_name, "element_name": element.name}
@@ -456,8 +520,12 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                         )
                         # Mark the target wrapper as a GFK owner so its children route to entries
                         try:
-                            if isinstance(target_type_name, str) and target_type_name:
-                                self._gfk_owner_names.add(target_type_name)
+                            # Mark the CURRENT model as owner (not the child target type)
+                            current_name = getattr(carrier.source_model, "name", None) or getattr(
+                                carrier.source_model, "__name__", model_name
+                            )
+                            if isinstance(current_name, str) and current_name:
+                                self._gfk_owner_names.add(current_name)
                                 # Exclude observed child complex types from concrete generation
                                 for t in distinct_child_types:
                                     if t:
@@ -475,9 +543,26 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                     current_name = model_name
 
                 if current_name in getattr(self, "_gfk_owner_names", set()):
+                    try:
+                        logger.debug(
+                            "[GFK] suppressing element under owner model=%s element=%s",
+                            current_name,
+                            element.name,
+                        )
+                    except Exception:
+                        pass
                     return None, {}
 
                 if strategy == "json" or not allowed:
+                    try:
+                        logger.debug(
+                            "[JSON] emitting JSON placeholder model=%s element=%s allowed=%s",
+                            model_name,
+                            element.name,
+                            allowed,
+                        )
+                    except Exception:
+                        pass
                     return self._make_json_field_kwargs(element)
 
                 if self.list_relationship_style == "child_fk" and is_wrapper_like:
@@ -577,6 +662,14 @@ class XmlSchemaFieldFactory(BaseFieldFactory[XmlSchemaFieldInfo]):
                         owner_name = getattr(carrier.source_model, "name", None) or getattr(
                             carrier.source_model, "__name__", model_name
                         )
+                        try:
+                            logger.debug(
+                                "[GFK] all_nested routing element to entries owner=%s child=%s",
+                                owner_name,
+                                target_type_name,
+                            )
+                        except Exception:
+                            pass
                         carrier.pending_gfk_children.append(
                             {"child": target_type_name, "owner": owner_name, "element_name": element.name}
                         )
@@ -937,6 +1030,29 @@ class XmlSchemaModelFactory(BaseModelFactory[XmlSchemaComplexType, XmlSchemaFiel
 
         # Get the model name from the source model
         model_name = getattr(carrier.source_model, "__name__", "UnknownModel")
+
+        # Either/Or enforcement: if this model is marked as a GFK owner, suppress all element fields.
+        try:
+            owner_names = getattr(self.field_factory, "_gfk_owner_names", set())
+            if model_name in owner_names:
+                # Still process attributes; skip elements entirely
+                try:
+                    logger.info("[GFK] owner=%s: suppressing all child element fields (either/or)", model_name)
+                except Exception:
+                    pass
+                # Ensure GenericRelation('entries') and GenericEntry model are emitted by signaling pending_gfk_children
+                try:
+                    owner_marker = {"child": model_name, "owner": model_name, "element_name": "*"}
+                    carrier.pending_gfk_children.append(owner_marker)
+                except Exception:
+                    pass
+                for attr_name, attribute in complex_type.attributes.items():
+                    field_info = XmlSchemaFieldInfo(name=attr_name, attribute=attribute)
+                    result = self.field_factory.create_field(field_info, model_name, carrier)
+                    self._handle_field_result(result, carrier)
+                return
+        except Exception:
+            pass
 
         # Process attributes
         for attr_name, attribute in complex_type.attributes.items():

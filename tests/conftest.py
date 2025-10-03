@@ -140,6 +140,8 @@ def make_generated_code():
         app_label: str = "test_app",
         nested_relationship_strategy: str | None = None,
         list_relationship_style: str | None = None,
+        enable_gfk: bool | None = None,
+        gfk_policy: str | None = None,
     ) -> str:
         if isinstance(schema_paths, (str, Path)):
             schema_list = [str(schema_paths)]
@@ -160,6 +162,10 @@ def make_generated_code():
             kwargs["nested_relationship_strategy"] = nested_relationship_strategy
         if list_relationship_style is not None:
             kwargs["list_relationship_style"] = list_relationship_style
+        if enable_gfk is not None:
+            kwargs["enable_gfk"] = enable_gfk
+        if gfk_policy is not None:
+            kwargs["gfk_policy"] = gfk_policy
 
         generator = XmlSchemaDjangoModelGenerator(**kwargs)  # type: ignore[arg-type]
         generator.generate()

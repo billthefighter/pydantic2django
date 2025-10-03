@@ -19,6 +19,7 @@ def code(make_generated_code) -> str:
         app_label="ts_wrap_app",
         nested_relationship_strategy="fk",
         list_relationship_style="child_fk",
+        enable_gfk=False,
     )
 
 

@@ -121,6 +121,7 @@ def test_nested_elements_as_fk_and_child_fk(nested_xsd_path, tmp_path):
         schema_files=[str(nested_xsd_path)],
         output_path=str(output_file),
         app_label=app_label,
+        enable_gfk=False,
         nested_relationship_strategy="fk",
         list_relationship_style="child_fk",
     )
@@ -157,6 +158,7 @@ def test_nested_elements_as_json(nested_xsd_path, tmp_path):
         schema_files=[str(nested_xsd_path)],
         output_path=str(output_file),
         app_label=app_label,
+        enable_gfk=False,
         nested_relationship_strategy="json",
         list_relationship_style="json",
     )

@@ -44,8 +44,8 @@ class BaseStaticGenerator(ABC, Generic[SourceModelType, FieldInfoType]):
         enable_timescale: bool = True,
         # --- GFK flags ---
         enable_gfk: bool = True,
-        gfk_policy: str | None = "threshold_by_children",
-        gfk_threshold_children: int | None = 8,
+        gfk_policy: str | None = "all_nested",
+        gfk_threshold_children: int | None = 4,
         gfk_value_mode: str | None = "typed_columns",
         gfk_normalize_common_attrs: bool = False,
     ):

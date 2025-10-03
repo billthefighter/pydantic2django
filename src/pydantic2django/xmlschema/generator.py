@@ -66,6 +66,22 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
         gfk_normalize_common_attrs: bool = False,
         gfk_overrides: dict[str, bool] | None = None,
     ):
+        """Create a XML Schema → Django generator with optional Generic Entries mode.
+
+        GFK (Generic Entries) flags:
+        - enable_gfk: Enable Generic Entries mode. When True and policy matches, parents
+          gain `entries = GenericRelation('GenericEntry')` and concrete children are not emitted.
+        - gfk_policy: Controls which nested elements are routed to GenericEntry.
+          Values: "substitution_only" | "repeating_only" | "all_nested" | "threshold_by_children".
+        - gfk_threshold_children: Used only with "threshold_by_children"; minimum distinct child
+          complex types inside a wrapper-like container to activate GFK.
+        - gfk_value_mode: "json_only" stores text under attrs_json['value']; "typed_columns"
+          extracts text into text_value, num_value, time_value when unambiguous.
+        - gfk_normalize_common_attrs: Reserved (default False) for promoting frequently used
+          attributes (e.g., timestamp) into normalized columns when using typed columns.
+        - gfk_overrides: Optional per-element overrides by local element name;
+          True forces GFK, False disables it even if the policy would apply.
+        """
         discovery = XmlSchemaDiscovery()
         model_factory = XmlSchemaModelFactory(
             app_label=app_label,
@@ -324,8 +340,8 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                                 target_ct = schema_def.complex_types.get(target_type)
                                 if not target_ct:
                                     continue
-                                # Wrapper-like heuristic
-                                is_wrapper_like = bool(el.name[:1].isupper()) or str(target_type).endswith(
+                                # Wrapper-like heuristic (may be used by providers; structural checks take precedence)
+                                _is_wrapper_like = bool(el.name[:1].isupper()) or str(target_type).endswith(
                                     "WrapperType"
                                 )
                                 # Collect distinct child complex types under target wrapper
@@ -342,21 +358,45 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                                     if getattr(child_el, "is_list", False) and getattr(child_el, "type_name", None):
                                         repeating_leaf_child = child_el.type_name.split(":")[-1]
 
-                                # Decide based on policy
-                                route_by_subst = (
-                                    policy == "substitution_only" and is_wrapper_like and has_substitution_members
-                                )
-                                route_by_all_nested = policy == "all_nested" and is_wrapper_like
-                                route_by_threshold = (
-                                    policy == "threshold_by_children"
-                                    and is_wrapper_like
-                                    and (threshold_val <= 0 or len(distinct_child_types) >= threshold_val)
+                                # Decide based on policy (favor generic structural checks over name heuristics)
+                                route_by_subst = policy == "substitution_only" and has_substitution_members
+                                route_by_all_nested = policy == "all_nested"
+                                route_by_threshold = policy == "threshold_by_children" and (
+                                    threshold_val <= 0 or len(distinct_child_types) >= threshold_val
                                 )
                                 route_by_repeating = policy == "repeating_only" and bool(el.is_list)
 
                                 if route_by_subst or route_by_all_nested or route_by_threshold or route_by_repeating:
-                                    # Mark wrapper as owner so placeholders are suppressed later
-                                    gfk_owner_wrappers.add(target_type)
+                                    # Mark the CURRENT complex type (container) as the owner so placeholders on it are suppressed
+                                    try:
+                                        owner_name = getattr(ct, "name", None) or getattr(ct, "__name__", str(ct))
+                                    except Exception:
+                                        owner_name = target_type
+                                    gfk_owner_wrappers.add(owner_name)
+                                    try:
+                                        if getattr(self, "verbose", False):
+                                            reason = (
+                                                "substitution_only"
+                                                if route_by_subst
+                                                else (
+                                                    "all_nested"
+                                                    if route_by_all_nested
+                                                    else (
+                                                        "threshold_by_children"
+                                                        if route_by_threshold
+                                                        else "repeating_only"
+                                                    )
+                                                )
+                                            )
+                                            logger.info(
+                                                "[GFK][prepass] owner=%s element=%s policy=%s distinct_children=%d",
+                                                owner_name,
+                                                el.name,
+                                                reason,
+                                                len(distinct_child_types),
+                                            )
+                                    except Exception:
+                                        pass
                                     # Exclude polymorphic children under this wrapper from concrete generation
                                     if el.is_list and repeating_leaf_child:
                                         excluded_child_types.add(repeating_leaf_child)
@@ -372,6 +412,15 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
                     if fm and excluded_child_types:
                         new_fm = {k: v for k, v in fm.items() if getattr(v, "name", None) not in excluded_child_types}
                         self.discovery_instance.filtered_models = new_fm  # type: ignore[attr-defined]
+                        try:
+                            if getattr(self, "verbose", False):
+                                logger.info(
+                                    "[GFK][prepass] excluded_children_count=%d (examples: %s)",
+                                    len(excluded_child_types),
+                                    ", ".join(sorted(excluded_child_types)[:10]),
+                                )
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -389,6 +438,21 @@ class XmlSchemaDjangoModelGenerator(BaseStaticGenerator[XmlSchemaComplexType, Xm
             except Exception:
                 # Prepass is best-effort and should never crash generation
                 pass
+        # Conflict guard: if GFK owners detected but JSON relationship styles are requested, fail fast.
+        try:
+            if getattr(self, "enable_gfk", False):
+                ff = getattr(self.model_factory_instance, "field_factory", None)
+                owners = set(getattr(ff, "_gfk_owner_names", set()) or set())
+                list_style = getattr(ff, "list_relationship_style", "child_fk")
+                nested_style = getattr(ff, "nested_relationship_strategy", "fk")
+                if owners and (list_style == "json" or nested_style == "json"):
+                    raise ValueError(
+                        "GFK mode active with owners detected, but JSON relationship strategy was requested. "
+                        "This configuration would produce dual emission. Adjust flags or disable JSON strategy."
+                    )
+        except Exception as _e:
+            if isinstance(_e, ValueError):
+                raise
         # Inform the field factory which models are actually included so it can
         # avoid generating relations to filtered-out models (fallback to JSON).
         try:

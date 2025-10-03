@@ -686,10 +686,25 @@ class XmlInstanceIngestor:
         GenericEntry: Any,
         order_index: int,
     ) -> dict[str, Any]:
-        """Build keyword args for creating a GenericEntry from an XML child element.
+        """Build keyword args for creating a `GenericEntry` row from an XML child element.
 
-        Parses attributes and element text. When the GenericEntry model defines typed
-        value columns, attempts to parse numeric and ISO8601 datetime values.
+        Behavior is aligned with GFK flag semantics:
+        - `gfk_value_mode="json_only"`: element text is stored inside `attrs_json["value"]`.
+        - `gfk_value_mode="typed_columns"`: if the `GenericEntry` model declares typed
+          columns (`text_value`, `num_value`, `time_value`), element text is copied to
+          `text_value` and parsed into `num_value` and/or `time_value` when unambiguous.
+          Remaining attributes are preserved in `attrs_json`.
+
+        Args:
+            instance: The owning Django model instance for `content_object`.
+            el_name: Local name of the XML element.
+            target_type_name: Resolved type name for the element (simple or complex), if available.
+            child_elem: Parsed XML element (lxml Element or equivalent).
+            GenericEntry: The `GenericEntry` Django model class for this app.
+            order_index: Monotonic index of this entry under the owner, used to preserve order.
+
+        Returns:
+            A dict of keyword arguments suitable for `GenericEntry.objects.create(**kwargs)`.
         """
         entry_attrs_json: dict[str, Any] = {}
         try:

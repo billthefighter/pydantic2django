@@ -250,6 +250,10 @@ class XmlSchemaParser:
         """Parse sequence, choice, or all content"""
         logger.debug(f"Parsing particle content for {complex_type.name}")
         for child in particle:
+            # Some lxml nodes (comments/PIs) expose non-string tag objects; skip them safely
+            if not isinstance(child.tag, str):
+                logger.debug("Skipping non-string particle tag under %s: %r", complex_type.name, child.tag)
+                continue
             tag_name = self._get_local_name(child.tag)
             logger.debug(f"  - Found particle child in {complex_type.name}: {tag_name}")
 
