@@ -547,7 +547,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/85/9f/88107d46771b0236a
 
 [[package]]
 name = "django-typed2django"
-version = "1.0.19"
+version = "1.0.20"
 source = { editable = "." }
 dependencies = [
     { name = "django" },
