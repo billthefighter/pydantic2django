@@ -1,0 +1,3660 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Convert Pydantic models to Django models dynamically">
+      
+      
+      
+      
+        <link rel="prev" href="../../how_to_use/parametrized_assert_tests/">
+      
+      
+        <link rel="next" href="../../reference/pydantic2django/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>Provider‑agnostic GenericForeignKey (GFK) plan - Pydantic2Django</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#provideragnostic-genericforeignkey-gfk-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Pydantic2Django" class="md-header__button md-logo" aria-label="Pydantic2Django" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Pydantic2Django
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Provider‑agnostic GenericForeignKey (GFK) plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Pydantic2Django
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Architecture/CONTEXT_HANDLING/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../bugs/2025-10-01-xml-wrapper-child-fk-direction/" class="md-tabs__link">
+          
+  
+  
+  Bugs
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../how_it_works/core_modules_and_concepts/" class="md-tabs__link">
+          
+  
+  
+  How it works
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../how_to_use/bidirectional_generation/" class="md-tabs__link">
+          
+  
+  
+  How to use
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Plans
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/pydantic2django/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Pydantic2Django" class="md-nav__button md-logo" aria-label="Pydantic2Django" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Pydantic2Django
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic2Django
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Architecture/CONTEXT_HANDLING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Context Handling in Pydantic2Django
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Architecture/OVERVIEW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OVERVIEW
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Comparisons
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_3">
+            <span class="md-nav__icon md-icon"></span>
+            Comparisons
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Architecture/comparisons/README_DJANGO_STORAGE_OPTIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic to Django Storage Approaches
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Architecture/comparisons/README_PYDANTIC_DJANGO_METHODS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic to Django Method Integration Approaches
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Bugs
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Bugs
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../bugs/2025-10-01-xml-wrapper-child-fk-direction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    XML Schema wrapper children incorrectly attached as parent-side FKs
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    How it works
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            How it works
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/core_modules_and_concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Core modules and concepts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/generic_entries_contenttypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Generic entries contenttypes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/ingestor_strict_and_contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ingestor strict and contract
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/provider_backend_pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Provider backend pattern
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/readme_bidirectional_mapper/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic2Django Bidirectional Mapper Details
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/readme_context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic2Django Context Storage and Generated Context Classes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/readme_ingestion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ingestion Pattern Across Modules
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/readme_relationships/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pydantic2Django Relationships Accessor Details
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/timescale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Timescale
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/xmlschema_element_and_type_handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    XML Schema Handling: Elements, Attributes, Types, Relationships
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_it_works/xmlschema_notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    XML Schema Notes: complexType Handling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    How to use
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            How to use
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_to_use/bidirectional_generation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Bidirectional generation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_to_use/ingestor_validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ingestor validation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_to_use/integrate_into_django_app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrate into django app
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how_to_use/parametrized_assert_tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Parametrized Single-Assertion Tests for End-to-End Load/Process/Persist
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Plans
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Provider‑agnostic GenericForeignKey (GFK) plan
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Provider‑agnostic GenericForeignKey (GFK) plan
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what" class="md-nav__link">
+    <span class="md-ellipsis">
+      What
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-status-2025-10-01" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current status (2025-10-01)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-and-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope and behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design details
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design details">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-additions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core additions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generatorspecific-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generator‑specific detection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests-and-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tests and docs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#files-to-touch-entry-points-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      Files to touch (entry points &amp; references)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-and-runtime-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Migration and runtime considerations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phased-todos" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phased TODOs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#xml-schema-handling-detailed-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      XML schema handling – detailed design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="XML schema handling – detailed design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#detection-and-policy-evaluation-discoveryfactory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Detection and policy evaluation (discovery/factory)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parent-owner-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parent (owner) selection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mapping-from-xsd-to-genericentry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mapping from XSD to GenericEntry
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identity-constraints-xskey-xskeyref" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity constraints (xs:key / xs:keyref)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mixed-content-and-nested-simple-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mixed content and nested simple content
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timescale-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Timescale integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#indexing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Indexing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generation-and-migrations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generation and migrations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ingestor-algorithm-xml-instance-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ingestor algorithm (xml instance → models)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overrides-and-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overrides and configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-mtconnectstyle-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example (MTConnect‑style pattern)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1" id="__nav_7_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/entrypoint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.entrypoint
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_3" id="__nav_7_1_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_3">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.core
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/base_generator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.base_generator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/bidirectional_mapper/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.bidirectional_mapper
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.context
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/defs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.defs
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.discovery
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/factories/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.factories
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/filter_helpers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.filter_helpers
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/imports/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.imports
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/mapping_units/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.mapping_units
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/relationships/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.relationships
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/typing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.typing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_3_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_3_14" id="__nav_7_1_3_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_7_1_3_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_3_14">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.core.utils
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/utils/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils.naming
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/utils/relationships/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils.relationships
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/utils/strings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils.strings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/core/utils/timescale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.core.utils.timescale
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_4" id="__nav_7_1_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.dataclass
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_4">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.dataclass
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/dataclass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.dataclass
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/dataclass/discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.dataclass.discovery
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/dataclass/factory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.dataclass.factory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/dataclass/generator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.dataclass.generator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_5" id="__nav_7_1_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_5">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.django
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.admin
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/conversion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.conversion
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.models
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/typing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.typing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_5_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_5_6" id="__nav_7_1_5_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.timescale
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_7_1_5_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_5_6">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.django.timescale
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/timescale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.timescale
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/timescale/bases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.timescale.bases
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/timescale/heuristics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.timescale.heuristics
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_5_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_5_7" id="__nav_7_1_5_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.utils
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_7_1_5_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_5_7">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.django.utils
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.utils
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/utils/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.utils.naming
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/django/utils/serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.django.utils.serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_6" id="__nav_7_1_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_6">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.pydantic
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.discovery
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/factory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.factory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/generator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.generator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_6_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_6_5" id="__nav_7_1_6_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.utils
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_7_1_6_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_6_5">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.pydantic.utils
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.utils
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/pydantic/utils/introspection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.pydantic.utils.introspection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_7" id="__nav_7_1_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.typedclass
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_7">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.typedclass
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/typedclass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.typedclass
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/typedclass/discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.typedclass.discovery
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/typedclass/factory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.typedclass.factory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/typedclass/generator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.typedclass.generator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1_8" id="__nav_7_1_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_1_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1_8">
+            <span class="md-nav__icon md-icon"></span>
+            pydantic2django.xmlschema
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.discovery
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/factory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.factory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/generator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.generator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/ingestor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.ingestor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.models
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pydantic2django/xmlschema/parser/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pydantic2django.xmlschema.parser
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="provideragnostic-genericforeignkey-gfk-plan">Provider‑agnostic GenericForeignKey (GFK) plan<a class="headerlink" href="#provideragnostic-genericforeignkey-gfk-plan" title="Permanent link">&para;</a></h1>
+<h2 id="what">What<a class="headerlink" href="#what" title="Permanent link">&para;</a></h2>
+<p>Introduce a generator‑controlled, provider‑agnostic mode to model polymorphic/repeating nested XML (and multi‑type pydantic/dataclass fields) using Django’s contenttypes (GenericForeignKey) instead of emitting thousands of concrete leaf models or large numbers of JSONFields. This keeps the model surface small, migrations fast, and data queryable across all ingests.</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Current xmlschema output (e.g., MTConnect Streams) can generate 90k+ line models and lengthy migrations due to substitution groups and deeply nested, repeating leaves.</li>
+<li>Many “leaf” combinations require either per‑leaf classes or JSON fallback; both scale poorly and are hard to query.</li>
+<li>GenericForeignKey lets us store polymorphic entries in a single normalized table with a reverse link to the owning parent, drastically reducing generated code while remaining queryable.</li>
+<li>Approach must be provider‑agnostic to support xmlschema, pydantic, and dataclass paths without domain‑specific types.</li>
+</ul>
+<p>Reference: Django contenttypes <a href="https://docs.djangoproject.com/en/5.2/ref/contrib/contenttypes/">The contenttypes framework</a>.</p>
+<h2 id="current-status-2025-10-01">Current status (2025-10-01)<a class="headerlink" href="#current-status-2025-10-01" title="Permanent link">&para;</a></h2>
+<ul>
+<li>XmlSchema path: initial GFK plumbing implemented.</li>
+<li>Flags supported on <code>XmlSchemaDjangoModelGenerator</code>: <code>enable_gfk</code>, <code>gfk_policy</code>, <code>gfk_threshold_children</code>, <code>gfk_value_mode</code>, <code>gfk_normalize_common_attrs</code>.</li>
+<li>Detection: repeating nested complex elements (including wrapper-like containers) can be routed to GFK under <code>gfk_policy</code> ∈ {<code>repeating_only</code>, <code>all_nested</code>, <code>threshold_by_children</code>}.</li>
+<li>Generation finalize: when any parent has GFK-eligible children, a single <code>GenericEntry</code> model is emitted for the app and the parent gets <code>entries = GenericRelation('GenericEntry', related_query_name='entries')</code>.</li>
+<li>Ingestion: when a parent exposes <code>entries</code> and a repeating nested child is encountered, concrete child instances are skipped and <code>GenericEntry</code> rows are persisted with <code>element_qname</code>, <code>type_qname</code>, <code>attrs_json</code> (including attributes and text value), and <code>order_index</code>.</li>
+<li>Tests: added a basic xmlschema generation test to assert <code>GenericEntry</code> emission and parent <code>GenericRelation</code>. Full suite passing with GFK enabled in targeted tests.</li>
+</ul>
+<h2 id="scope-and-behavior">Scope and behavior<a class="headerlink" href="#scope-and-behavior" title="Permanent link">&para;</a></h2>
+<p>Add core flags (consumed by all generators):
+- <code>enable_gfk: bool</code> (default: false)
+- <code>gfk_policy: Literal["substitution_only", "repeating_only", "all_nested", "threshold_by_children"]</code>
+- <code>gfk_threshold_children: int</code> (used when <code>threshold_by_children</code>)
+- <code>gfk_value_mode: Literal["json_only", "typed_columns"]</code>
+- <code>gfk_normalize_common_attrs: bool</code> (normalize timestamp/subType‑like attrs; default: false)</p>
+<p>When enabled and a field/element meets policy:
+- Do not generate a concrete leaf model or schedule child FK injection
+- Instead, store instances as rows in a single <code>GenericEntry</code> model and expose a <code>GenericRelation</code> on the parent for reverse access</p>
+<h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
+<h3 id="core-additions">Core additions<a class="headerlink" href="#core-additions" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Generic entry model (emitted per app in generated output):</li>
+<li><code>content_type</code>, <code>object_id</code>, <code>content_object</code> (GenericForeignKey)</li>
+<li><code>element_qname: CharField</code></li>
+<li><code>type_qname: CharField | null</code></li>
+<li><code>attrs_json: JSONField</code></li>
+<li>Optional typed value columns (if <code>typed_columns</code>): <code>text_value</code>, <code>num_value</code>, <code>time_value</code></li>
+<li><code>order_index: IntegerField</code></li>
+<li>
+<p>Optional <code>path_hint: CharField</code> for debugging/tracing</p>
+</li>
+<li>
+<p>Parent reverse access:</p>
+</li>
+<li>
+<p>Add <code>GenericRelation('GenericEntry', related_query_name='entries')</code> to parents (wrappers/components) that own qualifying children</p>
+</li>
+<li>
+<p>Core policy hook points:</p>
+</li>
+<li>In field factories: if policy says GFK, don’t create a concrete field; record a marker on the <code>ConversionCarrier</code> (e.g., <code>carrier.context_data["_pending_gfk_children"]</code>)</li>
+<li>In model factory finalize: ensure the <code>GenericEntry</code> model exists, inject <code>GenericRelation</code> on parents, add indexes (e.g., <code>(content_type, object_id)</code>)</li>
+</ul>
+<h3 id="generatorspecific-detection">Generator‑specific detection<a class="headerlink" href="#generatorspecific-detection" title="Permanent link">&para;</a></h3>
+<ul>
+<li>xmlschema (<code>src/pydantic2django/xmlschema/</code>):</li>
+<li>Identify substitution groups, repeating complex leaves, deeply nested wrappers; apply chosen policy</li>
+<li>
+<p>Ingestor should create <code>GenericEntry</code> rows instead of concrete leaf instances</p>
+</li>
+<li>
+<p>pydantic (<code>src/pydantic2django/pydantic/</code>) and dataclass (<code>src/pydantic2django/dataclass/</code>):</p>
+</li>
+<li>Detect <code>Union</code>/variant fields (e.g., <code>List[Union[A, B, ...]]</code>); when enabled, route through GFK instead of many concrete field alternatives</li>
+</ul>
+<h3 id="tests-and-docs">Tests and docs<a class="headerlink" href="#tests-and-docs" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Tests:</li>
+<li>xmlschema path: verify that enabling <code>enable_gfk</code> yields a single <code>GenericEntry</code> model, a <code>GenericRelation</code> on the parent, and entries persisted by the ingestor</li>
+<li>pydantic/dataclass path: verify <code>List[Union[...]]</code> maps to GFK when enabled and persists entries</li>
+<li>Negative controls: with GFK disabled, ensure legacy behavior unchanged</li>
+<li>
+<p>Performance: smoke test that migrations run significantly faster with GFK enabled for large schemas (coarse check)</p>
+</li>
+<li>
+<p>Docs:</p>
+</li>
+<li>New “Generic Entries (ContentTypes) mode” page describing flags, trade‑offs, and examples</li>
+<li>Update xmlschema element handling doc to mention GFK option</li>
+</ul>
+<h2 id="files-to-touch-entry-points-references">Files to touch (entry points &amp; references)<a class="headerlink" href="#files-to-touch-entry-points-references" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Core detection/mapping hooks:</li>
+<li><code>src/pydantic2django/core/bidirectional_mapper.py</code></li>
+<li><code>src/pydantic2django/core/mapping_units.py</code> (has <code>GenericForeignKeyMappingUnit</code>)</li>
+<li><code>src/pydantic2django/core/relationships.py</code></li>
+<li><code>src/pydantic2django/core/factories.py</code> (if present) or module‑specific factories</li>
+<li>
+<p><code>src/pydantic2django/django/conversion.py</code> (ensure conversion respects GFK; current code path includes <code>GenericForeignKey</code> handling around line ~484)</p>
+</li>
+<li>
+<p>Generator (xmlschema):</p>
+</li>
+<li><code>src/pydantic2django/xmlschema/generator.py</code></li>
+<li><code>src/pydantic2django/xmlschema/factory.py</code></li>
+<li>
+<p><code>src/pydantic2django/xmlschema/ingestor.py</code></p>
+</li>
+<li>
+<p>Generator (pydantic):</p>
+</li>
+<li><code>src/pydantic2django/pydantic/generator.py</code></li>
+<li><code>src/pydantic2django/pydantic/factory.py</code></li>
+<li>
+<p><code>src/pydantic2django/pydantic/discovery.py</code></p>
+</li>
+<li>
+<p>Generator (dataclass):</p>
+</li>
+<li><code>src/pydantic2django/dataclass/generator.py</code></li>
+<li><code>src/pydantic2django/dataclass/factory.py</code></li>
+<li>
+<p><code>src/pydantic2django/dataclass/discovery.py</code></p>
+</li>
+<li>
+<p>Docs:</p>
+</li>
+<li><code>docs/how_it_works/xmlschema_element_and_type_handling.md</code> (add GFK mode reference)</li>
+<li><code>docs/how_it_works/</code> (new: <code>generic_entries_contenttypes.md</code>)</li>
+</ul>
+<h2 id="migration-and-runtime-considerations">Migration and runtime considerations<a class="headerlink" href="#migration-and-runtime-considerations" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Ensure <code>django.contrib.contenttypes</code> in generated app settings/migrations as needed</li>
+<li>Add DB indexes on <code>GenericEntry(content_type, object_id)</code>; optionally on <code>element_qname</code>, <code>type_qname</code>, <code>timestamp</code>/<code>time_value</code></li>
+<li>Keep <code>attrs_json</code> as spillover for long‑tail attributes</li>
+</ul>
+<h2 id="phased-todos">Phased TODOs<a class="headerlink" href="#phased-todos" title="Permanent link">&para;</a></h2>
+<p>1) Core plumbing and flags [core]
+   - Add <code>enable_gfk</code>, <code>gfk_policy</code>, <code>gfk_value_mode</code>, <code>gfk_normalize_common_attrs</code> to generator configs
+   - Wire <code>GenericForeignKeyMappingUnit</code> as the conceptual trigger; factories record <code>_pending_gfk_children</code> instead of emitting a field
+   - Implement finalize hook to emit <code>GenericEntry</code> model and inject <code>GenericRelation</code></p>
+<p>2) xmlschema integration [xmlschema]
+   - Policy detection for substitution groups and repeating complex leaves
+   - Ingestor: write <code>GenericEntry</code> rows (preserve order and attrs) when GFK is enabled
+   - Tests: verify model emission and round‑trip ingestion</p>
+<p>3) pydantic/dataclass integration [pydantic/dataclass]
+   - Detect <code>List[Union[...]]</code> (and similar) and route via GFK under policy
+   - Tests: ensure persistence and reverse queries via <code>GenericRelation</code></p>
+<p>4) Documentation and examples [docs]
+   - Author <code>generic_entries_contenttypes.md</code> with examples, flags, and trade‑offs
+   - Update existing docs to mention the mode as an optional strategy</p>
+<p>5) Performance sanity [ops]
+   - Add a smoke test or doc snippet comparing migration time/size with/without GFK on a large schema</p>
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Enabling GFK mode reduces generated model size and migration durations on large schemas</li>
+<li>Reverse access via <code>GenericRelation</code> works and is filterable (e.g., by <code>element_qname</code>, <code>attrs_json</code> keys)</li>
+<li>Legacy behavior unchanged when GFK disabled</li>
+<li>Tests cover xmlschema + pydantic/dataclass paths</li>
+</ul>
+<h2 id="xml-schema-handling-detailed-design">XML schema handling – detailed design<a class="headerlink" href="#xml-schema-handling-detailed-design" title="Permanent link">&para;</a></h2>
+<p>This section specifies precisely how XML Schema (XSD) constructs are mapped when <code>enable_gfk=True</code>.</p>
+<h3 id="detection-and-policy-evaluation-discoveryfactory">Detection and policy evaluation (discovery/factory)<a class="headerlink" href="#detection-and-policy-evaluation-discoveryfactory" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Input models come from xmlschema discovery: <code>XmlSchemaComplexType</code>, their <code>elements</code>, <code>attributes</code>, and metadata.</li>
+<li>For each complex type’s content model (sequence/choice/all), inspect each child element E:</li>
+<li>Repeating leaf: <code>maxOccurs&gt;1</code> or <code>unbounded</code> and <code>E</code> resolves to a simple type or a complex type that functions as a leaf → candidate for GFK when <code>gfk_policy</code> ∈ {<code>repeating_only</code>, <code>all_nested</code>, <code>threshold_by_children</code>}.</li>
+<li>Substitution groups: if E is a head, expand members (already implemented); if E is a member under a wrapper, treat these polymorphic variants as candidates when <code>gfk_policy</code> ∈ {<code>substitution_only</code>, <code>all_nested</code>, <code>threshold_by_children</code>}.</li>
+<li>Threshold policy: for a wrapper/container (TitleCase element name or <code>*WrapperType</code>), if the number of distinct child types ≥ <code>gfk_threshold_children</code>, use GFK for those children.</li>
+<li>Attribute groups: already resolved into attributes; when GFK is used, attributes are copied into <code>attrs_json</code> (or normalized to typed columns when configured).</li>
+</ul>
+<h3 id="parent-owner-selection">Parent (owner) selection<a class="headerlink" href="#parent-owner-selection" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Owner is typically the nearest non‑leaf container on the path:</li>
+<li>If a wrapper node (e.g., <code>Samples</code>, <code>Events</code>, <code>Condition</code>) exists, prefer the wrapper as owner.</li>
+<li>Otherwise, use the next higher parent such as <code>ComponentStreamType</code> (or analogous container) to avoid over‑fragmenting owners.</li>
+<li>Implement as: choose the current complex type as parent unless the child is inside a recognized wrapper pattern; in that case, use the wrapper type (if generated) as the owner.</li>
+</ul>
+<h3 id="mapping-from-xsd-to-genericentry">Mapping from XSD to GenericEntry<a class="headerlink" href="#mapping-from-xsd-to-genericentry" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Entry fields:</li>
+<li><code>element_qname</code>: the element name for the leaf, local name preferred (include prefix/namespace if required by config).</li>
+<li><code>type_qname</code>: the resolved target type (simple or complex), using local name (store namespace if available).</li>
+<li><code>attrs_json</code>: all attributes on the leaf element (post attributeGroup expansion). If <code>gfk_normalize_common_attrs=True</code>, pull out known keys (e.g., timestamp‑like, subtype‑like, dataItemId‑like) into typed columns.</li>
+<li>Value mapping (<code>gfk_value_mode</code>):<ul>
+<li><code>json_only</code>: put element text (and possibly child simple content) into <code>attrs_json["value"]</code>.</li>
+<li><code>typed_columns</code>: detect and map</li>
+<li>Element text to <code>text_value</code></li>
+<li>Numeric text to <code>num_value</code> where parsing is unambiguous</li>
+<li>Date/time text to <code>time_value</code> where parsing is unambiguous</li>
+<li>Any remaining additional content goes to <code>attrs_json</code>.</li>
+</ul>
+</li>
+<li><code>order_index</code>: increment as entries are encountered under the owner to preserve original order.</li>
+<li><code>path_hint</code> (optional): dotted path or lightweight xpath within the owner to aid debugging.</li>
+</ul>
+<h3 id="identity-constraints-xskey-xskeyref">Identity constraints (xs:key / xs:keyref)<a class="headerlink" href="#identity-constraints-xskey-xskeyref" title="Permanent link">&para;</a></h3>
+<ul>
+<li>When GFK is chosen, strong FK injection to leaf models isn’t applicable. We handle keys/refs as follows:</li>
+<li>Represent keyref targets via soft references: copy key values into <code>attrs_json</code> and/or into normalized columns (if configured).</li>
+<li>Optionally add indexes on these soft reference columns for faster lookup.</li>
+<li>Preserve original key/keyref metadata on the parent context for audit/validation (future validation hook could enforce referential checks on ingest).</li>
+</ul>
+<h3 id="mixed-content-and-nested-simple-content">Mixed content and nested simple content<a class="headerlink" href="#mixed-content-and-nested-simple-content" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Mixed content (<code>mixed=true</code>) or interleaved text: store raw text in <code>text_value</code> (typed mode) or <code>attrs_json["text"]</code> (json mode). Child non‑leaf content under a GFK leaf is not further decomposed unless configured; it remains in <code>attrs_json</code>.</li>
+</ul>
+<h3 id="timescale-integration">Timescale integration<a class="headerlink" href="#timescale-integration" title="Permanent link">&para;</a></h3>
+<ul>
+<li>If Timescale classification marks parent as hypertable, keep GFK on entries while parent remains Timescale‑backed. Suggested indexes:</li>
+<li><code>(owner, -time_value)</code> composite (owner via <code>(content_type, object_id)</code>), if <code>time_value</code> is present.</li>
+<li>Basic <code>(content_type, object_id)</code> always.</li>
+</ul>
+<h3 id="indexing">Indexing<a class="headerlink" href="#indexing" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Always add <code>Index(fields=["content_type", "object_id"])</code> on <code>GenericEntry</code>.</li>
+<li>Optional indexes when <code>typed_columns</code> enabled:</li>
+<li><code>Index(fields=["element_qname"])</code></li>
+<li><code>Index(fields=["type_qname"])</code></li>
+<li><code>Index(fields=["time_value"])</code> and composite <code>(content_type, object_id, -time_value)</code> when enabled.</li>
+</ul>
+<h3 id="generation-and-migrations">Generation and migrations<a class="headerlink" href="#generation-and-migrations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The generator emits:</li>
+<li>A single <code>GenericEntry</code> model per app when GFK is used anywhere in that app.</li>
+<li>A <code>GenericRelation</code> field on each parent owner model.</li>
+<li>Ensure <code>django.contrib.contenttypes</code> is present in app settings for migration contexts.</li>
+</ul>
+<h3 id="ingestor-algorithm-xml-instance-models">Ingestor algorithm (xml instance → models)<a class="headerlink" href="#ingestor-algorithm-xml-instance-models" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Traverse the XML instance using schema guidance (existing ingestor).</li>
+<li>For each candidate child matching GFK policy:</li>
+<li>Resolve owner instance (parent/wrapper chain context).</li>
+<li>Create <code>GenericEntry</code> with <code>content_object=owner</code>, fill <code>element_qname</code>, <code>type_qname</code>.</li>
+<li>Copy attributes; map value to <code>text_value</code>/<code>num_value</code>/<code>time_value</code> or <code>attrs_json</code> per <code>gfk_value_mode</code>.</li>
+<li>Assign <code>order_index</code> monotonically for that owner.</li>
+<li>For non‑GFK children, keep legacy behavior (FKs/JSON fallback).</li>
+</ol>
+<h3 id="overrides-and-configuration">Overrides and configuration<a class="headerlink" href="#overrides-and-configuration" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Per‑namespace or per‑element overrides: provide a mapping to force or disable GFK for certain element names or paths.</li>
+<li>Per‑run flags: enable/disable GFK globally or by policy (as defined above).</li>
+<li>Backward compatibility: with <code>enable_gfk=False</code>, all legacy generation and ingestion paths remain unchanged.</li>
+</ul>
+<h3 id="example-mtconnectstyle-pattern">Example (MTConnect‑style pattern)<a class="headerlink" href="#example-mtconnectstyle-pattern" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ComponentStreamType</code> → wrapper <code>SamplesType</code> → many observation leaves (<code>Angle</code>, <code>Position</code>, …)</li>
+<li>With <code>gfk_policy=substitution_only</code> or <code>repeating_only</code>, observation leaves become <code>GenericEntry</code> rows with owner=<code>SamplesType</code> (preferred) or <code>ComponentStreamType</code> (if wrapper is not generated).</li>
+<li><code>attrs_json</code> contains <code>dataItemId</code>, <code>subType</code>; <code>timestamp</code> goes to <code>time_value</code> (typed mode) or <code>attrs_json["timestamp"]</code>.</li>
+<li>Query pattern:<ul>
+<li><code>samples.entries.filter(element_qname="Angle", time_value__gte=..., attrs_json__subType="ACTUAL")</code></li>
+</ul>
+</li>
+</ul>
+<h1 id="current-status">CURRENT STATUS:<a class="headerlink" href="#current-status" title="Permanent link">&para;</a></h1>
+<p>Core
+GFK flags added to BaseStaticGenerator with defaults: enable_gfk=True, gfk_policy="threshold_by_children", gfk_threshold_children=8, gfk_value_mode="typed_columns".
+Conversion pipeline now records pending_gfk_children and injects GenericRelation('entries') on parents.
+GenericEntry model emitted with appropriate indexes; ingestor maps text→typed columns.
+xmlschema
+GFK precedence moved before JSON fallback; threshold_by_children implemented; nested_relationship_strategy defaulted to 'fk'; per-element overrides supported.
+Wrapper owners marked so their nested children route to GFK (structural, not name-based).
+Tests verify GenericEntry emission, relation injection, typed columns/indexes, and suppression of JSON placeholders for repeating nested.
+pydantic/dataclass
+List[Union[...]] routed through GFK; tests added.
+Docs
+Updated to state GFK is default with recommended defaults.
+Reality check (Streams)
+Despite passing unit tests, MTConnect Streams still generates very large models with many observation “entry-type” JSONFields alongside GFK.
+Why: current structural detection doesn’t yet capture the full MTConnect pattern:
+Substitution-group expansions under wrappers (Samples/Events/Condition) and derived Event/DataSet types still travel code paths that emit JSON placeholders and generate many concrete observation models.
+included_model_names/discovery still admits many observation complex types; GFK detection doesn’t demote those to “stored in GenericEntry” comprehensively.
+Our tests are too simple (single repeating nested/wrapper cases) and don’t replicate substitution groups and the breadth of observation variants in Streams.
+Next steps (to make it truly compact)
+1) Strengthen structural detection for MTConnect-like polymorphism
+Treat substitution-group members under recognized wrapper owners as GFK candidates (policy "substitution_only" as an option, and include in threshold_by_children computation).
+When a parent is marked a GFK owner, route all eligible nested complex leaves (including substitution-group variants) to GFK and do not emit placeholders or generate their concrete models.
+Gate discovery/inclusion: if a leaf path is GFK-routed, don’t include that leaf’s concrete type in included_model_names.
+2) Add representative tests derived from Streams constructs
+Build a minimal fixture capturing the pattern:
+A wrapper type (e.g., SamplesType) with a head element resolved via substitution group to many member types, including a repeated “dataset-like” element.
+Assertions:
+GenericEntry emitted; wrapper parent has GenericRelation('entries').
+No JSONField placeholders on wrapper/observation models even when element names don’t include “entry”.
+Concrete observation/member types are not generated when GFK is applied for that path.
+Add a smoke test that counts total models and fields for the fixture and asserts a bounded maximum (proxy for “compactness”).
+3) Instrumentation/diagnostics
+Log, per parent model, how many children were routed to GFK vs emitted as fields; optionally expose a summary (to make gaps obvious in CI).
+4) Optional policy control
+Introduce gfk_policy="substitution_only" and test it on the new fixture; confirm it collapses member variants to GenericEntry rows.
+How to evolve the tests to be representative
+Include substitution groups: head element plus multiple member declarations resolved via discovery.
+Include a wrapper/container owner that aggregates many heterogeneous members (mirroring Samples/Events/Condition).
+Assert:
+No JSON placeholders on the wrapper or on derived observation classes (even with non-“entry” names).
+Member complex types are not present in all when routed via GFK.
+GenericEntry count/index definitions exist; reverse queries via entries are available.
+These changes will align the generator with the Streams reality by structurally routing polymorphic observation leaves into GenericEntry and eliminating dual emission.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.sections", "navigation.instant", "navigation.tracking", "navigation.expand", "navigation.path", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.tabs.link", "toc.integrate", "toc.follow", "search.share"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>
